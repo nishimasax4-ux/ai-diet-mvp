@@ -6,139 +6,81 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Training Log">
-<title>TRAINING LOG</title>
+<title>TRAINING LOG + AI</title>
 <style>
   :root {
-    --paper:#EDEAE0; --paper-dark:#E2DED2; --ink:#2B2B2E; --ink-faint:#6E6B62;
-    --line:#B9C4C2; --steel:#5B6B73; --rust:#A24936; --brass:#9C7C46; --moss:#6B7A4F;
+    --paper:#F6F4EE; --card:#FFFFFF; --ink:#2B2B2E; --ink-faint:#726F65;
+    --line:#E3DFD2; --teal:#2F8F7A; --teal-soft:#2F8F7A22; --coral:#E8927C; --coral-soft:#E8927C22;
+    --sand:#C9A24B; --sand-soft:#C9A24B22; --slate:#5B6B73; --slate-soft:#5B6B7322;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
-    margin: 0;
-    background-color: var(--paper);
-    background-image: repeating-linear-gradient(var(--paper), var(--paper) 27px, #B9C4C255 28px);
+    margin: 0; background: var(--paper); color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
-    color: var(--ink);
   }
-  #app { max-width: 480px; margin: 0 auto; padding: 24px 20px 96px; }
-  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.15em; margin: 0; font-family: "Arial Narrow", Arial, sans-serif; }
-  .subtitle { font-size: 12px; color: var(--ink-faint); margin: 4px 0 8px; }
-  .mono { font-family: "Courier New", monospace; }
-  .card { background: #FFFFFF; border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
-  .row { display: flex; align-items: center; gap: 10px; }
+  #app { max-width: 480px; margin: 0 auto; padding: 20px 18px 96px; min-height: 100vh; }
+  h1 { font-size: 20px; font-weight: 800; margin: 0; }
+  .mono { font-family: "SF Mono", "Courier New", monospace; }
+  .muted { font-size: 12px; color: var(--ink-faint); }
   .between { display: flex; align-items: center; justify-content: space-between; }
+  .row { display: flex; align-items: center; gap: 8px; }
   .wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 10px; text-transform: uppercase; }
   .label { font-size: 11px; font-weight: 600; color: var(--ink-faint); display: block; margin-bottom: 4px; }
-  input, select {
+  input, select, textarea {
     background: #FFFFFF; border: 1px solid var(--line); color: var(--ink);
-    border-radius: 6px; padding: 8px 10px; font-size: 14px; width: 100%;
+    border-radius: 8px; padding: 9px 10px; font-size: 14px; width: 100%; font-family: inherit;
   }
-  .chip { padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 500; border: none; background: var(--paper-dark); color: var(--ink); }
-  .chip.active-rust { background: var(--rust); color: #fff; }
-  .chip.active-steel { background: var(--steel); color: #fff; }
-  .chip.active-moss { background: var(--moss); color: #fff; }
-  .tab-btn { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--ink); font-weight: 600; font-size: 14px; }
-  .tab-btn.active-strength { background: var(--rust); color: #fff; border-color: var(--rust); }
-  .tab-btn.active-cardio { background: var(--steel); color: #fff; border-color: var(--steel); }
-  button { cursor: pointer; font-family: inherit; }
-  .btn-primary { width: 100%; padding: 11px; border-radius: 10px; border: none; background: var(--ink); color: var(--paper); font-weight: 700; letter-spacing: 0.03em; font-size: 14px; }
-  .btn-icon { border: none; border-radius: 10px; padding: 0 14px; display: flex; align-items: center; justify-content: center; color: #fff; }
-  .entry-row { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 6px; font-size: 14px; }
-  .badge { border-radius: 999px; padding: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .del-btn { background: none; border: none; color: var(--ink-faint); flex-shrink: 0; font-size: 14px; padding: 4px; }
+  button { cursor: pointer; font-family: inherit; border: none; }
+  .chip { padding: 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+  .chip.active { background: var(--teal); color: #fff; border-color: var(--teal); }
+  .chip.active-a { background: var(--coral); color: #fff; border-color: var(--coral); }
+  .chip.active-b { background: var(--slate); color: #fff; border-color: var(--slate); }
+  .btn-primary { width: 100%; padding: 12px; border-radius: 10px; background: var(--ink); color: var(--paper); font-weight: 700; font-size: 14.5px; }
+  .btn-icon { border-radius: 8px; padding: 9px 13px; color: #fff; font-weight: 700; font-size: 14px; }
+  .icon-btn { background: none; font-size: 18px; padding: 4px 8px; color: var(--ink); }
+  .badge { border-radius: 999px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .entry-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 6px; font-size: 13.5px; }
+  .del-btn { background: none; color: var(--ink-faint); font-size: 13px; padding: 3px; flex-shrink: 0; }
   .streak-dot { width: 14px; height: 14px; border-radius: 999px; border: 1.5px solid var(--line); }
-  .streak-dot.filled { background: var(--rust); border-color: var(--rust); }
-  .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-faint); margin: 0 0 8px; }
-  .muted { font-size: 13px; color: var(--ink-faint); }
-  #sync-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-faint); background: none; border: none; padding: 0; margin-bottom: 16px; }
-  #sync-status.error { color: var(--rust); }
+  .streak-dot.filled { background: var(--coral); border-color: var(--coral); }
+  .meter-track { height: 9px; border-radius: 999px; background: var(--paper); overflow: hidden; position: relative; border: 1px solid var(--line); }
+  .meter-fill { height: 100%; float: left; }
+  .tabbar {
+    position: fixed; bottom: 0; left: 0; right: 0; background: #FFFFFFEE; backdrop-filter: blur(8px);
+    border-top: 1px solid var(--line); display: flex; max-width: 480px; margin: 0 auto; z-index: 20;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .tab-item { flex: 1; padding: 10px 4px 8px; text-align: center; background: none; font-size: 10.5px; color: var(--ink-faint); font-weight: 600; }
+  .tab-item .ic { display: block; font-size: 19px; margin-bottom: 2px; }
+  .tab-item.active { color: var(--teal); }
+  .hidden { display: none !important; }
+  .banner { background: var(--slate-soft); border: 1px solid #5B6B7333; border-radius: 10px; padding: 10px 12px; font-size: 11px; color: var(--slate); line-height: 1.5; margin-bottom: 16px; }
+  .onboard-step { display: none; }
+  .onboard-step.active { display: block; }
+  .progress-dots { display: flex; gap: 5px; justify-content: center; margin: 14px 0 4px; }
+  .progress-dots span { width: 6px; height: 6px; border-radius: 999px; background: var(--line); }
+  .progress-dots span.active { background: var(--teal); }
+  .sub-tab-btn { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--ink); font-weight: 600; font-size: 13.5px; }
+  .sub-tab-btn.active-a { background: var(--coral); color: #fff; border-color: var(--coral); }
+  .sub-tab-btn.active-b { background: var(--slate); color: #fff; border-color: var(--slate); }
+  #sync-status { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-faint); background: none; border: none; padding: 0; margin: 6px 0 14px; }
+  #sync-status.error { color: var(--coral); }
   .spin { display: inline-block; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .hidden { display: none !important; }
-
-  /* ---- goals / progress ---- */
-  .meter-track { height: 8px; border-radius: 999px; background: var(--paper-dark); overflow: hidden; }
-  .meter-fill { height: 100%; border-radius: 999px; transition: width .25s ease; }
-
-  /* ---- calendar ---- */
   .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
   .cal-cell { aspect-ratio: 1; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; border: 1px solid transparent; cursor: pointer; background: var(--paper); }
   .cal-cell.today { border-color: var(--ink); font-weight: 700; }
-  .cal-cell.selected { background: var(--paper-dark); border-color: var(--line); }
+  .cal-cell.selected { background: var(--line); }
   .cal-dots { display: flex; gap: 2px; margin-top: 2px; min-height: 5px; }
   .cal-dot { width: 5px; height: 5px; border-radius: 999px; }
-
-  /* ---- edit modal ---- */
   .modal-overlay { position: fixed; inset: 0; background: rgba(20,18,14,0.45); display: flex; align-items: flex-end; justify-content: center; z-index: 50; }
   .modal-card { background: #FFFFFF; width: 100%; max-width: 480px; border-radius: 16px 16px 0 0; padding: 20px; max-height: 85vh; overflow-y: auto; }
 </style>
 </head>
 <body>
-<div id="app">
-  <h1>TRAINING LOG</h1>
-  <p class="subtitle">記録帳 — <span id="header-date"></span></p>
-  <button id="sync-status"></button>
-
-  <div class="card" id="streak-card"></div>
-  <div class="card" id="ai-card"></div>
-  <div class="card" id="goals-card"></div>
-  <div class="card" id="weight-card"></div>
-  <div class="card" id="meal-card"></div>
-  <div class="card" id="progress-card"></div>
-
-  <div class="row" style="margin-bottom:16px;">
-    <button class="tab-btn" id="tab-strength-btn">🏋️ 筋トレ</button>
-    <button class="tab-btn" id="tab-cardio-btn">💨 有酸素</button>
-  </div>
-
-  <div class="card">
-    <div style="margin-bottom:10px;">
-      <label class="label">日付</label>
-      <input type="date" id="date-input">
-    </div>
-
-    <div id="strength-fields">
-      <div style="margin-bottom:10px;">
-        <label class="label">部位</label>
-        <div class="wrap" id="part-buttons"></div>
-      </div>
-      <div style="margin-bottom:10px;">
-        <label class="label">種目(任意)</label>
-        <div class="wrap" id="exercise-buttons" style="margin-bottom:8px;"></div>
-        <input type="text" id="exercise-input" placeholder="例: ベンチプレス(空欄可・自由入力もOK)">
-      </div>
-      <div class="row" style="margin-bottom:10px;">
-        <div style="flex:1;">
-          <label class="label">回数</label>
-          <input type="number" inputmode="numeric" id="reps-input" placeholder="回" class="mono">
-        </div>
-        <div style="flex:1;">
-          <label class="label">負荷 (kg)</label>
-          <select id="weight-select" class="mono"></select>
-        </div>
-      </div>
-    </div>
-
-    <div id="cardio-fields" class="hidden">
-      <div style="margin-bottom:10px;">
-        <label class="label">種目</label>
-        <div class="wrap" id="cardio-buttons"></div>
-        <input type="text" id="cardio-custom-input" placeholder="種目名を入力" class="hidden" style="margin-top:8px;">
-      </div>
-      <div style="margin-bottom:10px;">
-        <label class="label">時間 (分)</label>
-        <input type="number" inputmode="numeric" id="minutes-input" placeholder="分" class="mono">
-      </div>
-    </div>
-
-    <button class="btn-primary" id="save-btn">＋ 記録する</button>
-  </div>
-
-  <div id="history-section"></div>
-
-  <div id="reset-area" style="margin-top:32px; text-align:center;"></div>
-</div>
-
+<div id="app"></div>
 <div id="modal-root" class="hidden"></div>
 
 <script>
@@ -160,12 +102,11 @@ const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","そ�
 const WEIGHTS = [15,20,25,30,35,40,45,50];
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
 const WEEKDAY = ["日","月","火","水","木","金","土"];
-
-// ---- AIアドバイス関連 ----
 const ACTIVITY_LEVELS = ["ほぼなし","週1-2回","週3-4回","ほぼ毎日"];
 const TIME_LEVELS = ["5-10分","10-15分","15-30分","30分以上"];
 const ACTIVITY_FACTOR = { "ほぼなし":1.2, "週1-2回":1.375, "週3-4回":1.55, "ほぼ毎日":1.725 };
 const TIME_TO_LEVEL = { "5-10分":"low", "10-15分":"medium", "15-30分":"high", "30分以上":"high" };
+const DEFAULT_FREQ = { "ほぼなし":2, "週1-2回":3, "週3-4回":4, "ほぼ毎日":5 };
 const WORKOUTS = {
   low: [
     { name:"ストレッチ&深呼吸", min:5, intensity:"ゆるめ" },
@@ -189,21 +130,25 @@ let entries = [];
 let weightEntries = [];
 let mealEntries = [];
 let goals = { weight: 65, weeklyFreq: 3 };
-let profile = { age: "", gender: "男性", height: "", activity: "週1-2回", timeAvail: "10-15分" };
+let profile = null; // null until onboarding completes: {age, gender, height, activity, timeAvail}
 let moodByDate = {};
-let currentTab = "strength";
+let syncStatus = "idle";
+let lastSyncedAt = null;
+
+let activeTab = "today"; // today | meals | weight | training | settings
+let trainingSubTab = "strength"; // strength | cardio
 let selectedPart = "胸";
 let selectedCardio = "ランニング";
 let selectedMealType = "朝食";
-let syncStatus = "idle"; // idle | syncing | synced | error
-let lastSyncedAt = null;
+let historyView = "list";
+let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
+let selectedCalDate = null;
+let progressExercise = null;
+let editing = null;
 let confirmReset = false;
 
-let historyView = "list"; // list | calendar
-let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
-let selectedCalDate = null; // set on init
-let progressExercise = null;
-let editing = null; // {kind:'training', id} | {kind:'weight', date} | {kind:'meal', id}
+let onboardStep = 0;
+let onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
 
 // ============ HELPERS ============
 function localDateStr(d = new Date()) {
@@ -237,10 +182,8 @@ function weekBuckets(n) {
   return buckets;
 }
 function uid() { return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
+function esc(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function dayOfYear(d) { const start = new Date(d.getFullYear(), 0, 0); return Math.floor((d - start) / 86400000); }
-function esc(s) {
-  return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
 
 function loadState() {
   try {
@@ -251,7 +194,7 @@ function loadState() {
       weightEntries = data.weightEntries || [];
       mealEntries = data.mealEntries || [];
       if (data.goals) goals = Object.assign({}, goals, data.goals);
-      if (data.profile) profile = Object.assign({}, profile, data.profile);
+      if (data.profile) profile = data.profile;
       moodByDate = data.moodByDate || {};
     }
   } catch (e) { console.error("load error", e); }
@@ -286,79 +229,33 @@ async function syncToSheet() {
   try {
     const res = await fetch(GAS_URL, {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight on Apps Script
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ rows: buildRows() }),
     });
     const data = await res.json();
-    if (data && data.status === "ok") {
-      syncStatus = "synced"; lastSyncedAt = new Date();
-    } else {
-      syncStatus = "error";
-    }
+    syncStatus = (data && data.status === "ok") ? "synced" : "error";
+    if (syncStatus === "synced") lastSyncedAt = new Date();
   } catch (e) {
     syncStatus = "error";
   }
   renderSyncStatus();
 }
-
-// ============ CHART HELPERS ============
-// Generic 2-px line chart: points = [{date, value}], optional dashed goal line.
-function lineChartSvg(points, colorHex, goalValue) {
-  if (points.length < 2) {
-    return '<p class="muted" style="font-size:12px;">データが2件以上になるとグラフが表示されます。</p>';
-  }
-  const w = 300, h = 100, pad = 8;
-  const values = points.map(p => p.value).concat(goalValue != null ? [goalValue] : []);
-  const min = Math.min(...values) - 1, max = Math.max(...values) + 1;
-  const xStep = (w - pad*2) / (points.length - 1);
-  const yFor = v => h - pad - ((v - min) / (max - min)) * (h - pad*2);
-  const linePoints = points.map((p,i) => `${pad + i*xStep},${yFor(p.value)}`).join(" ");
-  const dots = points.map((p,i) => `<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${colorHex}" stroke="#fff" stroke-width="2"/>`).join("");
-  const goalLine = goalValue != null
-    ? `<line x1="${pad}" y1="${yFor(goalValue)}" x2="${w-pad}" y2="${yFor(goalValue)}" stroke="var(--brass)" stroke-dasharray="4 4" stroke-width="1"/>`
-    : "";
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">
-    ${goalLine}
-    <polyline points="${linePoints}" fill="none" stroke="${colorHex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    ${dots}
-  </svg>`;
-}
-function topRoundedPath(x, y, width, height, r) {
-  if (height <= 0) return "";
-  r = Math.min(r, width/2, height);
-  return `M${x},${y+height} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+width-r},${y} Q${x+width},${y} ${x+width},${y+r} L${x+width},${y+height} Z`;
-}
-// Weekly frequency bar chart with a dashed goal line.
-function weeklyBarSvg(weeks, goal) {
-  const w = 300, h = 100, pad = 8, labelH = 12;
-  const maxVal = Math.max(...weeks.map(x => x.count), goal, 1);
-  const plotH = h - pad - labelH;
-  const slot = (w - pad*2) / weeks.length;
-  const bw = Math.min(24, slot - 6);
-  const yFor = v => pad + plotH - (v / maxVal) * plotH;
-  const goalY = yFor(goal);
-  const bars = weeks.map((wk, i) => {
-    const slotX = pad + i*slot;
-    const x = slotX + (slot - bw) / 2;
-    const y = yFor(wk.count);
-    const barH = (pad + plotH) - y;
-    const achieved = wk.count >= goal && goal > 0;
-    return `<path d="${topRoundedPath(x, y, bw, barH, 4)}" fill="${achieved ? "var(--moss)" : "#6B7A4F66"}"/>`;
-  }).join("");
-  const labels = weeks.map((wk, i) => {
-    const slotX = pad + i*slot;
-    return `<text x="${slotX + slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${wk.label}</text>`;
-  }).join("");
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">
-    <line x1="${pad}" y1="${goalY}" x2="${w-pad}" y2="${goalY}" stroke="var(--brass)" stroke-dasharray="4 4" stroke-width="1"/>
-    ${bars}${labels}
-  </svg>`;
+function renderSyncStatus() {
+  const el = document.getElementById("sync-status");
+  if (!el) return;
+  el.classList.toggle("error", syncStatus === "error");
+  const icon = { idle: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️" }[syncStatus];
+  const text = {
+    idle: GAS_URL.indexOf("PUT_YOUR") === 0 ? "Google Sheets 未設定" : "Google Sheets 未同期",
+    syncing: "同期中...",
+    synced: `同期済み${lastSyncedAt ? ` (${String(lastSyncedAt.getHours()).padStart(2,"0")}:${String(lastSyncedAt.getMinutes()).padStart(2,"0")})` : ""}`,
+    error: "同期エラー(タップして再試行)",
+  }[syncStatus];
+  el.innerHTML = `${icon} <span>${text}</span>`;
 }
 
 // ============ AI ADVICE HELPERS ============
-// Rule-based "AI": no external AI API is called. Estimates a daily calorie/macro
-// target from profile + latest recorded weight (Mifflin-St Jeor), and suggests a
-// short workout based on today's mood + how much time the user has available.
+// Rule-based "AI": no external AI API is called.
 function computeTargets(p, weight, goalWeight) {
   const age = Number(p.age), height = Number(p.height);
   if (!age || !height || !weight) return null;
@@ -380,12 +277,13 @@ function computeTargets(p, weight, goalWeight) {
   return { bmr: Math.round(bmr), tdee: Math.round(tdee), targetCalories, targetProtein, targetFat, targetCarb };
 }
 function getTargets() {
+  if (!profile) return null;
   const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
   if (!latestWeight) return null;
   return computeTargets(profile, latestWeight.weight, goals.weight);
 }
 function pickWorkout(mood) {
-  const baseLevel = TIME_TO_LEVEL[profile.timeAvail] || "medium";
+  const baseLevel = TIME_TO_LEVEL[(profile && profile.timeAvail) || "10-15分"] || "medium";
   let level = baseLevel;
   if (mood === "tired") level = "low";
   else if (mood === "energetic") level = baseLevel === "low" ? "medium" : "high";
@@ -413,179 +311,259 @@ function generateDailyAdvice() {
   return parts.join(" ");
 }
 
-// ============ RENDER ============
-function renderSyncStatus() {
-  const el = document.getElementById("sync-status");
-  el.classList.toggle("error", syncStatus === "error");
-  const icon = { idle: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️" }[syncStatus];
-  const text = {
-    idle: GAS_URL.indexOf("PUT_YOUR") === 0 ? "Google Sheets 未設定" : "Google Sheets 未同期",
-    syncing: "Google Sheetsに同期中...",
-    synced: `Google Sheets 同期済み${lastSyncedAt ? ` (${String(lastSyncedAt.getHours()).padStart(2,"0")}:${String(lastSyncedAt.getMinutes()).padStart(2,"0")})` : ""}`,
-    error: "同期エラー(タップして再試行)",
-  }[syncStatus];
-  el.innerHTML = `${icon} <span>${text}</span>`;
+// ============ CHART HELPERS ============
+function lineChartSvg(points, colorHex, goalValue) {
+  if (points.length < 2) return '<p class="muted">データが2件以上になるとグラフが表示されます。</p>';
+  const w=300, h=100, pad=8;
+  const values = points.map(p=>p.value).concat(goalValue!=null?[goalValue]:[]);
+  const min = Math.min(...values)-1, max = Math.max(...values)+1;
+  const xStep = (w-pad*2)/(points.length-1);
+  const yFor = v => h-pad-((v-min)/(max-min))*(h-pad*2);
+  const line = points.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
+  const dots = points.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${colorHex}" stroke="#fff" stroke-width="2"/>`).join("");
+  const goalLine = goalValue!=null ? `<line x1="${pad}" y1="${yFor(goalValue)}" x2="${w-pad}" y2="${yFor(goalValue)}" stroke="var(--sand)" stroke-dasharray="4 4" stroke-width="1"/>` : "";
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}<polyline points="${line}" fill="none" stroke="${colorHex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
+}
+function topRoundedPath(x,y,width,height,r) {
+  if (height<=0) return "";
+  r = Math.min(r, width/2, height);
+  return `M${x},${y+height} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+width-r},${y} Q${x+width},${y} ${x+width},${y+r} L${x+width},${y+height} Z`;
+}
+function weeklyBarSvg(weeks, goal) {
+  const w=300, h=100, pad=8, labelH=12;
+  const maxVal = Math.max(...weeks.map(x=>x.count), goal, 1);
+  const plotH = h-pad-labelH;
+  const slot = (w-pad*2)/weeks.length;
+  const bw = Math.min(24, slot-6);
+  const yFor = v => pad + plotH - (v/maxVal)*plotH;
+  const goalY = yFor(goal);
+  const bars = weeks.map((wk,i) => {
+    const slotX = pad + i*slot, x = slotX + (slot-bw)/2, y = yFor(wk.count), barH = (pad+plotH)-y;
+    const achieved = wk.count >= goal && goal > 0;
+    return `<path d="${topRoundedPath(x,y,bw,barH,4)}" fill="${achieved?"var(--coral)":"#E8927C66"}"/>`;
+  }).join("");
+  const labels = weeks.map((wk,i) => {
+    const slotX = pad + i*slot;
+    return `<text x="${slotX+slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${wk.label}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">
+    <line x1="${pad}" y1="${goalY}" x2="${w-pad}" y2="${goalY}" stroke="var(--slate)" stroke-dasharray="4 4" stroke-width="1"/>
+    ${bars}${labels}
+  </svg>`;
+}
+function meterHtml(value, target, colorHex) {
+  const pct = target > 0 ? Math.min(100, Math.round((value/target)*100)) : 0;
+  const overPct = target > 0 && value > target ? Math.min(30, Math.round(((value-target)/target)*100)) : 0;
+  return `<div class="meter-track">
+    <div class="meter-fill" style="width:${Math.max(0,Math.min(pct,100))}%;background:${colorHex};"></div>
+    ${overPct > 0 ? `<div class="meter-fill" style="width:${overPct}%;background:var(--coral);"></div>` : ""}
+  </div>`;
 }
 
-function renderStreak() {
+// ============ ONBOARDING ============
+function renderOnboarding() {
+  const steps = [
+    `<p class="section-title">基本情報</p>
+     <label class="label">年齢</label>
+     <input type="number" id="ob-age" value="${esc(onboardDraft.age)}" placeholder="例: 32" style="margin-bottom:10px;">
+     <label class="label">性別</label>
+     <div class="wrap" style="margin-bottom:10px;">
+       ${["男性","女性","その他"].map(g => `<button class="chip ${onboardDraft.gender===g?"active":""}" data-ob-action="set-gender" data-val="${g}">${g}</button>`).join("")}
+     </div>
+     <label class="label">身長 (cm)</label>
+     <input type="number" id="ob-height" value="${esc(onboardDraft.height)}" placeholder="例: 170" style="margin-bottom:10px;">
+     <label class="label">現在の体重 (kg)</label>
+     <input type="number" step="0.1" id="ob-weight" value="${esc(onboardDraft.weight)}" placeholder="例: 82">`,
+    `<p class="section-title">目標</p>
+     <label class="label">目標体重 (kg)</label>
+     <input type="number" step="0.1" id="ob-goal-weight" value="${esc(onboardDraft.goalWeight)}" placeholder="例: 70" style="margin-bottom:10px;">
+     <label class="label">運動習慣</label>
+     <div class="wrap" style="margin-bottom:10px;">
+       ${ACTIVITY_LEVELS.map(a => `<button class="chip ${onboardDraft.activity===a?"active":""}" data-ob-action="set-activity" data-val="${a}">${a}</button>`).join("")}
+     </div>
+     <label class="label">1日に使える時間</label>
+     <div class="wrap">
+       ${TIME_LEVELS.map(t => `<button class="chip ${onboardDraft.timeAvail===t?"active":""}" data-ob-action="set-time" data-val="${t}">${t}</button>`).join("")}
+     </div>`,
+    `<p class="section-title">週の運動目標</p>
+     <label class="label">週間トレーニング目標(回数・空欄なら自動設定)</label>
+     <input type="number" id="ob-freq" value="${esc(onboardDraft.weeklyFreq)}" placeholder="例: ${DEFAULT_FREQ[onboardDraft.activity]}" style="margin-bottom:14px;">
+     <p class="muted">${esc(initialPlanPreview())}</p>`,
+  ];
+  document.getElementById("app").innerHTML = `
+    <h1>🏋️ Training Log + AI</h1>
+    <p class="muted" style="margin:6px 0 16px;">まずはあなたのことを教えてください(記録データはそのまま引き継がれます)</p>
+    <div class="card">
+      ${steps.map((s,i) => `<div class="onboard-step ${i===onboardStep?"active":""}">${s}</div>`).join("")}
+      <div class="progress-dots">${steps.map((_,i) => `<span class="${i===onboardStep?"active":""}"></span>`).join("")}</div>
+    </div>
+    <div class="row">
+      ${onboardStep > 0 ? `<button class="chip" data-ob-action="back" style="flex:0 0 auto;">戻る</button>` : ""}
+      <button class="btn-primary" data-ob-action="${onboardStep < steps.length-1 ? "next" : "finish"}">${onboardStep < steps.length-1 ? "次へ" : "プランを作成する"}</button>
+    </div>`;
+  document.getElementById("app").querySelectorAll("input").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const map = { "ob-age":"age", "ob-height":"height", "ob-weight":"weight", "ob-goal-weight":"goalWeight", "ob-freq":"weeklyFreq" };
+      const key = map[inp.id];
+      if (key) onboardDraft[key] = inp.value;
+    });
+  });
+  document.getElementById("app").addEventListener("click", handleOnboardClick);
+}
+function initialPlanPreview() {
+  const w = Number(onboardDraft.weight) || 0, gw = Number(onboardDraft.goalWeight) || 0;
+  if (!w || !gw) return "体重・目標体重を入力すると、AIがおすすめの頻度を提案します。";
+  const freq = DEFAULT_FREQ[onboardDraft.activity];
+  const dir = w > gw ? "減量" : w < gw ? "増量" : "維持";
+  return `現在 ${w}kg → 目標 ${gw}kg(${dir})。まずは週${freq}回程度、${onboardDraft.timeAvail}の軽い運動から始めましょう。`;
+}
+function handleOnboardClick(e) {
+  const t = e.target.closest("[data-ob-action]");
+  if (!t) return;
+  const action = t.dataset.obAction;
+  if (action === "set-gender") { onboardDraft.gender = t.dataset.val; renderOnboarding(); }
+  else if (action === "set-activity") { onboardDraft.activity = t.dataset.val; renderOnboarding(); }
+  else if (action === "set-time") { onboardDraft.timeAvail = t.dataset.val; renderOnboarding(); }
+  else if (action === "back") { onboardStep = Math.max(0, onboardStep-1); renderOnboarding(); }
+  else if (action === "next") { onboardStep += 1; renderOnboarding(); }
+  else if (action === "finish") { finishOnboarding(); }
+}
+function finishOnboarding() {
+  profile = {
+    age: Number(onboardDraft.age) || 30,
+    gender: onboardDraft.gender,
+    height: Number(onboardDraft.height) || 165,
+    activity: onboardDraft.activity,
+    timeAvail: onboardDraft.timeAvail,
+  };
+  const w = Number(onboardDraft.weight);
+  const gw = Number(onboardDraft.goalWeight);
+  if (gw > 0) goals.weight = gw;
+  goals.weeklyFreq = Number(onboardDraft.weeklyFreq) || DEFAULT_FREQ[onboardDraft.activity];
+  if (weightEntries.length === 0 && w > 0) weightEntries.push({ date: localDateStr(), weight: w });
+  activeTab = "today";
+  saveState();
+  renderApp();
+}
+
+// ============ MAIN APP SHELL ============
+function renderApp() {
+  if (!profile) { renderOnboarding(); return; }
+  document.getElementById("app").innerHTML = `
+    <div class="between" style="margin-bottom:2px;">
+      <h1>🏋️ Training + AI</h1>
+      <button class="icon-btn" data-action="go-settings">⚙️</button>
+    </div>
+    <button id="sync-status"></button>
+    <div id="tab-content"></div>
+    <div class="tabbar">
+      <button class="tab-item" data-tab="today"><span class="ic">🏠</span>今日</button>
+      <button class="tab-item" data-tab="meals"><span class="ic">🍽️</span>食事</button>
+      <button class="tab-item" data-tab="weight"><span class="ic">⚖️</span>体重</button>
+      <button class="tab-item" data-tab="training"><span class="ic">🏋️</span>運動</button>
+      <button class="tab-item" data-tab="settings"><span class="ic">⚙️</span>設定</button>
+    </div>`;
+  renderSyncStatus();
+  renderTabContent();
+  updateTabbarActive();
+}
+function updateTabbarActive() {
+  document.querySelectorAll(".tab-item").forEach(el => el.classList.toggle("active", el.dataset.tab === activeTab));
+}
+function renderTabContent() {
+  const el = document.getElementById("tab-content");
+  if (activeTab === "today") el.innerHTML = todayHtml();
+  else if (activeTab === "meals") el.innerHTML = mealsHtml();
+  else if (activeTab === "weight") el.innerHTML = weightHtml();
+  else if (activeTab === "training") el.innerHTML = trainingHtml();
+  else if (activeTab === "settings") el.innerHTML = settingsHtml();
+  bindTrainingFormWidgets();
+}
+function switchTab(tab) {
+  activeTab = tab;
+  renderTabContent();
+  updateTabbarActive();
+}
+
+// ============ TODAY TAB ============
+function todayHtml() {
+  const today = localDateStr();
   const streak = calcStreak(entries);
   const trainedDates = new Set(entries.map(e => e.date));
   const dots = last7Days().map(d => {
     const filled = trainedDates.has(localDateStr(d));
     return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-      <div class="streak-dot ${filled ? "filled" : ""}"></div>
+      <div class="streak-dot ${filled?"filled":""}"></div>
       <span style="font-size:9px;color:var(--ink-faint);">${WEEKDAY[d.getDay()]}</span>
     </div>`;
   }).join("");
-  document.getElementById("streak-card").innerHTML = `
-    <div class="row">
-      <span style="font-size:18px;">🔥</span>
-      <div style="flex:1;">
-        <div class="row" style="gap:4px;align-items:baseline;">
-          <span class="mono" style="font-size:20px;font-weight:700;">${streak}</span>
-          <span style="font-size:12px;color:var(--ink-faint);">日連続</span>
-        </div>
-        <div class="row" style="gap:6px;margin-top:6px;">${dots}</div>
-      </div>
-    </div>`;
-}
 
-function renderAiCard() {
-  const today = localDateStr();
   const mood = moodByDate[today];
   const workout = pickWorkout(mood);
   const moodBtns = [
     { key:"tired", label:"😴 疲れた" },
     { key:"normal", label:"🙂 ふつう" },
     { key:"energetic", label:"💪 元気" },
-  ].map(m => `<button class="chip ${mood===m.key?"active-rust":""}" data-action="set-mood" data-val="${m.key}" style="flex:1;text-align:center;">${m.label}</button>`).join("");
+  ].map(m => `<button class="chip ${mood===m.key?"active":""}" data-action="set-mood" data-val="${m.key}" style="flex:1;text-align:center;">${m.label}</button>`).join("");
 
-  document.getElementById("ai-card").innerHTML = `
-    <p class="section-title" style="margin:0 0 10px;">🤖 AIのひとこと</p>
-    <div class="row" style="margin-bottom:10px;">${moodBtns}</div>
-    <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${esc(generateDailyAdvice())}</p>
-    <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
-      <div>
-        <span class="muted">今日のおすすめ</span>
-        <p style="margin:2px 0 0;font-weight:700;font-size:13.5px;">${workout.name} <span class="mono muted" style="font-weight:400;">(${workout.min}分・${workout.intensity})</span></p>
-      </div>
-      <button class="chip active-steel" data-action="quicklog-workout" style="flex:0 0 auto;">記録欄へ</button>
-    </div>
-    <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの簡易アドバイスです(外部AIには接続していません)</p>`;
-}
-
-function renderGoalsCard() {
   const sortedAscW = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
-  const startW = sortedAscW[0];
-  const latestW = sortedAscW[sortedAscW.length - 1];
+  const startW = sortedAscW[0], latestW = sortedAscW[sortedAscW.length-1];
   let weightPct = null;
   if (startW && latestW) {
-    weightPct = goals.weight === startW.weight
-      ? 100
+    weightPct = goals.weight === startW.weight ? 100
       : Math.round(Math.min(100, Math.max(0, (latestW.weight - startW.weight) / (goals.weight - startW.weight) * 100)));
   }
   const thisWeek = weekBuckets(1)[0];
-  const freqPct = Math.round(Math.min(100, goals.weeklyFreq > 0 ? (thisWeek.count / goals.weeklyFreq) * 100 : 0));
   const targets = getTargets();
+  const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
 
-  document.getElementById("goals-card").innerHTML = `
-    <p class="section-title" style="margin:0 0 10px;">🎯 目標</p>
-    <div style="margin-bottom:14px;">
-      <div class="between" style="margin-bottom:4px;">
-        <span style="font-size:12px;">体重目標</span>
-        <div class="row" style="gap:4px;width:auto;">
-          <input type="number" step="0.1" id="goal-weight-input" class="mono" value="${goals.weight}" style="width:64px;padding:4px 6px;">
-          <span style="font-size:12px;color:var(--ink-faint);">kg</span>
+  return `
+    <div class="card">
+      <div class="row">
+        <span style="font-size:18px;">🔥</span>
+        <div style="flex:1;">
+          <div class="row" style="gap:4px;align-items:baseline;">
+            <span class="mono" style="font-size:20px;font-weight:700;">${streak}</span>
+            <span class="muted">日連続</span>
+          </div>
+          <div class="row" style="gap:6px;margin-top:6px;">${dots}</div>
         </div>
       </div>
-      ${weightPct === null
-        ? '<p class="muted" style="font-size:11px;margin:2px 0 0;">体重を記録すると達成率が表示されます</p>'
-        : `<div class="meter-track"><div class="meter-fill" style="width:${weightPct}%;background:var(--brass);"></div></div>
-           <p class="muted" style="font-size:11px;margin:4px 0 0;">達成率 ${weightPct}%(開始 ${startW.weight}kg → 現在 ${latestW.weight}kg)</p>`}
     </div>
-    <div>
-      <div class="between" style="margin-bottom:4px;">
-        <span style="font-size:12px;">週間トレーニング目標</span>
-        <div class="row" style="gap:4px;width:auto;">
-          <input type="number" id="goal-freq-input" class="mono" value="${goals.weeklyFreq}" style="width:48px;padding:4px 6px;">
-          <span style="font-size:12px;color:var(--ink-faint);">回/週</span>
+
+    <div class="card">
+      <p class="section-title">🤖 AIのひとこと</p>
+      <div class="row" style="margin-bottom:10px;">${moodBtns}</div>
+      <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${esc(generateDailyAdvice())}</p>
+      <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
+        <div>
+          <span class="muted">今日のおすすめ</span>
+          <p style="margin:2px 0 0;font-weight:700;font-size:13.5px;">${workout.name} <span class="mono muted" style="font-weight:400;">(${workout.min}分・${workout.intensity})</span></p>
         </div>
+        <button class="chip active-b" data-action="quicklog-workout" style="flex:0 0 auto;">記録する</button>
       </div>
-      <div class="meter-track"><div class="meter-fill" style="width:${freqPct}%;background:var(--rust);"></div></div>
-      <p class="muted" style="font-size:11px;margin:4px 0 0;">今週(月〜日) ${thisWeek.count} / ${goals.weeklyFreq} 回(達成率 ${freqPct}%)</p>
+      <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの簡易アドバイスです(外部AIには接続していません)</p>
     </div>
-    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line);">
-      <p class="muted" style="margin:0 0 8px;">🤖 AIアドバイス用プロフィール</p>
-      <div class="row" style="margin-bottom:8px;">
-        <input type="number" id="profile-age-input" placeholder="年齢" class="mono" value="${esc(profile.age)}">
-        <input type="number" id="profile-height-input" placeholder="身長cm" class="mono" value="${esc(profile.height)}">
+
+    <div class="card">
+      <p class="section-title">📊 今日の状況</p>
+      <div style="margin-bottom:12px;">
+        <div class="between" style="margin-bottom:4px;"><span class="muted">体重目標</span><span class="mono" style="font-size:12px;">${weightPct!=null?weightPct+"%":"未記録"}</span></div>
+        ${weightPct!=null ? meterHtml(weightPct, 100, "var(--sand)") : ""}
       </div>
-      <div class="wrap" style="margin-bottom:8px;">
-        ${["男性","女性"].map(g => `<button class="chip ${profile.gender===g?"active-rust":""}" data-action="set-gender" data-val="${g}">${g}</button>`).join("")}
+      <div style="margin-bottom:12px;">
+        <div class="between" style="margin-bottom:4px;"><span class="muted">週間トレーニング</span><span class="mono" style="font-size:12px;">${thisWeek.count}/${goals.weeklyFreq}回</span></div>
+        ${meterHtml(thisWeek.count, goals.weeklyFreq, "var(--coral)")}
       </div>
-      <p class="muted" style="font-size:11px;margin:0 0 4px;">運動習慣</p>
-      <div class="wrap" style="margin-bottom:8px;">
-        ${ACTIVITY_LEVELS.map(a => `<button class="chip ${profile.activity===a?"active-rust":""}" data-action="set-activity" data-val="${a}">${a}</button>`).join("")}
+      <div>
+        <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.targetCalories}kcal` : "未設定"}</span></div>
+        ${targets ? meterHtml(todayCal, targets.targetCalories, "var(--teal)") : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力すると計算されます</p>'}
       </div>
-      <p class="muted" style="font-size:11px;margin:0 0 4px;">1日に使える時間</p>
-      <div class="wrap" style="margin-bottom:10px;">
-        ${TIME_LEVELS.map(tl => `<button class="chip ${profile.timeAvail===tl?"active-rust":""}" data-action="set-timeavail" data-val="${tl}">${tl}</button>`).join("")}
-      </div>
-      ${targets
-        ? `<p style="font-size:12.5px;line-height:1.8;margin:0;">推定BMR <span class="mono">${targets.bmr}</span>kcal / TDEE <span class="mono">${targets.tdee}</span>kcal<br>
-             1日の目標: <span class="mono">${targets.targetCalories}</span>kcal(P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb})</p>`
-        : '<p class="muted" style="font-size:11px;margin:0;">年齢・身長と、体重タブでの体重記録がそろうと、AIが1日の目標カロリー・栄養バランスを計算します。</p>'}
     </div>`;
-
-  document.getElementById("goal-weight-input").addEventListener("change", (e) => {
-    const v = parseFloat(e.target.value);
-    if (v > 0) { goals.weight = v; saveState(); renderAll(); }
-  });
-  document.getElementById("goal-freq-input").addEventListener("change", (e) => {
-    const v = parseInt(e.target.value, 10);
-    if (v > 0) { goals.weeklyFreq = v; saveState(); renderAll(); }
-  });
-  document.getElementById("profile-age-input").addEventListener("change", (e) => {
-    profile.age = e.target.value; saveState(); renderAll();
-  });
-  document.getElementById("profile-height-input").addEventListener("change", (e) => {
-    profile.height = e.target.value; saveState(); renderAll();
-  });
 }
 
-function renderWeightCard() {
-  const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
-  const sortedDesc = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1);
-  const latest = sortedDesc[0];
-  const remaining = latest ? Math.round((latest.weight - goals.weight) * 10) / 10 : null;
-  const points = sortedAsc.map(x => ({ date: x.date, value: x.weight }));
-  const list = sortedDesc.slice(0,3).map(w => `
-    <div class="between" style="font-size:12px;margin-top:4px;">
-      <span class="mono" style="color:var(--ink-faint);">${w.date}</span>
-      <div class="row" style="gap:8px;">
-        <span class="mono">${w.weight}kg</span>
-        <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
-        <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
-      </div>
-    </div>`).join("");
-  document.getElementById("weight-card").innerHTML = `
-    <div class="between" style="margin-bottom:8px;">
-      <span class="section-title" style="margin:0;">⚖️ 体重</span>
-      <span style="font-size:12px;">
-        ${latest ? `<span class="mono" style="font-size:16px;font-weight:700;">${latest.weight}kg</span> <span style="color:var(--ink-faint);">目標まで ${remaining > 0 ? remaining+"kg" : "達成"}</span>` : '<span style="color:var(--ink-faint);">未記録</span>'}
-      </span>
-    </div>
-    ${lineChartSvg(points, "#A24936", goals.weight)}
-    <div class="row" style="margin-top:8px;">
-      <input type="date" id="weight-date-input" class="mono" style="width:auto;flex:0 0 auto;">
-      <input type="number" inputmode="decimal" step="0.1" id="weight-value-input" placeholder="kg" class="mono">
-      <button class="btn-icon" style="background:var(--brass);" data-action="add-weight">＋</button>
-    </div>
-    ${list}`;
-  document.getElementById("weight-date-input").value = localDateStr();
-}
-
-function renderMealCard() {
+// ============ MEALS TAB ============
+function mealsHtml() {
   const today = localDateStr();
   const todayMeals = mealEntries.filter(m => m.date === today);
   const todayCal = todayMeals.reduce((s,m) => s + (m.calories||0), 0);
@@ -594,115 +572,149 @@ function renderMealCard() {
   const todayCarb = todayMeals.reduce((s,m) => s + (m.carb||0), 0);
   const targets = getTargets();
   const sortedDesc = [...mealEntries].sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt);
-  const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active-moss":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
-  const list = sortedDesc.slice(0,4).map(m => `
-    <div class="between" style="font-size:12px;margin-top:6px;gap:8px;">
-      <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-        <span style="color:var(--moss);font-weight:600;">[${esc(m.mealType)}]</span> ${esc(m.text)}
-        ${m.calories ? `<span class="mono" style="color:var(--ink-faint);"> (${m.calories}kcal)</span>` : ""}
+  const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
+  const list = sortedDesc.slice(0,8).map(m => `
+    <div class="entry-row">
+      <div class="badge" style="background:var(--teal-soft);font-size:13px;">${m.mealType[0]}</div>
+      <div style="flex:1;">
+        <div>${esc(m.text)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}</div>
+        ${(m.protein||m.fat||m.carb) ? `<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>` : ""}
       </div>
       <button class="del-btn" data-action="edit-meal" data-id="${m.id}">✏️</button>
       <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
     </div>`).join("");
-  document.getElementById("meal-card").innerHTML = `
-    <div class="between" style="margin-bottom:8px;">
-      <span class="section-title" style="margin:0;">🍽️ 食事</span>
-      ${todayCal > 0 ? `<span style="font-size:12px;color:var(--ink-faint);">本日 <span class="mono" style="color:var(--ink);font-weight:700;">${todayCal}</span> kcal</span>` : ""}
+
+  return `
+    <div class="card">
+      <p class="section-title">🍽️ 今日の食事</p>
+      ${targets ? `
+        <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${todayCal}</span><span class="muted">目標 ${targets.targetCalories} kcal</span></div>
+        ${meterHtml(todayCal, targets.targetCalories, "var(--teal)")}
+        <div class="row" style="margin-top:12px;">
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">炭水化物</p><p class="mono" style="margin:0;">${todayCarb}/${targets.targetCarb}g</p>${meterHtml(todayCarb, targets.targetCarb, "var(--slate)")}</div>
+        </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
     </div>
-    ${targets ? `
-      <div class="meter-track" style="margin-bottom:4px;"><div class="meter-fill" style="width:${Math.min(100, Math.round(todayCal/targets.targetCalories*100))}%;background:var(--moss);"></div></div>
-      <p class="muted" style="font-size:11px;margin:0 0 10px;">${todayCal} / ${targets.targetCalories} kcal ・ P${todayProtein}/${targets.targetProtein}g F${todayFat}/${targets.targetFat}g C${todayCarb}/${targets.targetCarb}g</p>
-    ` : ""}
-    <div class="wrap" style="margin-bottom:8px;">${mealBtns}</div>
-    <div class="row" style="margin-bottom:8px;">
-      <input type="date" id="meal-date-input" class="mono" style="width:auto;flex:0 0 auto;">
-      <input type="number" inputmode="numeric" id="meal-calories-input" placeholder="kcal(任意)" class="mono" style="width:96px;flex:0 0 auto;">
-    </div>
-    <div class="row" style="margin-bottom:8px;">
-      <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
-      <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
-      <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
-    </div>
-    <div class="row">
-      <input type="text" id="meal-text-input" placeholder="例: 鶏胸肉のサラダ">
-      <button class="btn-icon" style="background:var(--moss);" data-action="add-meal">＋</button>
-    </div>
-    ${list}`;
-  document.getElementById("meal-date-input").value = today;
+
+    <div class="card">
+      <p class="section-title">食事を記録</p>
+      <div class="wrap" style="margin-bottom:10px;" id="meal-type-buttons">
+        ${mealBtns}
+      </div>
+      <input type="text" id="meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:8px;">
+      <div class="row" style="margin-bottom:8px;">
+        <input type="date" id="meal-date-input" value="${today}" class="mono" style="width:auto;flex:0 0 auto;">
+        <input type="number" id="meal-cal-input" placeholder="kcal(任意)" class="mono">
+      </div>
+      <div class="row" style="margin-bottom:10px;">
+        <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
+        <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
+        <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
+      </div>
+      <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
+      ${list || '<p class="muted" style="margin-top:10px;">まだ記録がありません。</p>'}
+    </div>`;
 }
 
-function renderProgressCard() {
-  const weeks = weekBuckets(8);
+// ============ WEIGHT TAB ============
+function weightHtml() {
+  const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
+  const sortedDesc = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1);
+  const latest = sortedDesc[0];
+  const remaining = latest ? Math.round((latest.weight - goals.weight)*10)/10 : null;
+  const points = sortedAsc.map(w => ({ date: w.date, value: w.weight }));
+  const list = sortedDesc.slice(0,8).map(w => `
+    <div class="entry-row">
+      <span class="mono muted" style="flex:1;">${w.date}</span>
+      <span class="mono">${w.weight}kg</span>
+      <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
+      <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
+    </div>`).join("");
 
+  return `
+    <div class="card">
+      <div class="between" style="margin-bottom:8px;">
+        <p class="section-title" style="margin:0;">⚖️ 体重の推移</p>
+        <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
+      </div>
+      ${lineChartSvg(points, "var(--slate)", goals.weight)}
+      <div class="row" style="margin-top:10px;">
+        <input type="date" id="weight-date-input" value="${localDateStr()}">
+        <input type="number" step="0.1" id="weight-value-input" placeholder="kg" class="mono">
+        <button class="btn-icon" style="background:var(--slate);" data-action="add-weight">＋</button>
+      </div>
+      ${list}
+    </div>`;
+}
+
+// ============ TRAINING TAB(筋トレ・有酸素の記録 + 進捗 + 履歴) ============
+function trainingHtml() {
+  return `
+    <div class="card">
+      <div class="row" style="margin-bottom:14px;">
+        <button class="sub-tab-btn ${trainingSubTab==="strength"?"active-a":""}" data-action="select-training-type" data-val="strength">🏋️ 筋トレ</button>
+        <button class="sub-tab-btn ${trainingSubTab==="cardio"?"active-b":""}" data-action="select-training-type" data-val="cardio">💨 有酸素</button>
+      </div>
+      <label class="label">日付</label>
+      <input type="date" id="date-input" value="${localDateStr()}" style="margin-bottom:10px;">
+      <div id="strength-fields" class="${trainingSubTab==="strength"?"":"hidden"}">
+        <label class="label">部位</label>
+        <div class="wrap" id="part-buttons" style="margin-bottom:10px;"></div>
+        <label class="label">種目(任意)</label>
+        <div class="wrap" id="exercise-buttons" style="margin-bottom:8px;"></div>
+        <input type="text" id="exercise-input" placeholder="例: ベンチプレス(空欄可・自由入力もOK)" style="margin-bottom:10px;">
+        <div class="row" style="margin-bottom:10px;">
+          <div style="flex:1;"><label class="label">回数</label><input type="number" id="reps-input" placeholder="回" class="mono"></div>
+          <div style="flex:1;"><label class="label">負荷 (kg)</label><select id="weight-select" class="mono"></select></div>
+        </div>
+      </div>
+      <div id="cardio-fields" class="${trainingSubTab==="cardio"?"":"hidden"}">
+        <label class="label">種目</label>
+        <div class="wrap" id="cardio-buttons" style="margin-bottom:8px;"></div>
+        <input type="text" id="cardio-custom-input" placeholder="種目名を入力" class="hidden" style="margin-bottom:8px;">
+        <label class="label">時間 (分)</label>
+        <input type="number" id="minutes-input" placeholder="分" class="mono" style="margin-bottom:10px;">
+      </div>
+      <button class="btn-primary" data-action="add-training">＋ 記録する</button>
+    </div>
+
+    <div class="card">
+      <p class="section-title">📈 進捗</p>
+      <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
+      ${weeklyBarSvg(weekBuckets(8), goals.weeklyFreq)}
+      <p class="label" style="margin:14px 0 4px;">種目別 重量の推移</p>
+      ${progressExerciseHtml()}
+    </div>
+
+    <div id="history-section"></div>`;
+}
+function progressExerciseHtml() {
   const keyOf = e => e.exercise ? e.exercise : `(${e.part})`;
   const strengthEntries = entries.filter(e => e.type === "strength");
   const keys = [...new Set(strengthEntries.slice().sort((a,b) => b.createdAt - a.createdAt).map(keyOf))];
   if (!progressExercise || !keys.includes(progressExercise)) progressExercise = keys[0] || null;
-
-  let exerciseSelect = "";
-  let exerciseChart = '<p class="muted" style="font-size:12px;">筋トレを記録するとグラフが表示されます。</p>';
-  if (progressExercise) {
-    const byDate = {};
-    strengthEntries.filter(e => keyOf(e) === progressExercise).forEach(e => {
-      byDate[e.date] = Math.max(byDate[e.date] || 0, e.weight);
-    });
-    const points = Object.keys(byDate).sort().map(d => ({ date: d, value: byDate[d] }));
-    exerciseChart = lineChartSvg(points, "#A24936", null);
-    exerciseSelect = `<select id="progress-exercise-select" class="mono" style="margin-bottom:8px;">
-      ${keys.map(k => `<option value="${esc(k)}" ${k===progressExercise?"selected":""}>${esc(k)}</option>`).join("")}
-    </select>`;
-  }
-
-  document.getElementById("progress-card").innerHTML = `
-    <p class="section-title" style="margin:0 0 8px;">📈 進捗</p>
-    <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
-    ${weeklyBarSvg(weeks, goals.weeklyFreq)}
-    <p class="label" style="margin:14px 0 4px;">種目別 重量の推移</p>
-    ${exerciseSelect}
-    ${exerciseChart}`;
-
-  const sel = document.getElementById("progress-exercise-select");
-  if (sel) sel.addEventListener("change", (e) => { progressExercise = e.target.value; renderProgressCard(); });
+  if (!progressExercise) return '<p class="muted" style="font-size:12px;">筋トレを記録するとグラフが表示されます。</p>';
+  const byDate = {};
+  strengthEntries.filter(e => keyOf(e) === progressExercise).forEach(e => { byDate[e.date] = Math.max(byDate[e.date] || 0, e.weight); });
+  const points = Object.keys(byDate).sort().map(d => ({ date: d, value: byDate[d] }));
+  const select = `<select id="progress-exercise-select" class="mono" style="margin-bottom:8px;">
+    ${keys.map(k => `<option value="${esc(k)}" ${k===progressExercise?"selected":""}>${esc(k)}</option>`).join("")}
+  </select>`;
+  return select + lineChartSvg(points, "var(--coral)", null);
 }
-
-function renderTabs() {
-  document.getElementById("tab-strength-btn").className = "tab-btn " + (currentTab==="strength" ? "active-strength" : "");
-  document.getElementById("tab-cardio-btn").className = "tab-btn " + (currentTab==="cardio" ? "active-cardio" : "");
-  document.getElementById("strength-fields").classList.toggle("hidden", currentTab !== "strength");
-  document.getElementById("cardio-fields").classList.toggle("hidden", currentTab !== "cardio");
-}
-
-function renderFormOptions() {
-  document.getElementById("part-buttons").innerHTML = PARTS.map(p =>
-    `<button class="chip ${selectedPart===p?"active-rust":""}" data-action="select-part" data-val="${p}">${p}</button>`).join("");
-  const currentExercise = document.getElementById("exercise-input").value.trim();
-  const exOptions = EXERCISES_BY_PART[selectedPart] || [];
-  document.getElementById("exercise-buttons").innerHTML = exOptions.map(ex =>
-    `<button class="chip ${currentExercise===ex?"active-rust":""}" data-action="select-exercise" data-val="${ex}">${ex}</button>`).join("");
-  document.getElementById("cardio-buttons").innerHTML = CARDIO_OPTIONS.map(c =>
-    `<button class="chip ${selectedCardio===c?"active-steel":""}" data-action="select-cardio" data-val="${c}">${c}</button>`).join("");
-  document.getElementById("cardio-custom-input").classList.toggle("hidden", selectedCardio !== "その他");
-  const sel = document.getElementById("weight-select");
-  if (!sel.dataset.built) {
-    sel.innerHTML = WEIGHTS.map(w => `<option value="${w}">${w} kg</option>`).join("");
-    sel.value = "20";
-    sel.dataset.built = "1";
-  }
-}
-
 function trainingEntryRowHtml(e) {
   const isStrength = e.type === "strength";
   const detail = isStrength
-    ? `<span style="font-weight:600;">[${esc(e.part)}]</span>${e.exercise ? " "+esc(e.exercise) : ""} <span class="mono" style="color:var(--brass);">${e.weight}kg × ${e.reps}</span>`
-    : `${esc(e.exercise)} <span class="mono" style="color:var(--brass);">${e.minutes}分</span>`;
+    ? `<span style="font-weight:600;">[${esc(e.part)}]</span>${e.exercise ? " "+esc(e.exercise) : ""} <span class="mono" style="color:var(--sand);">${e.weight}kg × ${e.reps}</span>`
+    : `${esc(e.exercise)} <span class="mono" style="color:var(--sand);">${e.minutes}分</span>`;
   return `<div class="entry-row">
-    <div class="badge" style="background:${isStrength ? "#A2493622" : "#5B6B7322"};">${isStrength ? "🏋️" : "💨"}</div>
+    <div class="badge" style="background:${isStrength ? "var(--coral-soft)" : "var(--slate-soft)"};">${isStrength ? "🏋️" : "💨"}</div>
     <div style="flex:1;">${detail}</div>
     <button class="del-btn" data-action="edit-training" data-id="${e.id}">✏️</button>
     <button class="del-btn" data-action="del-training" data-id="${e.id}">🗑️</button>
   </div>`;
 }
-
 function calendarGridHtml() {
   const year = calMonth.getFullYear(), month = calMonth.getMonth();
   const startWeekday = new Date(year, month, 1).getDay();
@@ -711,15 +723,14 @@ function calendarGridHtml() {
   const trainedDates = new Set(entries.map(e => e.date));
   const weightDates = new Set(weightEntries.map(w => w.date));
   const mealDates = new Set(mealEntries.map(m => m.date));
-
   let cells = "";
   for (let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell" style="visibility:hidden;"></div>`;
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
     const dots = [];
-    if (trainedDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--rust);"></div>');
-    if (weightDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--brass);"></div>');
-    if (mealDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--moss);"></div>');
+    if (trainedDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--coral);"></div>');
+    if (weightDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--sand);"></div>');
+    if (mealDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--teal);"></div>');
     cells += `<div class="cal-cell ${dateStr===todayStr?"today":""} ${dateStr===selectedCalDate?"selected":""}" data-action="select-day" data-date="${dateStr}">
       <span>${d}</span><div class="cal-dots">${dots.join("")}</div>
     </div>`;
@@ -734,7 +745,6 @@ function calendarGridHtml() {
     <div class="cal-grid" style="margin-bottom:4px;">${weekHead}</div>
     <div class="cal-grid">${cells}</div>`;
 }
-
 function dayDetailHtml(dateStr) {
   const dd = new Date(dateStr + "T00:00:00");
   const dayEntries = entries.filter(e => e.date === dateStr);
@@ -746,33 +756,31 @@ function dayDetailHtml(dateStr) {
   }
   const trainingRows = dayEntries.map(trainingEntryRowHtml).join("");
   const weightRow = dayWeight ? `<div class="entry-row">
-      <div class="badge" style="background:#9C7C4622;">⚖️</div>
-      <div style="flex:1;">体重 <span class="mono" style="color:var(--brass);">${dayWeight.weight}kg</span></div>
+      <div class="badge" style="background:var(--sand-soft);">⚖️</div>
+      <div style="flex:1;">体重 <span class="mono" style="color:var(--sand);">${dayWeight.weight}kg</span></div>
       <button class="del-btn" data-action="edit-weight" data-date="${dayWeight.date}">✏️</button>
       <button class="del-btn" data-action="del-weight" data-date="${dayWeight.date}">🗑️</button>
     </div>` : "";
   const mealRows = dayMeals.map(m => `<div class="entry-row">
-      <div class="badge" style="background:#6B7A4F22;">🍽️</div>
-      <div style="flex:1;">[${esc(m.mealType)}] ${esc(m.text)}${m.calories ? ` <span class="mono" style="color:var(--ink-faint);">(${m.calories}kcal)</span>` : ""}</div>
+      <div class="badge" style="background:var(--teal-soft);">🍽️</div>
+      <div style="flex:1;">[${esc(m.mealType)}] ${esc(m.text)}${m.calories ? ` <span class="mono muted">(${m.calories}kcal)</span>` : ""}</div>
       <button class="del-btn" data-action="edit-meal" data-id="${m.id}">✏️</button>
       <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
     </div>`).join("");
   return header + trainingRows + weightRow + mealRows;
 }
-
 function renderHistory() {
   const toggle = `
     <div class="between" style="margin-bottom:8px;">
       <p class="section-title" style="margin:0;">履歴</p>
       <div class="row" style="gap:4px;width:auto;">
-        <button class="chip ${historyView==="list"?"active-rust":""}" data-action="view-list">リスト</button>
-        <button class="chip ${historyView==="calendar"?"active-rust":""}" data-action="view-calendar">カレンダー</button>
+        <button class="chip ${historyView==="list"?"active":""}" data-action="view-list">リスト</button>
+        <button class="chip ${historyView==="calendar"?"active":""}" data-action="view-calendar">カレンダー</button>
       </div>
     </div>`;
-
   let body;
   if (historyView === "calendar") {
-    body = `<div class="card">${calendarGridHtml()}${dayDetailHtml(selectedCalDate)}</div>`;
+    body = `${calendarGridHtml()}${dayDetailHtml(selectedCalDate)}`;
   } else {
     const grouped = {};
     [...entries].sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt)
@@ -787,178 +795,115 @@ function renderHistory() {
         return `<div style="margin-bottom:14px;">
           <div class="row" style="gap:6px;align-items:baseline;margin-bottom:6px;">
             <span class="mono" style="font-weight:700;font-size:14px;">${d}</span>
-            <span style="font-size:12px;color:var(--ink-faint);">(${WEEKDAY[dd.getDay()]})</span>
+            <span class="muted">(${WEEKDAY[dd.getDay()]})</span>
           </div>
           ${items}
         </div>`;
       }).join("");
     }
   }
-  document.getElementById("history-section").innerHTML = toggle + body;
+  const el = document.getElementById("history-section");
+  if (el) el.innerHTML = `<div class="card">${toggle}${body}</div>`;
 }
 
-function renderReset() {
-  const hasData = entries.length > 0 || weightEntries.length > 0 || mealEntries.length > 0;
-  const el = document.getElementById("reset-area");
-  if (!hasData) { el.innerHTML = ""; return; }
-  el.innerHTML = confirmReset
-    ? `<div style="font-size:12px;"><span>本当に削除しますか?</span>
-        <button data-action="reset-yes" style="background:none;border:none;color:var(--rust);font-weight:700;margin-left:8px;">削除する</button>
-        <button data-action="reset-no" style="background:none;border:none;color:var(--ink-faint);margin-left:8px;">キャンセル</button>
-       </div>`
-    : `<button data-action="reset-show" style="background:none;border:none;color:var(--ink-faint);font-size:12px;text-decoration:underline;">全データを削除</button>`;
-}
-
-function renderEditModal() {
-  const el = document.getElementById("modal-root");
-  if (!editing) { el.innerHTML = ""; el.classList.add("hidden"); return; }
-  el.classList.remove("hidden");
-
-  let body = "";
-  if (editing.kind === "training") {
-    const e = entries.find(x => x.id === editing.id);
-    if (!e) { editing = null; el.innerHTML = ""; el.classList.add("hidden"); return; }
-    if (e.type === "strength") {
-      const exOptions = EXERCISES_BY_PART[editing.tempPart] || [];
-      body = `
-        <label class="label">部位</label>
-        <div class="wrap" style="margin-bottom:10px;">${PARTS.map(p => `<button class="chip ${editing.tempPart===p?"active-rust":""}" data-edit-action="set-part" data-val="${p}">${p}</button>`).join("")}</div>
-        <label class="label">種目(任意)</label>
-        <div class="wrap" style="margin-bottom:8px;">${exOptions.map(ex => `<button class="chip ${editing.draftExercise===ex?"active-rust":""}" data-edit-action="set-exercise" data-val="${ex}">${ex}</button>`).join("")}</div>
-        <input type="text" id="edit-exercise" value="${esc(editing.draftExercise||"")}" style="margin-bottom:10px;">
-        <div class="row" style="margin-bottom:10px;">
-          <div style="flex:1;"><label class="label">回数</label><input type="number" id="edit-reps" value="${editing.draftReps}" class="mono"></div>
-          <div style="flex:1;"><label class="label">負荷(kg)</label><input type="number" id="edit-weight" value="${editing.draftWeight}" class="mono"></div>
-        </div>
-        <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
-    } else {
-      body = `
-        <label class="label">種目</label><input type="text" id="edit-exercise" value="${esc(editing.draftExercise||"")}" style="margin-bottom:10px;">
-        <label class="label">時間(分)</label><input type="number" id="edit-minutes" value="${editing.draftMinutes}" class="mono" style="margin-bottom:10px;">
-        <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
-    }
-  } else if (editing.kind === "weight") {
-    const w = weightEntries.find(x => x.date === editing.date);
-    if (!w) { editing = null; el.innerHTML = ""; el.classList.add("hidden"); return; }
-    body = `
-      <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:10px;">
-      <label class="label">体重(kg)</label><input type="number" step="0.1" id="edit-weight" value="${editing.draftWeight}" class="mono" style="margin-bottom:14px;">`;
-  } else if (editing.kind === "meal") {
-    const m = mealEntries.find(x => x.id === editing.id);
-    if (!m) { editing = null; el.innerHTML = ""; el.classList.add("hidden"); return; }
-    body = `
-      <label class="label">区分</label>
-      <div class="wrap" style="margin-bottom:10px;">${MEAL_TYPES.map(t => `<button class="chip ${editing.tempMealType===t?"active-moss":""}" data-edit-action="set-mealtype" data-val="${t}">${t}</button>`).join("")}</div>
-      <label class="label">内容</label><input type="text" id="edit-text" value="${esc(editing.draftText||"")}" style="margin-bottom:10px;">
-      <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
-      <div class="row" style="margin-bottom:10px;">
-        <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="P(g)" class="mono">
-        <input type="number" id="edit-fat" value="${editing.draftFat||""}" placeholder="F(g)" class="mono">
-        <input type="number" id="edit-carb" value="${editing.draftCarb||""}" placeholder="C(g)" class="mono">
-      </div>
-      <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
-  }
-
-  el.innerHTML = `<div class="modal-overlay" id="modal-overlay">
-    <div class="modal-card">
-      <p class="section-title">記録を編集</p>
-      ${body}
-      <div class="row">
-        <button class="btn-primary" data-edit-action="save" style="flex:1;">保存</button>
-        <button class="btn-icon" style="background:var(--rust);" data-edit-action="delete">🗑️</button>
-      </div>
-      <button style="width:100%;background:none;border:none;color:var(--ink-faint);margin-top:8px;font-size:13px;padding:6px;" data-edit-action="dismiss">キャンセル</button>
-    </div>
-  </div>`;
-  bindEditModalDraftInputs();
-}
-
-function renderAll() {
-  document.getElementById("header-date").textContent = document.getElementById("date-input").value || localDateStr();
-  renderSyncStatus();
-  renderStreak();
-  renderAiCard();
-  renderGoalsCard();
-  renderWeightCard();
-  renderMealCard();
-  renderProgressCard();
-  renderTabs();
-  renderFormOptions();
+// Targeted DOM patches for chip selections inside the Training form, so that a
+// part/exercise/cardio-type chip click never wipes reps/weight/minutes the user
+// already typed (only add-training / sub-tab switches rebuild the whole card).
+function bindTrainingFormWidgets() {
+  if (activeTab !== "training") return;
+  renderTrainingFormOptions();
+  renderProgressCardExerciseSelect();
   renderHistory();
-  renderReset();
-  renderEditModal();
 }
-
-// ============ ACTIONS ============
-function resetForm() {
-  document.getElementById("exercise-input").value = "";
-  document.getElementById("reps-input").value = "";
-  document.getElementById("weight-select").value = "20";
-  selectedCardio = "ランニング";
-  document.getElementById("cardio-custom-input").value = "";
-  document.getElementById("minutes-input").value = "";
-}
-
-function handleSave() {
-  const date = document.getElementById("date-input").value || localDateStr();
-  if (currentTab === "strength") {
-    const reps = document.getElementById("reps-input").value;
-    if (!reps) return;
-    entries.unshift({
-      id: uid(), date, type: "strength", createdAt: Date.now(),
-      part: selectedPart,
-      exercise: document.getElementById("exercise-input").value.trim(),
-      reps: Number(reps),
-      weight: Number(document.getElementById("weight-select").value),
-    });
-  } else {
-    const minutes = document.getElementById("minutes-input").value;
-    if (!minutes) return;
-    const customVal = document.getElementById("cardio-custom-input").value.trim();
-    if (selectedCardio === "その他" && !customVal) return;
-    entries.unshift({
-      id: uid(), date, type: "cardio", createdAt: Date.now(),
-      exercise: selectedCardio === "その他" ? customVal : selectedCardio,
-      minutes: Number(minutes),
-    });
+function renderTrainingFormOptions() {
+  const partEl = document.getElementById("part-buttons");
+  if (!partEl) return;
+  partEl.innerHTML = PARTS.map(p => `<button class="chip ${selectedPart===p?"active-a":""}" data-action="select-part" data-val="${p}">${p}</button>`).join("");
+  const exerciseInput = document.getElementById("exercise-input");
+  const currentExercise = exerciseInput ? exerciseInput.value.trim() : "";
+  const exOptions = EXERCISES_BY_PART[selectedPart] || [];
+  document.getElementById("exercise-buttons").innerHTML = exOptions.map(ex =>
+    `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${ex}">${ex}</button>`).join("");
+  document.getElementById("cardio-buttons").innerHTML = CARDIO_OPTIONS.map(c =>
+    `<button class="chip ${selectedCardio===c?"active-b":""}" data-action="select-cardio" data-val="${c}">${c}</button>`).join("");
+  document.getElementById("cardio-custom-input").classList.toggle("hidden", selectedCardio !== "その他");
+  const sel = document.getElementById("weight-select");
+  if (sel && !sel.dataset.built) {
+    sel.innerHTML = WEIGHTS.map(w => `<option value="${w}">${w} kg</option>`).join("");
+    sel.value = "20";
+    sel.dataset.built = "1";
   }
-  saveState();
-  resetForm();
-  renderAll();
-  syncToSheet();
+}
+function renderProgressCardExerciseSelect() {
+  // (select rebuilt as part of trainingHtml(); listener attached here)
+  const sel = document.getElementById("progress-exercise-select");
+  if (sel) sel.addEventListener("change", (e) => { progressExercise = e.target.value; renderTabContent(); });
 }
 
-function handleAddWeight() {
-  const date = document.getElementById("weight-date-input").value || localDateStr();
-  const val = parseFloat(document.getElementById("weight-value-input").value);
-  if (!val || val <= 0) return;
-  weightEntries = weightEntries.filter(w => w.date !== date);
-  weightEntries.unshift({ date, weight: val });
-  document.getElementById("weight-value-input").value = "";
-  saveState(); renderAll(); syncToSheet();
+// ============ SETTINGS TAB ============
+function settingsHtml() {
+  const targets = getTargets();
+  return `
+    <div class="card">
+      <p class="section-title">同期</p>
+      <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
+      <button class="chip" data-action="retry-sync">今すぐ同期を試す</button>
+    </div>
+
+    <div class="card">
+      <p class="section-title">🎯 目標</p>
+      <div style="margin-bottom:14px;">
+        <div class="between" style="margin-bottom:4px;">
+          <span style="font-size:12px;">体重目標</span>
+          <div class="row" style="gap:4px;width:auto;">
+            <input type="number" step="0.1" id="goal-weight-input" class="mono" value="${goals.weight}" style="width:64px;padding:4px 6px;">
+            <span class="muted">kg</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="between" style="margin-bottom:4px;">
+          <span style="font-size:12px;">週間トレーニング目標</span>
+          <div class="row" style="gap:4px;width:auto;">
+            <input type="number" id="goal-freq-input" class="mono" value="${goals.weeklyFreq}" style="width:48px;padding:4px 6px;">
+            <span class="muted">回/週</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="section-title">🤖 AIアドバイス用プロフィール</p>
+      <div class="row" style="margin-bottom:8px;">
+        <input type="number" id="profile-age-input" placeholder="年齢" class="mono" value="${esc(profile.age)}">
+        <input type="number" id="profile-height-input" placeholder="身長cm" class="mono" value="${esc(profile.height)}">
+      </div>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${["男性","女性"].map(g => `<button class="chip ${profile.gender===g?"active":""}" data-action="set-gender" data-val="${g}">${g}</button>`).join("")}
+      </div>
+      <p class="muted" style="margin:0 0 4px;">運動習慣</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${ACTIVITY_LEVELS.map(a => `<button class="chip ${profile.activity===a?"active":""}" data-action="set-activity" data-val="${a}">${a}</button>`).join("")}
+      </div>
+      <p class="muted" style="margin:0 0 4px;">1日に使える時間</p>
+      <div class="wrap" style="margin-bottom:10px;">
+        ${TIME_LEVELS.map(tl => `<button class="chip ${profile.timeAvail===tl?"active":""}" data-action="set-timeavail" data-val="${tl}">${tl}</button>`).join("")}
+      </div>
+      ${targets
+        ? `<p style="font-size:12.5px;line-height:1.8;margin:0;">推定BMR <span class="mono">${targets.bmr}</span>kcal / TDEE <span class="mono">${targets.tdee}</span>kcal<br>1日の目標: <span class="mono">${targets.targetCalories}</span>kcal(P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb})</p>`
+        : '<p class="muted" style="font-size:11px;margin:0;">年齢・身長と、体重タブでの体重記録がそろうと、AIが1日の目標カロリー・栄養バランスを計算します。</p>'}
+    </div>
+
+    <div class="card">
+      <p class="section-title">データ</p>
+      ${confirmReset
+        ? `<p class="muted" style="margin-bottom:8px;">本当にすべてのデータを削除しますか?</p>
+           <div class="row"><button class="chip" data-action="reset-yes" style="color:var(--coral);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`
+        : `<button class="chip" data-action="reset-show">すべてのデータを削除</button>`}
+    </div>`;
 }
 
-function handleAddMeal() {
-  const text = document.getElementById("meal-text-input").value.trim();
-  if (!text) return;
-  const date = document.getElementById("meal-date-input").value || localDateStr();
-  const calories = document.getElementById("meal-calories-input").value;
-  mealEntries.unshift({
-    id: uid(), date, mealType: selectedMealType, text,
-    calories: calories ? Number(calories) : null,
-    protein: Number(document.getElementById("meal-protein-input").value) || 0,
-    fat: Number(document.getElementById("meal-fat-input").value) || 0,
-    carb: Number(document.getElementById("meal-carb-input").value) || 0,
-    createdAt: Date.now(),
-  });
-  document.getElementById("meal-text-input").value = "";
-  document.getElementById("meal-calories-input").value = "";
-  document.getElementById("meal-protein-input").value = "";
-  document.getElementById("meal-fat-input").value = "";
-  document.getElementById("meal-carb-input").value = "";
-  saveState(); renderAll(); syncToSheet();
-}
-
+// ============ EDIT MODAL ============
 function openEdit(kind, key) {
   if (kind === "training") {
     const e = entries.find(x => x.id === key);
@@ -978,9 +923,6 @@ function openEdit(kind, key) {
   }
   renderEditModal();
 }
-
-// Keep unsaved field values from being lost when a chip click (part/exercise/meal-type)
-// forces the modal body to re-render.
 function bindEditModalDraftInputs() {
   const map = {
     "edit-exercise": "draftExercise", "edit-reps": "draftReps", "edit-weight": "draftWeight",
@@ -992,7 +934,63 @@ function bindEditModalDraftInputs() {
     if (inp) inp.addEventListener("input", () => { editing[map[id]] = inp.value; });
   });
 }
-
+function renderEditModal() {
+  const el = document.getElementById("modal-root");
+  if (!editing) { el.innerHTML = ""; el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  let body = "";
+  if (editing.kind === "training") {
+    const e = entries.find(x => x.id === editing.id);
+    if (!e) { editing = null; el.innerHTML = ""; el.classList.add("hidden"); return; }
+    if (e.type === "strength") {
+      const exOptions = EXERCISES_BY_PART[editing.tempPart] || [];
+      body = `
+        <label class="label">部位</label>
+        <div class="wrap" style="margin-bottom:10px;">${PARTS.map(p => `<button class="chip ${editing.tempPart===p?"active-a":""}" data-edit-action="set-part" data-val="${p}">${p}</button>`).join("")}</div>
+        <label class="label">種目(任意)</label>
+        <div class="wrap" style="margin-bottom:8px;">${exOptions.map(ex => `<button class="chip ${editing.draftExercise===ex?"active-a":""}" data-edit-action="set-exercise" data-val="${ex}">${ex}</button>`).join("")}</div>
+        <input type="text" id="edit-exercise" value="${esc(editing.draftExercise||"")}" style="margin-bottom:10px;">
+        <div class="row" style="margin-bottom:10px;">
+          <div style="flex:1;"><label class="label">回数</label><input type="number" id="edit-reps" value="${editing.draftReps}" class="mono"></div>
+          <div style="flex:1;"><label class="label">負荷(kg)</label><input type="number" id="edit-weight" value="${editing.draftWeight}" class="mono"></div>
+        </div>
+        <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
+    } else {
+      body = `
+        <label class="label">種目</label><input type="text" id="edit-exercise" value="${esc(editing.draftExercise||"")}" style="margin-bottom:10px;">
+        <label class="label">時間(分)</label><input type="number" id="edit-minutes" value="${editing.draftMinutes}" class="mono" style="margin-bottom:10px;">
+        <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
+    }
+  } else if (editing.kind === "weight") {
+    body = `
+      <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:10px;">
+      <label class="label">体重(kg)</label><input type="number" step="0.1" id="edit-weight" value="${editing.draftWeight}" class="mono" style="margin-bottom:14px;">`;
+  } else if (editing.kind === "meal") {
+    body = `
+      <label class="label">区分</label>
+      <div class="wrap" style="margin-bottom:10px;">${MEAL_TYPES.map(t => `<button class="chip ${editing.tempMealType===t?"active":""}" data-edit-action="set-mealtype" data-val="${t}">${t}</button>`).join("")}</div>
+      <label class="label">内容</label><input type="text" id="edit-text" value="${esc(editing.draftText||"")}" style="margin-bottom:10px;">
+      <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
+      <div class="row" style="margin-bottom:10px;">
+        <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="P(g)" class="mono">
+        <input type="number" id="edit-fat" value="${editing.draftFat||""}" placeholder="F(g)" class="mono">
+        <input type="number" id="edit-carb" value="${editing.draftCarb||""}" placeholder="C(g)" class="mono">
+      </div>
+      <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
+  }
+  el.innerHTML = `<div class="modal-overlay" id="modal-overlay">
+    <div class="modal-card">
+      <p class="section-title">記録を編集</p>
+      ${body}
+      <div class="row">
+        <button class="btn-primary" data-edit-action="save" style="flex:1;">保存</button>
+        <button class="btn-icon" style="background:var(--coral);" data-edit-action="delete">🗑️</button>
+      </div>
+      <button style="width:100%;background:none;border:none;color:var(--ink-faint);margin-top:8px;font-size:13px;padding:6px;" data-edit-action="dismiss">キャンセル</button>
+    </div>
+  </div>`;
+  bindEditModalDraftInputs();
+}
 function handleEditSave() {
   if (editing.kind === "training") {
     const e = entries.find(x => x.id === editing.id);
@@ -1031,86 +1029,141 @@ function handleEditSave() {
     m.carb = Number(document.getElementById("edit-carb").value) || 0;
   }
   editing = null;
-  saveState(); renderAll(); syncToSheet();
+  saveState(); renderTabContent(); renderEditModal(); renderSyncStatus(); syncToSheet();
 }
-
 function handleEditDelete() {
   if (editing.kind === "training") entries = entries.filter(x => x.id !== editing.id);
   else if (editing.kind === "weight") weightEntries = weightEntries.filter(x => x.date !== editing.date);
   else if (editing.kind === "meal") mealEntries = mealEntries.filter(x => x.id !== editing.id);
   editing = null;
-  saveState(); renderAll(); syncToSheet();
+  saveState(); renderTabContent(); renderEditModal(); renderSyncStatus(); syncToSheet();
 }
 
-// ============ EVENTS ============
-document.getElementById("tab-strength-btn").addEventListener("click", () => { currentTab = "strength"; renderTabs(); });
-document.getElementById("tab-cardio-btn").addEventListener("click", () => { currentTab = "cardio"; renderTabs(); });
-document.getElementById("save-btn").addEventListener("click", handleSave);
-document.getElementById("date-input").value = localDateStr();
-document.getElementById("date-input").addEventListener("change", () => {
-  document.getElementById("header-date").textContent = document.getElementById("date-input").value;
-});
+// ============ ACTIONS ============
+function handleAddTraining() {
+  const date = document.getElementById("date-input").value || localDateStr();
+  if (trainingSubTab === "strength") {
+    const reps = document.getElementById("reps-input").value;
+    if (!reps) return;
+    entries.unshift({
+      id: uid(), date, type: "strength", createdAt: Date.now(),
+      part: selectedPart,
+      exercise: document.getElementById("exercise-input").value.trim(),
+      reps: Number(reps),
+      weight: Number(document.getElementById("weight-select").value),
+    });
+  } else {
+    const minutes = document.getElementById("minutes-input").value;
+    if (!minutes) return;
+    const customVal = document.getElementById("cardio-custom-input").value.trim();
+    if (selectedCardio === "その他" && !customVal) return;
+    entries.unshift({
+      id: uid(), date, type: "cardio", createdAt: Date.now(),
+      exercise: selectedCardio === "その他" ? customVal : selectedCardio,
+      minutes: Number(minutes),
+    });
+  }
+  selectedCardio = "ランニング";
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+function handleAddWeight() {
+  const date = document.getElementById("weight-date-input").value || localDateStr();
+  const val = parseFloat(document.getElementById("weight-value-input").value);
+  if (!val || val <= 0) return;
+  weightEntries = weightEntries.filter(w => w.date !== date);
+  weightEntries.unshift({ date, weight: val });
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+function handleAddMeal() {
+  const text = document.getElementById("meal-name-input").value.trim();
+  if (!text) return;
+  const date = document.getElementById("meal-date-input").value || localDateStr();
+  const calories = document.getElementById("meal-cal-input").value;
+  mealEntries.unshift({
+    id: uid(), date, mealType: selectedMealType, text,
+    calories: calories ? Number(calories) : null,
+    protein: Number(document.getElementById("meal-protein-input").value) || 0,
+    fat: Number(document.getElementById("meal-fat-input").value) || 0,
+    carb: Number(document.getElementById("meal-carb-input").value) || 0,
+    createdAt: Date.now(),
+  });
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
 
+// ============ EVENTS (bound once; #app content is replaced via innerHTML, so delegation is required) ============
 document.getElementById("app").addEventListener("click", (e) => {
+  const tabBtn = e.target.closest("[data-tab]");
+  if (tabBtn) { switchTab(tabBtn.dataset.tab); return; }
+
   const t = e.target.closest("[data-action]");
   if (!t) return;
   const action = t.dataset.action;
   const today = localDateStr();
-  if (action === "select-part") { selectedPart = t.dataset.val; renderFormOptions(); }
-  else if (action === "select-exercise") {
-    document.getElementById("exercise-input").value = t.dataset.val;
-    renderFormOptions();
-  }
-  else if (action === "select-cardio") { selectedCardio = t.dataset.val; renderFormOptions(); }
-  else if (action === "select-meal-type") { selectedMealType = t.dataset.val; renderMealCard(); }
-  else if (action === "add-weight") { handleAddWeight(); }
-  else if (action === "add-meal") { handleAddMeal(); }
-  else if (action === "del-weight") {
-    weightEntries = weightEntries.filter(w => w.date !== t.dataset.date);
-    saveState(); renderAll(); syncToSheet();
-  }
-  else if (action === "del-meal") {
-    mealEntries = mealEntries.filter(m => m.id !== t.dataset.id);
-    saveState(); renderAll(); syncToSheet();
-  }
-  else if (action === "del-training") {
-    entries = entries.filter(x => x.id !== t.dataset.id);
-    saveState(); renderAll(); syncToSheet();
-  }
-  else if (action === "edit-training") { openEdit("training", t.dataset.id); }
-  else if (action === "edit-weight") { openEdit("weight", t.dataset.date); }
-  else if (action === "edit-meal") { openEdit("meal", t.dataset.id); }
-  else if (action === "view-list") { historyView = "list"; renderHistory(); }
-  else if (action === "view-calendar") { historyView = "calendar"; renderHistory(); }
-  else if (action === "cal-prev") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderHistory(); }
-  else if (action === "cal-next") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); renderHistory(); }
-  else if (action === "select-day") { selectedCalDate = t.dataset.date; renderHistory(); }
-  else if (action === "reset-show") { confirmReset = true; renderReset(); }
-  else if (action === "reset-no") { confirmReset = false; renderReset(); }
-  else if (action === "reset-yes") {
-    entries = []; weightEntries = []; mealEntries = []; confirmReset = false;
-    saveState(); renderAll(); syncToSheet();
-  }
-  else if (action === "set-mood") { moodByDate[today] = t.dataset.val; saveState(); renderAiCard(); }
+
+  if (action === "go-settings") { switchTab("settings"); }
+  else if (action === "set-mood") { moodByDate[today] = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "quicklog-workout") {
     const w = pickWorkout(moodByDate[today]);
-    currentTab = "cardio";
-    renderTabs();
+    trainingSubTab = "cardio";
+    switchTab("training");
     selectedCardio = "その他";
-    renderFormOptions();
+    renderTrainingFormOptions();
     const customInput = document.getElementById("cardio-custom-input");
     customInput.value = w.name;
     document.getElementById("minutes-input").value = w.min;
     customInput.scrollIntoView({ behavior: "smooth", block: "center" });
   }
-  else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderAll(); }
-  else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderAll(); }
-  else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderAll(); }
+  else if (action === "select-training-type") { trainingSubTab = t.dataset.val; renderTabContent(); }
+  else if (action === "select-part") { selectedPart = t.dataset.val; renderTrainingFormOptions(); }
+  else if (action === "select-exercise") { document.getElementById("exercise-input").value = t.dataset.val; renderTrainingFormOptions(); }
+  else if (action === "select-cardio") { selectedCardio = t.dataset.val; renderTrainingFormOptions(); }
+  else if (action === "add-training") { handleAddTraining(); }
+  else if (action === "view-list") { historyView = "list"; renderHistory(); }
+  else if (action === "view-calendar") { historyView = "calendar"; renderHistory(); }
+  else if (action === "cal-prev") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderHistory(); }
+  else if (action === "cal-next") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); renderHistory(); }
+  else if (action === "select-day") { selectedCalDate = t.dataset.date; renderHistory(); }
+  else if (action === "select-meal-type") {
+    selectedMealType = t.dataset.val;
+    document.querySelectorAll("#meal-type-buttons .chip").forEach(c => c.classList.toggle("active", c.dataset.val === t.dataset.val));
+  }
+  else if (action === "add-meal") { handleAddMeal(); }
+  else if (action === "add-weight") { handleAddWeight(); }
+  else if (action === "edit-training") { openEdit("training", t.dataset.id); }
+  else if (action === "edit-weight") { openEdit("weight", t.dataset.date); }
+  else if (action === "edit-meal") { openEdit("meal", t.dataset.id); }
+  else if (action === "del-training") { entries = entries.filter(x => x.id !== t.dataset.id); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
+  else if (action === "del-weight") { weightEntries = weightEntries.filter(w => w.date !== t.dataset.date); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
+  else if (action === "del-meal") { mealEntries = mealEntries.filter(m => m.id !== t.dataset.id); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
+  else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderTabContent(); }
+  else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
+  else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
+  else if (action === "retry-sync") { syncToSheet(); }
+  else if (action === "reset-show") { confirmReset = true; renderTabContent(); }
+  else if (action === "reset-no") { confirmReset = false; renderTabContent(); }
+  else if (action === "reset-yes") {
+    entries = []; weightEntries = []; mealEntries = []; goals = { weight: 65, weeklyFreq: 3 };
+    profile = null; moodByDate = {}; confirmReset = false; onboardStep = 0;
+    onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
+    saveState(); renderApp();
+  }
 });
-document.getElementById("sync-status").addEventListener("click", () => {
-  if (syncStatus === "error") syncToSheet();
+document.getElementById("app").addEventListener("change", (e) => {
+  if (e.target.id === "goal-weight-input") {
+    const v = parseFloat(e.target.value);
+    if (v > 0) { goals.weight = v; saveState(); renderTabContent(); }
+  } else if (e.target.id === "goal-freq-input") {
+    const v = parseInt(e.target.value, 10);
+    if (v > 0) { goals.weeklyFreq = v; saveState(); renderTabContent(); }
+  } else if (e.target.id === "profile-age-input") {
+    profile.age = e.target.value; saveState(); renderTabContent();
+  } else if (e.target.id === "profile-height-input") {
+    profile.height = e.target.value; saveState(); renderTabContent();
+  }
 });
-
+document.getElementById("app").addEventListener("click", (e) => {
+  if (e.target.closest("#sync-status") && syncStatus === "error") syncToSheet();
+});
 document.getElementById("modal-root").addEventListener("click", (e) => {
   if (e.target.id === "modal-overlay") { editing = null; renderEditModal(); return; }
   const t = e.target.closest("[data-edit-action]");
@@ -1127,7 +1180,16 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 // ============ INIT ============
 selectedCalDate = localDateStr();
 loadState();
-renderAll();
+if (!profile) {
+  // Returning user upgrading from a version without the AI profile: prefill the
+  // onboarding draft from whatever they already recorded, so they aren't asked
+  // to re-enter their existing goal weight / weekly frequency from scratch.
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  if (latestWeight) onboardDraft.weight = String(latestWeight.weight);
+  if (goals.weight) onboardDraft.goalWeight = String(goals.weight);
+  if (goals.weeklyFreq) onboardDraft.weeklyFreq = String(goals.weeklyFreq);
+}
+renderApp();
 </script>
 </body>
 </html>
