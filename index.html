@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AI Diet">
+<title>AIダイエットアシスタント(MVPプロトタイプ)</title>
+<style>
+  :root {
+    --paper:#F6F4EE; --card:#FFFFFF; --ink:#2B2B2E; --ink-faint:#726F65;
+    --line:#E3DFD2; --teal:#2F8F7A; --teal-soft:#2F8F7A22; --coral:#E8927C; --coral-soft:#E8927C22;
+    --sand:#C9A24B; --sand-soft:#C9A24B22; --slate:#5B6B73; --slate-soft:#5B6B7322;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+  }
+  #app { max-width: 480px; margin: 0 auto; padding: 20px 18px 96px; min-height: 100vh; }
+  h1 { font-size: 20px; font-weight: 800; margin: 0; }
+  .mono { font-family: "SF Mono", "Courier New", monospace; }
+  .muted { font-size: 12px; color: var(--ink-faint); }
+  .between { display: flex; align-items: center; justify-content: space-between; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 10px; text-transform: uppercase; }
+  .label { font-size: 11px; font-weight: 600; color: var(--ink-faint); display: block; margin-bottom: 4px; }
+  input, select, textarea {
+    background: #FFFFFF; border: 1px solid var(--line); color: var(--ink);
+    border-radius: 8px; padding: 9px 10px; font-size: 14px; width: 100%; font-family: inherit;
+  }
+  textarea { resize: none; }
+  button { cursor: pointer; font-family: inherit; border: none; }
+  .chip { padding: 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+  .chip.active { background: var(--teal); color: #fff; border-color: var(--teal); }
+  .btn-primary { width: 100%; padding: 12px; border-radius: 10px; background: var(--ink); color: var(--paper); font-weight: 700; font-size: 14.5px; }
+  .btn-ghost { background: none; color: var(--ink-faint); font-size: 12.5px; padding: 6px; text-decoration: underline; }
+  .btn-icon { border-radius: 8px; padding: 9px 13px; color: #fff; font-weight: 700; font-size: 14px; }
+  .icon-btn { background: none; font-size: 18px; padding: 4px 8px; color: var(--ink); }
+  .badge { border-radius: 999px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .entry-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 6px; font-size: 13.5px; }
+  .del-btn { background: none; color: var(--ink-faint); font-size: 13px; padding: 3px; flex-shrink: 0; }
+  .meter-track { height: 9px; border-radius: 999px; background: var(--paper); overflow: hidden; position: relative; border: 1px solid var(--line); }
+  .meter-fill { height: 100%; float: left; }
+  .tabbar {
+    position: fixed; bottom: 0; left: 0; right: 0; background: #FFFFFFEE; backdrop-filter: blur(8px);
+    border-top: 1px solid var(--line); display: flex; max-width: 480px; margin: 0 auto; z-index: 20;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .tab-item { flex: 1; padding: 10px 4px 8px; text-align: center; background: none; font-size: 10.5px; color: var(--ink-faint); font-weight: 600; }
+  .tab-item .ic { display: block; font-size: 19px; margin-bottom: 2px; }
+  .tab-item.active { color: var(--teal); }
+  .hidden { display: none !important; }
+  .chat-bubble { border-radius: 12px; padding: 9px 12px; font-size: 13.5px; line-height: 1.5; margin-top: 8px; max-width: 88%; }
+  .chat-bubble.ai { background: var(--teal-soft); color: var(--ink); border: 1px solid #2F8F7A33; }
+  .chat-bubble.user { background: var(--paper); border: 1px solid var(--line); margin-left: auto; text-align: right; }
+  .banner { background: var(--slate-soft); border: 1px solid #5B6B7333; border-radius: 10px; padding: 10px 12px; font-size: 11.5px; color: var(--slate); line-height: 1.5; margin-bottom: 16px; }
+  .onboard-step { display: none; }
+  .onboard-step.active { display: block; }
+  .progress-dots { display: flex; gap: 5px; justify-content: center; margin: 14px 0 4px; }
+  .progress-dots span { width: 6px; height: 6px; border-radius: 999px; background: var(--line); }
+  .progress-dots span.active { background: var(--teal); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ============ CONSTANTS ============
+const STORAGE_KEY = "ai-diet-mvp-data";
+const ACTIVITY_LEVELS = ["ほぼなし","週1-2回","週3-4回","ほぼ毎日"];
+const TIME_LEVELS = ["5-10分","10-15分","15-30分","30分以上"];
+const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
+const WEEKDAY = ["日","月","火","水","木","金","土"];
+const ACTIVITY_FACTOR = { "ほぼなし":1.2, "週1-2回":1.375, "週3-4回":1.55, "ほぼ毎日":1.725 };
+const DEFAULT_STEPS = { "ほぼなし":6000, "週1-2回":7000, "週3-4回":8000, "ほぼ毎日":9000 };
+const TIME_TO_LEVEL = { "5-10分":"low", "10-15分":"medium", "15-30分":"high", "30分以上":"high" };
+const WORKOUTS = {
+  low: [
+    { name:"ストレッチ&深呼吸", min:5, intensity:"ゆるめ" },
+    { name:"その場足踏み", min:8, intensity:"ゆるめ" },
+    { name:"軽い散歩", min:10, intensity:"ゆるめ" },
+  ],
+  medium: [
+    { name:"自重スクワット 3セット", min:10, intensity:"ふつう" },
+    { name:"ウォーキング", min:15, intensity:"ふつう" },
+    { name:"プランク&腕立て", min:12, intensity:"ふつう" },
+  ],
+  high: [
+    { name:"HIIT風サーキット", min:15, intensity:"しっかりめ" },
+    { name:"ジョギング", min:20, intensity:"しっかりめ" },
+    { name:"自重トレーニング フルセット", min:20, intensity:"しっかりめ" },
+  ],
+};
+
+// ============ STATE ============
+let profile = null;
+let weightLog = [];      // {date, weight}
+let mealLog = [];        // {id, date, mealType, name, calories, protein, fat, carb}
+let stepsLog = [];       // {date, steps}
+let moodByDate = {};     // date -> 'tired'|'normal'|'energetic'
+let workoutDoneByDate = {}; // date -> bool
+let chatLog = [];        // {id, role, text}
+let activeTab = "today";
+let selectedMealType = MEAL_TYPES[0];
+let onboardStep = 0;
+let onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", targetSteps:"" };
+
+// ============ HELPERS ============
+function localDateStr(d = new Date()) {
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+}
+function uid() { return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
+function esc(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function dayOfYear(d) { const start = new Date(d.getFullYear(),0,0); return Math.floor((d-start)/86400000); }
+function last7Days() { const days=[]; for (let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(d);} return days; }
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      profile = data.profile || null;
+      weightLog = data.weightLog || [];
+      mealLog = data.mealLog || [];
+      stepsLog = data.stepsLog || [];
+      moodByDate = data.moodByDate || {};
+      workoutDoneByDate = data.workoutDoneByDate || {};
+      chatLog = data.chatLog || [];
+    }
+  } catch (e) { console.error("load error", e); }
+}
+function saveState() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ profile, weightLog, mealLog, stepsLog, moodByDate, workoutDoneByDate, chatLog }));
+  } catch (e) { console.error("save error", e); }
+}
+
+function computeTargets(p) {
+  const bmr = p.gender === "男性"
+    ? 10*p.weight + 6.25*p.height - 5*p.age + 5
+    : 10*p.weight + 6.25*p.height - 5*p.age - 161;
+  const tdee = bmr * (ACTIVITY_FACTOR[p.activity] || 1.375);
+  const diff = p.weight - p.goalWeight;
+  let targetCalories;
+  if (diff > 0.5) targetCalories = tdee - (diff > 5 ? 500 : 300);
+  else if (diff < -0.5) targetCalories = tdee + 300;
+  else targetCalories = tdee;
+  const floor = p.gender === "男性" ? 1500 : 1200;
+  targetCalories = Math.max(targetCalories, floor, bmr*1.05);
+  targetCalories = Math.round(targetCalories/10)*10;
+  const targetProtein = Math.round(p.weight * 1.8);
+  const targetFat = Math.round((targetCalories*0.25)/9);
+  const targetCarb = Math.max(0, Math.round((targetCalories - targetProtein*4 - targetFat*9)/4));
+  return { bmr: Math.round(bmr), tdee: Math.round(tdee), targetCalories, targetProtein, targetFat, targetCarb };
+}
+
+function todayConsumed() {
+  const today = localDateStr();
+  return mealLog.filter(m => m.date === today).reduce((acc,m) => {
+    acc.cal += m.calories||0; acc.protein += m.protein||0; acc.fat += m.fat||0; acc.carb += m.carb||0;
+    return acc;
+  }, { cal:0, protein:0, fat:0, carb:0 });
+}
+
+function pickWorkout(mood) {
+  const baseLevel = TIME_TO_LEVEL[profile.timeAvail] || "medium";
+  let level = baseLevel;
+  if (mood === "tired") level = "low";
+  else if (mood === "energetic") level = baseLevel === "low" ? "medium" : "high";
+  const pool = WORKOUTS[level];
+  return pool[dayOfYear(new Date()) % pool.length];
+}
+
+function initialPlanMessage(p) {
+  let freq = "週2~3回";
+  if (p.activity === "ほぼなし") freq = "週2~3回";
+  else if (p.activity === "週1-2回") freq = "週3~4回";
+  else freq = "週4~5回";
+  const dir = p.weight > p.goalWeight ? "減量" : p.weight < p.goalWeight ? "増量" : "維持";
+  return `現在 ${p.weight}kg → 目標 ${p.goalWeight}kg(${dir})。まずは${freq}、${p.timeAvail}程度の軽い運動から始めましょう。無理せず、続けることを最優先にします。`;
+}
+
+function generateDailyAdvice() {
+  const today = localDateStr();
+  const mood = moodByDate[today];
+  const consumed = todayConsumed();
+  const remaining = profile.targetCalories - consumed.cal;
+  const parts = [];
+  if (mood === "tired") {
+    parts.push("今日は疲れているようですね。トレーニングは軽めにして、無理のない範囲で過ごしましょう。");
+  } else if (mood === "energetic") {
+    parts.push("今日は調子が良さそうですね!予定より少しだけ負荷を上げてみましょう。");
+  } else if (!mood) {
+    parts.push("今日の調子を教えてください。それに合わせてプランを調整します。");
+  } else {
+    parts.push("いつも通りのペースで大丈夫です。今日のプランに沿って進めましょう。");
+  }
+  if (consumed.cal > 0) {
+    if (remaining < -100) {
+      parts.push(`カロリーは目標より${Math.abs(Math.round(remaining))}kcalほど多めですが、気にしすぎなくて大丈夫。明日以降で自然に調整できます。`);
+    } else if (remaining > profile.targetCalories*0.5) {
+      parts.push("まだ食事の記録が少なめです。しっかり栄養を摂りましょう。");
+    }
+  }
+  return parts.join(" ");
+}
+
+function generateAiReply(text) {
+  const consumed = todayConsumed();
+  const remaining = profile.targetCalories - consumed.cal;
+  const overWords = ["食べ過ぎ","食べちゃ","ラーメン","ケーキ","お菓子","揚げ","飲みすぎ","ビール","焼肉","ジュース","スイーツ"];
+  const goodWords = ["歩いた","運動した","頑張っ","筋トレ","ジョギング","ウォーキング","走った"];
+  const tiredWords = ["疲れ","だる","眠い","しんど"];
+  if (goodWords.some(w => text.includes(w))) {
+    return "いいですね、その調子です!今日の頑張り、しっかり記録しておきますね。";
+  }
+  if (tiredWords.some(w => text.includes(w))) {
+    return "無理はしないでくださいね。今日は休養も立派なダイエットの一部です。明日また調整しましょう。";
+  }
+  if (overWords.some(w => text.includes(w)) || remaining < -200) {
+    const overText = remaining < 0 ? `今日は目標より${Math.abs(Math.round(remaining))}kcalほど多めですが、` : "";
+    return `OKです、大丈夫ですよ。${overText}一度の食事で崩れるものではありません。明日は野菜を少し増やすくらいで十分です。無理な運動や我慢は不要です。`;
+  }
+  if (remaining > 300) {
+    return `今のところ${Math.round(remaining)}kcalほど余裕があります。この調子で、無理のない範囲で続けていきましょう。`;
+  }
+  return "記録ありがとうございます。今日のペースは概ね良好です。引き続き、できる範囲で続けていきましょう。";
+}
+
+// ============ CHART HELPERS ============
+function lineChartSvg(points, colorHex, goalValue) {
+  if (points.length < 2) return '<p class="muted">データが2件以上になるとグラフが表示されます。</p>';
+  const w=300, h=100, pad=8;
+  const values = points.map(p=>p.value).concat(goalValue!=null?[goalValue]:[]);
+  const min = Math.min(...values)-1, max = Math.max(...values)+1;
+  const xStep = (w-pad*2)/(points.length-1);
+  const yFor = v => h-pad-((v-min)/(max-min))*(h-pad*2);
+  const line = points.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
+  const dots = points.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${colorHex}" stroke="#fff" stroke-width="2"/>`).join("");
+  const goalLine = goalValue!=null ? `<line x1="${pad}" y1="${yFor(goalValue)}" x2="${w-pad}" y2="${yFor(goalValue)}" stroke="var(--sand)" stroke-dasharray="4 4" stroke-width="1"/>` : "";
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}<polyline points="${line}" fill="none" stroke="${colorHex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
+}
+function topRoundedPath(x,y,width,height,r) {
+  if (height<=0) return "";
+  r = Math.min(r, width/2, height);
+  return `M${x},${y+height} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+width-r},${y} Q${x+width},${y} ${x+width},${y+r} L${x+width},${y+height} Z`;
+}
+function dailyStepsBarSvg(days, goal) {
+  const w=300, h=100, pad=8, labelH=12;
+  const stepsByDate = {}; stepsLog.forEach(s => stepsByDate[s.date] = s.steps);
+  const values = days.map(d => stepsByDate[localDateStr(d)] || 0);
+  const maxVal = Math.max(...values, goal, 1);
+  const plotH = h-pad-labelH;
+  const slot = (w-pad*2)/days.length;
+  const bw = Math.min(24, slot-6);
+  const yFor = v => pad + plotH - (v/maxVal)*plotH;
+  const goalY = yFor(goal);
+  const bars = days.map((d,i) => {
+    const v = values[i];
+    const slotX = pad + i*slot, x = slotX + (slot-bw)/2, y = yFor(v), barH = (pad+plotH)-y;
+    const achieved = v >= goal && goal > 0;
+    return `<path d="${topRoundedPath(x,y,bw,barH,4)}" fill="${achieved?"var(--sand)":"#C9A24B66"}"/>`;
+  }).join("");
+  const labels = days.map((d,i) => {
+    const slotX = pad + i*slot;
+    return `<text x="${slotX+slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${WEEKDAY[d.getDay()]}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">
+    <line x1="${pad}" y1="${goalY}" x2="${w-pad}" y2="${goalY}" stroke="var(--slate)" stroke-dasharray="4 4" stroke-width="1"/>
+    ${bars}${labels}
+  </svg>`;
+}
+function meterHtml(value, target, colorHex) {
+  const pct = target > 0 ? Math.min(100, Math.round((value/target)*100)) : 0;
+  const overPct = target > 0 && value > target ? Math.min(30, Math.round(((value-target)/target)*100)) : 0;
+  return `<div class="meter-track">
+    <div class="meter-fill" style="width:${Math.min(pct,100)}%;background:${colorHex};"></div>
+    ${overPct > 0 ? `<div class="meter-fill" style="width:${overPct}%;background:var(--coral);"></div>` : ""}
+  </div>`;
+}
+
+// ============ ONBOARDING ============
+function renderOnboarding() {
+  const steps = [
+    // Step 0: basic info
+    `<p class="section-title">基本情報</p>
+     <label class="label">年齢</label>
+     <input type="number" id="ob-age" value="${esc(onboardDraft.age)}" placeholder="例: 32" style="margin-bottom:10px;">
+     <label class="label">性別</label>
+     <div class="wrap" style="margin-bottom:10px;">
+       ${["男性","女性","その他"].map(g => `<button class="chip ${onboardDraft.gender===g?"active":""}" data-ob-action="set-gender" data-val="${g}">${g}</button>`).join("")}
+     </div>
+     <label class="label">身長 (cm)</label>
+     <input type="number" id="ob-height" value="${esc(onboardDraft.height)}" placeholder="例: 170" style="margin-bottom:10px;">
+     <label class="label">現在の体重 (kg)</label>
+     <input type="number" step="0.1" id="ob-weight" value="${esc(onboardDraft.weight)}" placeholder="例: 82">`,
+    // Step 1: goal
+    `<p class="section-title">目標</p>
+     <label class="label">目標体重 (kg)</label>
+     <input type="number" step="0.1" id="ob-goal-weight" value="${esc(onboardDraft.goalWeight)}" placeholder="例: 70" style="margin-bottom:10px;">
+     <label class="label">運動習慣</label>
+     <div class="wrap" style="margin-bottom:10px;">
+       ${ACTIVITY_LEVELS.map(a => `<button class="chip ${onboardDraft.activity===a?"active":""}" data-ob-action="set-activity" data-val="${a}">${a}</button>`).join("")}
+     </div>
+     <label class="label">1日に使える時間</label>
+     <div class="wrap">
+       ${TIME_LEVELS.map(t => `<button class="chip ${onboardDraft.timeAvail===t?"active":""}" data-ob-action="set-time" data-val="${t}">${t}</button>`).join("")}
+     </div>`,
+    // Step 2: steps goal + confirm
+    `<p class="section-title">活動目標</p>
+     <label class="label">目標歩数(空欄なら自動設定)</label>
+     <input type="number" id="ob-steps" value="${esc(onboardDraft.targetSteps)}" placeholder="例: ${DEFAULT_STEPS[onboardDraft.activity]}" style="margin-bottom:14px;">
+     <p class="muted">入力内容から、1日の目標カロリー・栄養バランス・週の運動頻度をAIが計算します。内容はいつでも「設定」タブから変更できます。</p>`,
+  ];
+
+  document.getElementById("app").innerHTML = `
+    <h1>🤖 AIダイエットアシスタント</h1>
+    <p class="muted" style="margin:6px 0 16px;">MVPプロトタイプ — まずはあなたのことを教えてください</p>
+    <div class="card">
+      ${steps.map((s,i) => `<div class="onboard-step ${i===onboardStep?"active":""}">${s}</div>`).join("")}
+      <div class="progress-dots">${steps.map((_,i) => `<span class="${i===onboardStep?"active":""}"></span>`).join("")}</div>
+    </div>
+    <div class="row">
+      ${onboardStep > 0 ? `<button class="chip" data-ob-action="back" style="flex:0 0 auto;">戻る</button>` : ""}
+      <button class="btn-primary" data-ob-action="${onboardStep < steps.length-1 ? "next" : "finish"}">${onboardStep < steps.length-1 ? "次へ" : "プランを作成する"}</button>
+    </div>`;
+
+  document.getElementById("app").querySelectorAll("input").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const map = { "ob-age":"age", "ob-height":"height", "ob-weight":"weight", "ob-goal-weight":"goalWeight", "ob-steps":"targetSteps" };
+      const key = map[inp.id];
+      if (key) onboardDraft[key] = inp.value;
+    });
+  });
+  document.getElementById("app").addEventListener("click", handleOnboardClick);
+}
+
+function handleOnboardClick(e) {
+  const t = e.target.closest("[data-ob-action]");
+  if (!t) return;
+  const action = t.dataset.obAction;
+  if (action === "set-gender") { onboardDraft.gender = t.dataset.val; renderOnboarding(); }
+  else if (action === "set-activity") { onboardDraft.activity = t.dataset.val; renderOnboarding(); }
+  else if (action === "set-time") { onboardDraft.timeAvail = t.dataset.val; renderOnboarding(); }
+  else if (action === "back") { onboardStep = Math.max(0, onboardStep-1); renderOnboarding(); }
+  else if (action === "next") { onboardStep += 1; renderOnboarding(); }
+  else if (action === "finish") { finishOnboarding(); }
+}
+
+function finishOnboarding() {
+  const p = {
+    age: Number(onboardDraft.age) || 30,
+    gender: onboardDraft.gender,
+    height: Number(onboardDraft.height) || 165,
+    weight: Number(onboardDraft.weight) || 70,
+    goalWeight: Number(onboardDraft.goalWeight) || 65,
+    activity: onboardDraft.activity,
+    timeAvail: onboardDraft.timeAvail,
+    targetSteps: Number(onboardDraft.targetSteps) || DEFAULT_STEPS[onboardDraft.activity],
+  };
+  Object.assign(p, computeTargets(p));
+  profile = p;
+  if (weightLog.length === 0) weightLog.push({ date: localDateStr(), weight: p.weight });
+  chatLog.push({ id: uid(), role: "ai", text: initialPlanMessage(p) });
+  activeTab = "today";
+  saveState();
+  renderApp();
+}
+
+// ============ MAIN APP SHELL ============
+function renderApp() {
+  if (!profile) { renderOnboarding(); return; }
+  document.getElementById("app").innerHTML = `
+    <div class="between" style="margin-bottom:4px;">
+      <h1>🤖 AI Diet</h1>
+      <button class="icon-btn" data-action="go-profile">⚙️</button>
+    </div>
+    <p class="muted" style="margin:0 0 14px;">${localDateStr()} の記録</p>
+    <div class="banner">これはPhase 1 MVPのプロトタイプです。「AI」からのアドバイスはルールベースの簡易シミュレーションで、実際の医療的・専門的アドバイスではありません。データはこの端末のブラウザにのみ保存されます。</div>
+    <div id="tab-content"></div>
+    <div class="tabbar">
+      <button class="tab-item ${activeTab==="today"?"active":""}" data-tab="today"><span class="ic">🏠</span>今日</button>
+      <button class="tab-item ${activeTab==="meals"?"active":""}" data-tab="meals"><span class="ic">🍽️</span>食事</button>
+      <button class="tab-item ${activeTab==="weight"?"active":""}" data-tab="weight"><span class="ic">⚖️</span>体重</button>
+      <button class="tab-item ${activeTab==="steps"?"active":""}" data-tab="steps"><span class="ic">👣</span>歩数</button>
+      <button class="tab-item ${activeTab==="profile"?"active":""}" data-tab="profile"><span class="ic">⚙️</span>設定</button>
+    </div>`;
+  renderTabContent();
+  bindGlobalEvents();
+}
+
+function bindGlobalEvents() {
+  document.getElementById("app").addEventListener("click", (e) => {
+    const tabBtn = e.target.closest("[data-tab]");
+    if (tabBtn) { activeTab = tabBtn.dataset.tab; renderTabContent(); updateTabbarActive(); return; }
+    const profileBtn = e.target.closest('[data-action="go-profile"]');
+    if (profileBtn) { activeTab = "profile"; renderTabContent(); updateTabbarActive(); return; }
+    handleContentClick(e);
+  });
+}
+function updateTabbarActive() {
+  document.querySelectorAll(".tab-item").forEach(el => el.classList.toggle("active", el.dataset.tab === activeTab));
+}
+
+function renderTabContent() {
+  const el = document.getElementById("tab-content");
+  if (activeTab === "today") el.innerHTML = todayHtml();
+  else if (activeTab === "meals") el.innerHTML = mealsHtml();
+  else if (activeTab === "weight") el.innerHTML = weightHtml();
+  else if (activeTab === "steps") el.innerHTML = stepsHtml();
+  else if (activeTab === "profile") el.innerHTML = profileHtml();
+  const chatBox = document.getElementById("chat-scroll");
+  if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+// ============ TODAY TAB ============
+function todayHtml() {
+  const today = localDateStr();
+  const mood = moodByDate[today];
+  const workout = pickWorkout(mood);
+  const done = !!workoutDoneByDate[today];
+  const consumed = todayConsumed();
+  const todaySteps = (stepsLog.find(s => s.date === today) || {}).steps || 0;
+
+  const moodBtns = [
+    { key:"tired", label:"😴 疲れた" },
+    { key:"normal", label:"🙂 ふつう" },
+    { key:"energetic", label:"💪 元気" },
+  ].map(m => `<button class="chip ${mood===m.key?"active":""}" data-action="set-mood" data-val="${m.key}" style="flex:1;text-align:center;">${m.label}</button>`).join("");
+
+  const chatHtml = chatLog.slice(-6).map(c => `<div class="chat-bubble ${c.role}">${esc(c.text)}</div>`).join("");
+
+  return `
+    <div class="card">
+      <p class="section-title">今日の調子</p>
+      <div class="row">${moodBtns}</div>
+    </div>
+
+    <div class="card">
+      <p class="section-title">🤖 AIからのひとこと</p>
+      <p style="font-size:13.5px;line-height:1.6;margin:0 0 8px;">${esc(generateDailyAdvice())}</p>
+      <div id="chat-scroll" style="max-height:220px;overflow-y:auto;">${chatHtml}</div>
+      <div class="row" style="margin-top:10px;">
+        <input type="text" id="chat-input" placeholder="今日あったことを伝える(例: ラーメン食べちゃった)">
+        <button class="btn-icon" style="background:var(--teal);" data-action="send-chat">送信</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="section-title">今日のプラン</p>
+      <div class="row" style="align-items:flex-start;margin-bottom:12px;">
+        <div class="badge" style="background:var(--teal-soft);">🍽️</div>
+        <div style="flex:1;">
+          <div class="between"><span style="font-size:13.5px;font-weight:700;">食事</span><span class="mono muted">${Math.round(consumed.cal)} / ${profile.targetCalories} kcal</span></div>
+          ${meterHtml(consumed.cal, profile.targetCalories, "var(--teal)")}
+        </div>
+      </div>
+      <div class="row" style="align-items:flex-start;margin-bottom:12px;">
+        <div class="badge" style="background:var(--coral-soft);">💪</div>
+        <div style="flex:1;">
+          <div class="between">
+            <span style="font-size:13.5px;font-weight:700;">運動</span>
+            <span class="chip" style="padding:3px 10px;font-size:11px;">${workout.intensity}</span>
+          </div>
+          <p style="margin:4px 0;font-size:13.5px;">${workout.name} <span class="mono muted">(${workout.min}分)</span></p>
+          <button class="chip ${done?"active":""}" data-action="toggle-workout" style="width:100%;text-align:center;">${done ? "✓ 完了しました" : "完了にする"}</button>
+        </div>
+      </div>
+      <div class="row" style="align-items:flex-start;">
+        <div class="badge" style="background:var(--sand-soft);">👣</div>
+        <div style="flex:1;">
+          <div class="between"><span style="font-size:13.5px;font-weight:700;">活動</span><span class="mono muted">${todaySteps} / ${profile.targetSteps} 歩</span></div>
+          ${meterHtml(todaySteps, profile.targetSteps, "var(--sand)")}
+          <div class="row" style="margin-top:8px;">
+            <input type="number" id="today-steps-input" placeholder="今日の歩数" value="${todaySteps||""}">
+            <button class="btn-icon" style="background:var(--sand);" data-action="save-today-steps">記録</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ============ MEALS TAB ============
+function mealsHtml() {
+  const today = localDateStr();
+  const consumed = todayConsumed();
+  const todays = mealLog.filter(m => m.date === today).sort((a,b) => b.createdAt - a.createdAt);
+  const list = todays.map(m => `
+    <div class="entry-row">
+      <div class="badge" style="background:var(--teal-soft);font-size:13px;">${m.mealType[0]}</div>
+      <div style="flex:1;">
+        <div>${esc(m.name)} <span class="mono muted">${m.calories}kcal</span></div>
+        ${(m.protein||m.fat||m.carb) ? `<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>` : ""}
+      </div>
+      <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
+    </div>`).join("");
+
+  return `
+    <div class="card">
+      <p class="section-title">今日のカロリー</p>
+      <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${Math.round(consumed.cal)}</span><span class="muted">目標 ${profile.targetCalories} kcal</span></div>
+      ${meterHtml(consumed.cal, profile.targetCalories, "var(--teal)")}
+      <div class="row" style="margin-top:12px;">
+        <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${Math.round(consumed.protein)}/${profile.targetProtein}g</p>${meterHtml(consumed.protein, profile.targetProtein, "var(--coral)")}</div>
+        <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${Math.round(consumed.fat)}/${profile.targetFat}g</p>${meterHtml(consumed.fat, profile.targetFat, "var(--sand)")}</div>
+        <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">炭水化物</p><p class="mono" style="margin:0;">${Math.round(consumed.carb)}/${profile.targetCarb}g</p>${meterHtml(consumed.carb, profile.targetCarb, "var(--slate)")}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="section-title">食事を記録</p>
+      <div class="wrap" style="margin-bottom:10px;" id="meal-type-buttons">
+        ${MEAL_TYPES.map(mt => `<button class="chip ${mt===selectedMealType?"active":""}" data-action="select-mealtype" data-val="${mt}">${mt}</button>`).join("")}
+      </div>
+      <input type="text" id="meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:8px;">
+      <div class="row" style="margin-bottom:8px;">
+        <input type="number" id="meal-cal-input" placeholder="kcal" class="mono">
+        <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
+      </div>
+      <div class="row" style="margin-bottom:10px;">
+        <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
+        <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
+      </div>
+      <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
+      ${list || '<p class="muted" style="margin-top:10px;">今日はまだ記録がありません。</p>'}
+    </div>`;
+}
+
+// ============ WEIGHT TAB ============
+function weightHtml() {
+  const sortedAsc = [...weightLog].sort((a,b) => a.date < b.date ? -1 : 1);
+  const sortedDesc = [...weightLog].sort((a,b) => a.date < b.date ? 1 : -1);
+  const latest = sortedDesc[0];
+  const remaining = latest ? Math.round((latest.weight - profile.goalWeight)*10)/10 : null;
+  const points = sortedAsc.map(w => ({ date: w.date, value: w.weight }));
+  const list = sortedDesc.slice(0,6).map(w => `
+    <div class="entry-row">
+      <span class="mono muted" style="flex:1;">${w.date}</span>
+      <span class="mono">${w.weight}kg</span>
+      <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
+    </div>`).join("");
+
+  return `
+    <div class="card">
+      <div class="between" style="margin-bottom:8px;">
+        <p class="section-title" style="margin:0;">⚖️ 体重の推移</p>
+        <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
+      </div>
+      ${lineChartSvg(points, "var(--slate)", profile.goalWeight)}
+      <div class="row" style="margin-top:10px;">
+        <input type="date" id="weight-date-input" value="${localDateStr()}">
+        <input type="number" step="0.1" id="weight-value-input" placeholder="kg" class="mono">
+        <button class="btn-icon" style="background:var(--slate);" data-action="add-weight">＋</button>
+      </div>
+      ${list}
+    </div>`;
+}
+
+// ============ STEPS TAB ============
+function stepsHtml() {
+  const days = last7Days();
+  const today = localDateStr();
+  const todaySteps = (stepsLog.find(s => s.date === today) || {}).steps || 0;
+  return `
+    <div class="card">
+      <p class="section-title">👣 歩数(直近7日・点線は目標)</p>
+      ${dailyStepsBarSvg(days, profile.targetSteps)}
+      <div class="row" style="margin-top:10px;">
+        <input type="date" id="steps-date-input" value="${today}">
+        <input type="number" id="steps-value-input" placeholder="歩数" class="mono" value="${todaySteps||""}">
+        <button class="btn-icon" style="background:var(--sand);" data-action="add-steps">＋</button>
+      </div>
+    </div>`;
+}
+
+// ============ PROFILE TAB ============
+function profileHtml() {
+  const p = profile;
+  return `
+    <div class="card">
+      <p class="section-title">現在のプロフィール</p>
+      <p style="font-size:13.5px;line-height:1.9;margin:0;">
+        年齢 <span class="mono">${p.age}</span>歳 / 性別 <span class="mono">${p.gender}</span> / 身長 <span class="mono">${p.height}</span>cm<br>
+        現在 <span class="mono">${p.weight}</span>kg → 目標 <span class="mono">${p.goalWeight}</span>kg<br>
+        運動習慣 <span class="mono">${p.activity}</span> / 1日 <span class="mono">${p.timeAvail}</span><br>
+        推定BMR <span class="mono">${p.bmr}</span>kcal / 推定TDEE <span class="mono">${p.tdee}</span>kcal
+      </p>
+    </div>
+    <div class="card">
+      <p class="section-title">1日の目標</p>
+      <p style="font-size:13.5px;line-height:1.9;margin:0;">
+        カロリー <span class="mono">${p.targetCalories}</span>kcal<br>
+        タンパク質 <span class="mono">${p.targetProtein}</span>g / 脂質 <span class="mono">${p.targetFat}</span>g / 炭水化物 <span class="mono">${p.targetCarb}</span>g<br>
+        歩数 <span class="mono">${p.targetSteps}</span>歩
+      </p>
+    </div>
+    <div class="card">
+      <p class="section-title">プロフィールを再設定</p>
+      <p class="muted" style="margin-bottom:10px;">年齢・体重・目標などを変更すると、目標カロリーを再計算します(記録データは保持されます)。</p>
+      <button class="chip" data-action="restart-onboarding" style="width:100%;text-align:center;">再設定する</button>
+    </div>
+    <div class="card">
+      <p class="section-title">データ</p>
+      <button class="btn-ghost" data-action="reset-all">すべてのデータを削除</button>
+    </div>`;
+}
+
+// ============ ACTIONS ============
+function handleContentClick(e) {
+  const t = e.target.closest("[data-action]");
+  if (!t) return;
+  const action = t.dataset.action;
+  const today = localDateStr();
+
+  if (action === "set-mood") { moodByDate[today] = t.dataset.val; saveState(); renderTabContent(); }
+  else if (action === "toggle-workout") { workoutDoneByDate[today] = !workoutDoneByDate[today]; saveState(); renderTabContent(); }
+  else if (action === "send-chat") { handleSendChat(); }
+  else if (action === "save-today-steps") {
+    const v = Number(document.getElementById("today-steps-input").value);
+    if (v >= 0) { stepsLog = stepsLog.filter(s => s.date !== today); stepsLog.push({ date: today, steps: v }); saveState(); renderTabContent(); }
+  }
+  else if (action === "select-mealtype") {
+    selectedMealType = t.dataset.val;
+    document.querySelectorAll("#meal-type-buttons .chip").forEach(c => c.classList.toggle("active", c.dataset.val === t.dataset.val));
+  }
+  else if (action === "add-meal") { handleAddMeal(); }
+  else if (action === "del-meal") { mealLog = mealLog.filter(m => m.id !== t.dataset.id); saveState(); renderTabContent(); }
+  else if (action === "add-weight") { handleAddWeight(); }
+  else if (action === "del-weight") { weightLog = weightLog.filter(w => w.date !== t.dataset.date); saveState(); renderTabContent(); }
+  else if (action === "add-steps") { handleAddSteps(); }
+  else if (action === "restart-onboarding") {
+    onboardDraft = { age:String(profile.age), gender:profile.gender, height:String(profile.height), weight:String(profile.weight), goalWeight:String(profile.goalWeight), activity:profile.activity, timeAvail:profile.timeAvail, targetSteps:String(profile.targetSteps) };
+    onboardStep = 0; renderOnboarding();
+  }
+  else if (action === "reset-all") {
+    if (confirm("すべてのデータを削除します。よろしいですか?")) {
+      profile = null; weightLog = []; mealLog = []; stepsLog = []; moodByDate = {}; workoutDoneByDate = {}; chatLog = []; onboardStep = 0;
+      onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", targetSteps:"" };
+      saveState(); renderApp();
+    }
+  }
+}
+
+function handleSendChat() {
+  const input = document.getElementById("chat-input");
+  const text = input.value.trim();
+  if (!text) return;
+  chatLog.push({ id: uid(), role: "user", text });
+  chatLog.push({ id: uid(), role: "ai", text: generateAiReply(text) });
+  saveState();
+  input.value = "";
+  renderTabContent();
+}
+
+function handleAddMeal() {
+  const name = document.getElementById("meal-name-input").value.trim();
+  const calories = Number(document.getElementById("meal-cal-input").value);
+  if (!name || !calories) return;
+  mealLog.push({
+    id: uid(), date: localDateStr(),
+    mealType: selectedMealType,
+    name, calories,
+    protein: Number(document.getElementById("meal-protein-input").value) || 0,
+    fat: Number(document.getElementById("meal-fat-input").value) || 0,
+    carb: Number(document.getElementById("meal-carb-input").value) || 0,
+    createdAt: Date.now(),
+  });
+  saveState();
+  renderTabContent();
+}
+
+function handleAddWeight() {
+  const date = document.getElementById("weight-date-input").value || localDateStr();
+  const val = parseFloat(document.getElementById("weight-value-input").value);
+  if (!val || val <= 0) return;
+  weightLog = weightLog.filter(w => w.date !== date);
+  weightLog.push({ date, weight: val });
+  saveState();
+  renderTabContent();
+}
+
+function handleAddSteps() {
+  const date = document.getElementById("steps-date-input").value || localDateStr();
+  const val = Number(document.getElementById("steps-value-input").value);
+  if (val < 0 || isNaN(val)) return;
+  stepsLog = stepsLog.filter(s => s.date !== date);
+  stepsLog.push({ date, steps: val });
+  saveState();
+  renderTabContent();
+}
+
+// ============ INIT ============
+loadState();
+renderApp();
+</script>
+</body>
+</html>
