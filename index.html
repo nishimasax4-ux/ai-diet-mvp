@@ -80,6 +80,7 @@
   <button id="sync-status"></button>
 
   <div class="card" id="streak-card"></div>
+  <div class="card" id="ai-card"></div>
   <div class="card" id="goals-card"></div>
   <div class="card" id="weight-card"></div>
   <div class="card" id="meal-card"></div>
@@ -160,11 +161,36 @@ const WEIGHTS = [15,20,25,30,35,40,45,50];
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
 const WEEKDAY = ["日","月","火","水","木","金","土"];
 
+// ---- AIアドバイス関連 ----
+const ACTIVITY_LEVELS = ["ほぼなし","週1-2回","週3-4回","ほぼ毎日"];
+const TIME_LEVELS = ["5-10分","10-15分","15-30分","30分以上"];
+const ACTIVITY_FACTOR = { "ほぼなし":1.2, "週1-2回":1.375, "週3-4回":1.55, "ほぼ毎日":1.725 };
+const TIME_TO_LEVEL = { "5-10分":"low", "10-15分":"medium", "15-30分":"high", "30分以上":"high" };
+const WORKOUTS = {
+  low: [
+    { name:"ストレッチ&深呼吸", min:5, intensity:"ゆるめ" },
+    { name:"その場足踏み", min:8, intensity:"ゆるめ" },
+    { name:"軽い散歩", min:10, intensity:"ゆるめ" },
+  ],
+  medium: [
+    { name:"自重スクワット 3セット", min:10, intensity:"ふつう" },
+    { name:"ウォーキング", min:15, intensity:"ふつう" },
+    { name:"プランク&腕立て", min:12, intensity:"ふつう" },
+  ],
+  high: [
+    { name:"HIIT風サーキット", min:15, intensity:"しっかりめ" },
+    { name:"ジョギング", min:20, intensity:"しっかりめ" },
+    { name:"自重トレーニング フルセット", min:20, intensity:"しっかりめ" },
+  ],
+};
+
 // ============ STATE ============
 let entries = [];
 let weightEntries = [];
 let mealEntries = [];
 let goals = { weight: 65, weeklyFreq: 3 };
+let profile = { age: "", gender: "男性", height: "", activity: "週1-2回", timeAvail: "10-15分" };
+let moodByDate = {};
 let currentTab = "strength";
 let selectedPart = "胸";
 let selectedCardio = "ランニング";
@@ -211,6 +237,7 @@ function weekBuckets(n) {
   return buckets;
 }
 function uid() { return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
+function dayOfYear(d) { const start = new Date(d.getFullYear(), 0, 0); return Math.floor((d - start) / 86400000); }
 function esc(s) {
   return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
@@ -224,12 +251,14 @@ function loadState() {
       weightEntries = data.weightEntries || [];
       mealEntries = data.mealEntries || [];
       if (data.goals) goals = Object.assign({}, goals, data.goals);
+      if (data.profile) profile = Object.assign({}, profile, data.profile);
+      moodByDate = data.moodByDate || {};
     }
   } catch (e) { console.error("load error", e); }
 }
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate }));
   } catch (e) { console.error("save error", e); }
 }
 
@@ -243,7 +272,10 @@ function buildRows() {
     }
   });
   weightEntries.forEach(w => rows.push([w.date, "体重", `${w.weight}kg`, "", "", ""]));
-  mealEntries.forEach(m => rows.push([m.date, "食事", m.mealType, m.text, m.calories ? `${m.calories}kcal` : "", ""]));
+  mealEntries.forEach(m => {
+    const pfc = (m.protein || m.fat || m.carb) ? `P${m.protein||0} F${m.fat||0} C${m.carb||0}` : "";
+    rows.push([m.date, "食事", m.mealType, m.text, m.calories ? `${m.calories}kcal` : "", pfc]);
+  });
   rows.sort((a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   return rows;
 }
@@ -323,6 +355,64 @@ function weeklyBarSvg(weeks, goal) {
   </svg>`;
 }
 
+// ============ AI ADVICE HELPERS ============
+// Rule-based "AI": no external AI API is called. Estimates a daily calorie/macro
+// target from profile + latest recorded weight (Mifflin-St Jeor), and suggests a
+// short workout based on today's mood + how much time the user has available.
+function computeTargets(p, weight, goalWeight) {
+  const age = Number(p.age), height = Number(p.height);
+  if (!age || !height || !weight) return null;
+  const bmr = p.gender === "男性"
+    ? 10*weight + 6.25*height - 5*age + 5
+    : 10*weight + 6.25*height - 5*age - 161;
+  const tdee = bmr * (ACTIVITY_FACTOR[p.activity] || 1.375);
+  const diff = weight - (goalWeight != null ? goalWeight : weight);
+  let targetCalories;
+  if (diff > 0.5) targetCalories = tdee - (diff > 5 ? 500 : 300);
+  else if (diff < -0.5) targetCalories = tdee + 300;
+  else targetCalories = tdee;
+  const floor = p.gender === "男性" ? 1500 : 1200;
+  targetCalories = Math.max(targetCalories, floor, bmr*1.05);
+  targetCalories = Math.round(targetCalories/10)*10;
+  const targetProtein = Math.round(weight * 1.8);
+  const targetFat = Math.round((targetCalories*0.25)/9);
+  const targetCarb = Math.max(0, Math.round((targetCalories - targetProtein*4 - targetFat*9)/4));
+  return { bmr: Math.round(bmr), tdee: Math.round(tdee), targetCalories, targetProtein, targetFat, targetCarb };
+}
+function getTargets() {
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  if (!latestWeight) return null;
+  return computeTargets(profile, latestWeight.weight, goals.weight);
+}
+function pickWorkout(mood) {
+  const baseLevel = TIME_TO_LEVEL[profile.timeAvail] || "medium";
+  let level = baseLevel;
+  if (mood === "tired") level = "low";
+  else if (mood === "energetic") level = baseLevel === "low" ? "medium" : "high";
+  const pool = WORKOUTS[level];
+  return pool[dayOfYear(new Date()) % pool.length];
+}
+function generateDailyAdvice() {
+  const today = localDateStr();
+  const mood = moodByDate[today];
+  const parts = [];
+  if (mood === "tired") parts.push("今日は疲れているようですね。トレーニングは軽めにして、無理のない範囲で過ごしましょう。");
+  else if (mood === "energetic") parts.push("今日は調子が良さそうですね!予定より少しだけ負荷を上げてみましょう。");
+  else if (!mood) parts.push("今日の調子を教えてください。それに合わせておすすめの運動を調整します。");
+  else parts.push("いつも通りのペースで大丈夫です。");
+
+  const targets = getTargets();
+  if (targets) {
+    const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
+    const remaining = targets.targetCalories - todayCal;
+    if (todayCal > 0) {
+      if (remaining < -100) parts.push(`カロリーは目標より${Math.abs(Math.round(remaining))}kcalほど多めですが、気にしすぎなくて大丈夫。明日以降で自然に調整できます。`);
+      else if (remaining > targets.targetCalories*0.5) parts.push("まだ食事の記録が少なめです。しっかり栄養を摂りましょう。");
+    }
+  }
+  return parts.join(" ");
+}
+
 // ============ RENDER ============
 function renderSyncStatus() {
   const el = document.getElementById("sync-status");
@@ -360,6 +450,30 @@ function renderStreak() {
     </div>`;
 }
 
+function renderAiCard() {
+  const today = localDateStr();
+  const mood = moodByDate[today];
+  const workout = pickWorkout(mood);
+  const moodBtns = [
+    { key:"tired", label:"😴 疲れた" },
+    { key:"normal", label:"🙂 ふつう" },
+    { key:"energetic", label:"💪 元気" },
+  ].map(m => `<button class="chip ${mood===m.key?"active-rust":""}" data-action="set-mood" data-val="${m.key}" style="flex:1;text-align:center;">${m.label}</button>`).join("");
+
+  document.getElementById("ai-card").innerHTML = `
+    <p class="section-title" style="margin:0 0 10px;">🤖 AIのひとこと</p>
+    <div class="row" style="margin-bottom:10px;">${moodBtns}</div>
+    <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${esc(generateDailyAdvice())}</p>
+    <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
+      <div>
+        <span class="muted">今日のおすすめ</span>
+        <p style="margin:2px 0 0;font-weight:700;font-size:13.5px;">${workout.name} <span class="mono muted" style="font-weight:400;">(${workout.min}分・${workout.intensity})</span></p>
+      </div>
+      <button class="chip active-steel" data-action="quicklog-workout" style="flex:0 0 auto;">記録欄へ</button>
+    </div>
+    <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの簡易アドバイスです(外部AIには接続していません)</p>`;
+}
+
 function renderGoalsCard() {
   const sortedAscW = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
   const startW = sortedAscW[0];
@@ -372,6 +486,7 @@ function renderGoalsCard() {
   }
   const thisWeek = weekBuckets(1)[0];
   const freqPct = Math.round(Math.min(100, goals.weeklyFreq > 0 ? (thisWeek.count / goals.weeklyFreq) * 100 : 0));
+  const targets = getTargets();
 
   document.getElementById("goals-card").innerHTML = `
     <p class="section-title" style="margin:0 0 10px;">🎯 目標</p>
@@ -398,6 +513,28 @@ function renderGoalsCard() {
       </div>
       <div class="meter-track"><div class="meter-fill" style="width:${freqPct}%;background:var(--rust);"></div></div>
       <p class="muted" style="font-size:11px;margin:4px 0 0;">今週(月〜日) ${thisWeek.count} / ${goals.weeklyFreq} 回(達成率 ${freqPct}%)</p>
+    </div>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line);">
+      <p class="muted" style="margin:0 0 8px;">🤖 AIアドバイス用プロフィール</p>
+      <div class="row" style="margin-bottom:8px;">
+        <input type="number" id="profile-age-input" placeholder="年齢" class="mono" value="${esc(profile.age)}">
+        <input type="number" id="profile-height-input" placeholder="身長cm" class="mono" value="${esc(profile.height)}">
+      </div>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${["男性","女性"].map(g => `<button class="chip ${profile.gender===g?"active-rust":""}" data-action="set-gender" data-val="${g}">${g}</button>`).join("")}
+      </div>
+      <p class="muted" style="font-size:11px;margin:0 0 4px;">運動習慣</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${ACTIVITY_LEVELS.map(a => `<button class="chip ${profile.activity===a?"active-rust":""}" data-action="set-activity" data-val="${a}">${a}</button>`).join("")}
+      </div>
+      <p class="muted" style="font-size:11px;margin:0 0 4px;">1日に使える時間</p>
+      <div class="wrap" style="margin-bottom:10px;">
+        ${TIME_LEVELS.map(tl => `<button class="chip ${profile.timeAvail===tl?"active-rust":""}" data-action="set-timeavail" data-val="${tl}">${tl}</button>`).join("")}
+      </div>
+      ${targets
+        ? `<p style="font-size:12.5px;line-height:1.8;margin:0;">推定BMR <span class="mono">${targets.bmr}</span>kcal / TDEE <span class="mono">${targets.tdee}</span>kcal<br>
+             1日の目標: <span class="mono">${targets.targetCalories}</span>kcal(P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb})</p>`
+        : '<p class="muted" style="font-size:11px;margin:0;">年齢・身長と、体重タブでの体重記録がそろうと、AIが1日の目標カロリー・栄養バランスを計算します。</p>'}
     </div>`;
 
   document.getElementById("goal-weight-input").addEventListener("change", (e) => {
@@ -407,6 +544,12 @@ function renderGoalsCard() {
   document.getElementById("goal-freq-input").addEventListener("change", (e) => {
     const v = parseInt(e.target.value, 10);
     if (v > 0) { goals.weeklyFreq = v; saveState(); renderAll(); }
+  });
+  document.getElementById("profile-age-input").addEventListener("change", (e) => {
+    profile.age = e.target.value; saveState(); renderAll();
+  });
+  document.getElementById("profile-height-input").addEventListener("change", (e) => {
+    profile.height = e.target.value; saveState(); renderAll();
   });
 }
 
@@ -444,7 +587,12 @@ function renderWeightCard() {
 
 function renderMealCard() {
   const today = localDateStr();
-  const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
+  const todayMeals = mealEntries.filter(m => m.date === today);
+  const todayCal = todayMeals.reduce((s,m) => s + (m.calories||0), 0);
+  const todayProtein = todayMeals.reduce((s,m) => s + (m.protein||0), 0);
+  const todayFat = todayMeals.reduce((s,m) => s + (m.fat||0), 0);
+  const todayCarb = todayMeals.reduce((s,m) => s + (m.carb||0), 0);
+  const targets = getTargets();
   const sortedDesc = [...mealEntries].sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt);
   const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active-moss":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
   const list = sortedDesc.slice(0,4).map(m => `
@@ -461,10 +609,19 @@ function renderMealCard() {
       <span class="section-title" style="margin:0;">🍽️ 食事</span>
       ${todayCal > 0 ? `<span style="font-size:12px;color:var(--ink-faint);">本日 <span class="mono" style="color:var(--ink);font-weight:700;">${todayCal}</span> kcal</span>` : ""}
     </div>
+    ${targets ? `
+      <div class="meter-track" style="margin-bottom:4px;"><div class="meter-fill" style="width:${Math.min(100, Math.round(todayCal/targets.targetCalories*100))}%;background:var(--moss);"></div></div>
+      <p class="muted" style="font-size:11px;margin:0 0 10px;">${todayCal} / ${targets.targetCalories} kcal ・ P${todayProtein}/${targets.targetProtein}g F${todayFat}/${targets.targetFat}g C${todayCarb}/${targets.targetCarb}g</p>
+    ` : ""}
     <div class="wrap" style="margin-bottom:8px;">${mealBtns}</div>
     <div class="row" style="margin-bottom:8px;">
       <input type="date" id="meal-date-input" class="mono" style="width:auto;flex:0 0 auto;">
       <input type="number" inputmode="numeric" id="meal-calories-input" placeholder="kcal(任意)" class="mono" style="width:96px;flex:0 0 auto;">
+    </div>
+    <div class="row" style="margin-bottom:8px;">
+      <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
+      <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
+      <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
     </div>
     <div class="row">
       <input type="text" id="meal-text-input" placeholder="例: 鶏胸肉のサラダ">
@@ -694,6 +851,11 @@ function renderEditModal() {
       <div class="wrap" style="margin-bottom:10px;">${MEAL_TYPES.map(t => `<button class="chip ${editing.tempMealType===t?"active-moss":""}" data-edit-action="set-mealtype" data-val="${t}">${t}</button>`).join("")}</div>
       <label class="label">内容</label><input type="text" id="edit-text" value="${esc(editing.draftText||"")}" style="margin-bottom:10px;">
       <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
+      <div class="row" style="margin-bottom:10px;">
+        <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="P(g)" class="mono">
+        <input type="number" id="edit-fat" value="${editing.draftFat||""}" placeholder="F(g)" class="mono">
+        <input type="number" id="edit-carb" value="${editing.draftCarb||""}" placeholder="C(g)" class="mono">
+      </div>
       <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
   }
 
@@ -715,6 +877,7 @@ function renderAll() {
   document.getElementById("header-date").textContent = document.getElementById("date-input").value || localDateStr();
   renderSyncStatus();
   renderStreak();
+  renderAiCard();
   renderGoalsCard();
   renderWeightCard();
   renderMealCard();
@@ -782,10 +945,17 @@ function handleAddMeal() {
   const calories = document.getElementById("meal-calories-input").value;
   mealEntries.unshift({
     id: uid(), date, mealType: selectedMealType, text,
-    calories: calories ? Number(calories) : null, createdAt: Date.now(),
+    calories: calories ? Number(calories) : null,
+    protein: Number(document.getElementById("meal-protein-input").value) || 0,
+    fat: Number(document.getElementById("meal-fat-input").value) || 0,
+    carb: Number(document.getElementById("meal-carb-input").value) || 0,
+    createdAt: Date.now(),
   });
   document.getElementById("meal-text-input").value = "";
   document.getElementById("meal-calories-input").value = "";
+  document.getElementById("meal-protein-input").value = "";
+  document.getElementById("meal-fat-input").value = "";
+  document.getElementById("meal-carb-input").value = "";
   saveState(); renderAll(); syncToSheet();
 }
 
@@ -803,7 +973,8 @@ function openEdit(kind, key) {
   } else if (kind === "meal") {
     const m = mealEntries.find(x => x.id === key);
     if (!m) return;
-    editing = { kind, id: key, tempMealType: m.mealType, draftText: m.text, draftCalories: m.calories || "", draftDate: m.date };
+    editing = { kind, id: key, tempMealType: m.mealType, draftText: m.text, draftCalories: m.calories || "", draftDate: m.date,
+      draftProtein: m.protein || "", draftFat: m.fat || "", draftCarb: m.carb || "" };
   }
   renderEditModal();
 }
@@ -814,6 +985,7 @@ function bindEditModalDraftInputs() {
   const map = {
     "edit-exercise": "draftExercise", "edit-reps": "draftReps", "edit-weight": "draftWeight",
     "edit-minutes": "draftMinutes", "edit-date": "draftDate", "edit-text": "draftText", "edit-calories": "draftCalories",
+    "edit-protein": "draftProtein", "edit-fat": "draftFat", "edit-carb": "draftCarb",
   };
   Object.keys(map).forEach((id) => {
     const inp = document.getElementById(id);
@@ -854,6 +1026,9 @@ function handleEditSave() {
     if (text) m.text = text;
     const cal = document.getElementById("edit-calories").value;
     m.calories = cal ? Number(cal) : null;
+    m.protein = Number(document.getElementById("edit-protein").value) || 0;
+    m.fat = Number(document.getElementById("edit-fat").value) || 0;
+    m.carb = Number(document.getElementById("edit-carb").value) || 0;
   }
   editing = null;
   saveState(); renderAll(); syncToSheet();
@@ -880,6 +1055,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   const t = e.target.closest("[data-action]");
   if (!t) return;
   const action = t.dataset.action;
+  const today = localDateStr();
   if (action === "select-part") { selectedPart = t.dataset.val; renderFormOptions(); }
   else if (action === "select-exercise") {
     document.getElementById("exercise-input").value = t.dataset.val;
@@ -915,6 +1091,21 @@ document.getElementById("app").addEventListener("click", (e) => {
     entries = []; weightEntries = []; mealEntries = []; confirmReset = false;
     saveState(); renderAll(); syncToSheet();
   }
+  else if (action === "set-mood") { moodByDate[today] = t.dataset.val; saveState(); renderAiCard(); }
+  else if (action === "quicklog-workout") {
+    const w = pickWorkout(moodByDate[today]);
+    currentTab = "cardio";
+    renderTabs();
+    selectedCardio = "その他";
+    renderFormOptions();
+    const customInput = document.getElementById("cardio-custom-input");
+    customInput.value = w.name;
+    document.getElementById("minutes-input").value = w.min;
+    customInput.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderAll(); }
+  else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderAll(); }
+  else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderAll(); }
 });
 document.getElementById("sync-status").addEventListener("click", () => {
   if (syncStatus === "error") syncToSheet();
