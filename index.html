@@ -99,13 +99,85 @@ const EXERCISES_BY_PART = {
   "腹筋": ["クランチ","プランク","レッグレイズ"],
 };
 const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","その他"];
+// 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
+const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "その他":5 };
+const STRENGTH_KCAL_PER_SET = 30; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const WEIGHTS = [15,20,25,30,35,40,45,50];
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
+// 内蔵の食品カロリー概算表(外部APIには接続しません)。
+// 数値はすべて一般的な目安量あたりのおおよその値です(kcal, protein/fat/carbはg)。
+// aliases は入力候補にヒットしやすくするための別名・表記ゆれです。
+const FOOD_CALORIE_DB = [
+  { name:"ご飯(茶碗1杯)", kcal:252, protein:3.8, fat:0.5, carb:55.7, aliases:["白米","ごはん","米"] },
+  { name:"玄米ご飯(茶碗1杯)", kcal:248, protein:4.2, fat:1.5, carb:51.3, aliases:["玄米"] },
+  { name:"食パン(6枚切り1枚)", kcal:158, protein:5.3, fat:2.6, carb:28, aliases:["トースト","パン"] },
+  { name:"ロールパン(1個)", kcal:95, protein:3, fat:2.7, carb:15 },
+  { name:"おにぎり(1個)", kcal:170, protein:3, fat:0.5, carb:38, aliases:["おむすび"] },
+  { name:"うどん(1玉)", kcal:210, protein:6, fat:1, carb:43 },
+  { name:"そば(1玉)", kcal:224, protein:8, fat:1.5, carb:43 },
+  { name:"パスタ(1人前)", kcal:400, protein:13, fat:9, carb:66, aliases:["スパゲッティ"] },
+  { name:"ラーメン(1杯)", kcal:470, protein:20, fat:15, carb:65 },
+  { name:"チャーハン(1皿)", kcal:650, protein:15, fat:22, carb:95, aliases:["炒飯"] },
+  { name:"カレーライス(1皿)", kcal:700, protein:15, fat:22, carb:100, aliases:["カレー"] },
+  { name:"牛丼(並盛)", kcal:733, protein:20, fat:23, carb:105 },
+  { name:"親子丼(1杯)", kcal:700, protein:28, fat:18, carb:100 },
+  { name:"天丼(1杯)", kcal:800, protein:22, fat:25, carb:115 },
+  { name:"寿司(10貫)", kcal:500, protein:25, fat:5, carb:85, aliases:["お寿司"] },
+  { name:"鶏むね肉(皮なし・100g)", kcal:108, protein:22.3, fat:1.5, carb:0, aliases:["鶏胸肉","むね肉"] },
+  { name:"鶏もも肉(皮つき・100g)", kcal:200, protein:16.6, fat:14, carb:0, aliases:["もも肉"] },
+  { name:"豚ロース(100g)", kcal:263, protein:19.3, fat:19.2, carb:0.2 },
+  { name:"牛肩ロース(100g)", kcal:295, protein:16.5, fat:26, carb:0.2 },
+  { name:"鮭の塩焼き(1切れ)", kcal:133, protein:18, fat:6, carb:0.1, aliases:["焼き鮭","サーモン"] },
+  { name:"卵(1個)", kcal:76, protein:6.2, fat:5.2, carb:0.2, aliases:["たまご","玉子"] },
+  { name:"納豆(1パック)", kcal:89, protein:7.4, fat:4.5, carb:5.4 },
+  { name:"豆腐(半丁150g)", kcal:108, protein:9.9, fat:6.3, carb:2.3, aliases:["とうふ"] },
+  { name:"から揚げ(4個)", kcal:280, protein:18, fat:18, carb:12, aliases:["唐揚げ","からあげ"] },
+  { name:"ハンバーグ(1個)", kcal:350, protein:18, fat:23, carb:15 },
+  { name:"餃子(6個)", kcal:300, protein:10, fat:16, carb:28, aliases:["ぎょうざ","ギョーザ"] },
+  { name:"刺身盛り合わせ(1人前)", kcal:200, protein:28, fat:7, carb:2, aliases:["お刺身"] },
+  { name:"焼き魚定食", kcal:600, protein:30, fat:18, carb:75 },
+  { name:"グリーンサラダ(ドレッシング込み)", kcal:150, protein:2, fat:11, carb:10, aliases:["サラダ"] },
+  { name:"ポテトサラダ(小鉢)", kcal:150, protein:2.5, fat:9, carb:15 },
+  { name:"きんぴらごぼう(小鉢)", kcal:90, protein:1.5, fat:4, carb:11 },
+  { name:"ひじきの煮物(小鉢)", kcal:80, protein:3, fat:3.5, carb:9 },
+  { name:"味噌汁(1杯)", kcal:40, protein:3, fat:1.5, carb:3.5, aliases:["みそ汁"] },
+  { name:"豚汁(1杯)", kcal:140, protein:8, fat:8, carb:9 },
+  { name:"バナナ(1本)", kcal:86, protein:1.1, fat:0.2, carb:22.5 },
+  { name:"りんご(1個)", kcal:138, protein:0.3, fat:0.2, carb:38.1, aliases:["リンゴ"] },
+  { name:"みかん(1個)", kcal:45, protein:0.6, fat:0.1, carb:11.5 },
+  { name:"牛乳(コップ1杯・200ml)", kcal:134, protein:6.6, fat:7.6, carb:9.6, aliases:["ミルク"] },
+  { name:"豆乳(200ml)", kcal:92, protein:7.2, fat:3.6, carb:6.2 },
+  { name:"ビール(350ml)", kcal:140, protein:1.1, fat:0, carb:11 },
+  { name:"ブラックコーヒー(1杯)", kcal:5, protein:0.2, fat:0, carb:0.7, aliases:["コーヒー"] },
+  { name:"オレンジジュース(200ml)", kcal:92, protein:1.4, fat:0.2, carb:21.4 },
+  { name:"プロテインバー(1本)", kcal:200, protein:20, fat:6, carb:18 },
+  { name:"コンビニおにぎり(1個)", kcal:180, protein:4, fat:1, carb:38 },
+  { name:"ヨーグルト(1個・100g)", kcal:100, protein:4.3, fat:3, carb:11.9 },
+  { name:"チョコレート(1枚)", kcal:280, protein:3, fat:17, carb:28, aliases:["板チョコ"] },
+  { name:"ポテトチップス(1袋)", kcal:336, protein:4.7, fat:22, carb:32, aliases:["ポテチ"] },
+  { name:"ハンバーガー(1個)", kcal:280, protein:13, fat:11, carb:33 },
+  { name:"チーズバーガー(1個)", kcal:310, protein:15, fat:14, carb:32 },
+  { name:"フライドポテト(M)", kcal:410, protein:5, fat:20, carb:52, aliases:["ポテト(ファストフード)"] },
+  { name:"アイスクリーム(1個)", kcal:180, protein:3, fat:9, carb:22 },
+  { name:"サラダチキン(1袋)", kcal:110, protein:24, fat:1, carb:0.5 },
+  { name:"ゆで卵(1個)", kcal:76, protein:6.5, fat:5.3, carb:0.3 },
+  { name:"厚揚げ(1枚150g)", kcal:216, protein:15.9, fat:16.2, carb:0.3 },
+  { name:"サバの塩焼き(1切れ)", kcal:200, protein:16, fat:15, carb:0.1, aliases:["焼きサバ"] },
+  { name:"ツナ缶(1缶)", kcal:130, protein:16, fat:7, carb:0.1 },
+  { name:"オムライス(1皿)", kcal:650, protein:18, fat:25, carb:85 },
+  { name:"焼きそば(1人前)", kcal:550, protein:15, fat:20, carb:75 },
+  { name:"お好み焼き(1枚)", kcal:550, protein:18, fat:25, carb:60 },
+  { name:"ピザ(1切れ)", kcal:250, protein:10, fat:10, carb:30 },
+  { name:"サンドイッチ(1パック)", kcal:350, protein:12, fat:14, carb:42 },
+  { name:"みたらし団子(1本)", kcal:110, protein:1.5, fat:0.3, carb:24 },
+  { name:"どら焼き(1個)", kcal:280, protein:6, fat:4, carb:55 },
+  { name:"シュークリーム(1個)", kcal:220, protein:5, fat:12, carb:23 },
+];
 const WEEKDAY = ["日","月","火","水","木","金","土"];
 const ACTIVITY_LEVELS = ["ほぼなし","週1-2回","週3-4回","ほぼ毎日"];
-const TIME_LEVELS = ["5-10分","10-15分","15-30分","30分以上"];
+const TIME_LEVELS = ["5-10分","10-15分","15-30分","30分以上","1時間"];
 const ACTIVITY_FACTOR = { "ほぼなし":1.2, "週1-2回":1.375, "週3-4回":1.55, "ほぼ毎日":1.725 };
-const TIME_TO_LEVEL = { "5-10分":"low", "10-15分":"medium", "15-30分":"high", "30分以上":"high" };
+const TIME_TO_LEVEL = { "5-10分":"low", "10-15分":"medium", "15-30分":"high", "30分以上":"high", "1時間":"high" };
 const DEFAULT_FREQ = { "ほぼなし":2, "週1-2回":3, "週3-4回":4, "ほぼ毎日":5 };
 const WORKOUTS = {
   low: [
@@ -134,12 +206,15 @@ let profile = null; // null until onboarding completes: {age, gender, height, ac
 let moodByDate = {};
 let syncStatus = "idle";
 let lastSyncedAt = null;
+let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
+let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
 
 let activeTab = "today"; // today | meals | weight | training | settings
 let trainingSubTab = "strength"; // strength | cardio
 let selectedPart = "胸";
 let selectedCardio = "ランニング";
 let selectedMealType = "朝食";
+let masterExercisePart = "胸"; // which part's tab is active in the master-data editor
 let historyView = "list";
 let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedCalDate = null;
@@ -182,6 +257,60 @@ function weekBuckets(n) {
   return buckets;
 }
 function uid() { return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
+function exerciseNamesForPart(part) { return exerciseMaster.filter(x => x.part === part).map(x => x.name); }
+
+// ============ FOOD CALORIE LOOKUP (offline, built-in dictionary — no external API) ============
+function normalizeFoodText(s) { return String(s ?? "").toLowerCase().replace(/[\s　]/g, ""); }
+function estimateFoodMatches(query) {
+  const q = normalizeFoodText(query);
+  if (!q) return [];
+  const scored = FOOD_CALORIE_DB.map(f => {
+    const nameNorm = normalizeFoodText(f.name);
+    const aliasNorms = (f.aliases || []).map(normalizeFoodText);
+    let score = 0;
+    if (nameNorm === q || aliasNorms.includes(q)) score = 100;
+    else if (nameNorm.startsWith(q) || aliasNorms.some(a => a.startsWith(q))) score = 80;
+    else if (nameNorm.includes(q) || aliasNorms.some(a => a.includes(q))) score = 60;
+    else if (q.includes(nameNorm) && nameNorm.length >= 2) score = 50;
+    else if (aliasNorms.some(a => q.includes(a) && a.length >= 2)) score = 45;
+    return { f, score };
+  }).filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+  return scored.slice(0, 5).map(x => x.f);
+}
+let foodSuggestionCache = {}; // target key ("meal" | "master" | "edit") -> current candidate array, for click handling by index
+function renderFoodSuggestions(containerId, query, target) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const matches = estimateFoodMatches(query);
+  foodSuggestionCache[target] = matches;
+  el.innerHTML = matches.length
+    ? `<span class="muted" style="width:100%;font-size:10.5px;margin-bottom:2px;">🔍 概算カロリー候補(タップで入力・目安です)</span>` +
+      matches.map((f, i) => `<button class="chip" data-action="apply-food-suggestion" data-target="${target}" data-idx="${i}">${esc(f.name)} <span class="mono">${f.kcal}kcal</span></button>`).join("")
+    : "";
+}
+function applyFoodSuggestion(target, idx) {
+  const f = (foodSuggestionCache[target] || [])[idx];
+  if (!f) return;
+  const ids = target === "meal"
+    ? { cal:"meal-cal-input", protein:"meal-protein-input", fat:"meal-fat-input", carb:"meal-carb-input" }
+    : target === "master"
+    ? { cal:"master-meal-cal-input", protein:"master-meal-protein-input", fat:"master-meal-fat-input", carb:"master-meal-carb-input" }
+    : { cal:"edit-calories", protein:"edit-protein", fat:"edit-fat", carb:"edit-carb" };
+  const calEl = document.getElementById(ids.cal);
+  if (calEl) calEl.value = f.kcal;
+  const pEl = document.getElementById(ids.protein);
+  if (pEl) pEl.value = f.protein || "";
+  const fEl = document.getElementById(ids.fat);
+  if (fEl) fEl.value = f.fat || "";
+  const cEl = document.getElementById(ids.carb);
+  if (cEl) cEl.value = f.carb || "";
+  if (target === "edit" && editing) {
+    editing.draftCalories = f.kcal;
+    editing.draftProtein = f.protein || "";
+    editing.draftFat = f.fat || "";
+    editing.draftCarb = f.carb || "";
+  }
+}
 function esc(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function dayOfYear(d) { const start = new Date(d.getFullYear(), 0, 0); return Math.floor((d - start) / 86400000); }
 
@@ -196,12 +325,25 @@ function loadState() {
       if (data.goals) goals = Object.assign({}, goals, data.goals);
       if (data.profile) profile = data.profile;
       moodByDate = data.moodByDate || {};
+      exerciseMaster = data.exerciseMaster || [];
+      mealMaster = data.mealMaster || [];
     }
   } catch (e) { console.error("load error", e); }
+  // First run (or upgrading from a version without a master list): seed the
+  // exercise master from the built-in suggestions so there is something to
+  // edit right away. Meals start empty since we can't guess what someone eats.
+  seedExerciseMasterIfEmpty();
+}
+function seedExerciseMasterIfEmpty() {
+  if (exerciseMaster.length === 0) {
+    Object.keys(EXERCISES_BY_PART).forEach(part => {
+      EXERCISES_BY_PART[part].forEach(name => exerciseMaster.push({ id: uid(), part, name }));
+    });
+  }
 }
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster }));
   } catch (e) { console.error("save error", e); }
 }
 
@@ -311,6 +453,65 @@ function generateDailyAdvice() {
   return parts.join(" ");
 }
 
+// ---- カロリー収支(摂取 vs TDEE+運動消費)の推移・アドバイス ----
+// すべてルールベースの概算です。外部AI・外部APIには接続していません。
+function estimateExerciseBurnForDate(dateStr, weightKg) {
+  let kcal = 0;
+  entries.filter(e => e.date === dateStr).forEach(e => {
+    if (e.type === "strength") {
+      kcal += STRENGTH_KCAL_PER_SET;
+    } else {
+      const met = CARDIO_MET[e.exercise] || CARDIO_MET["その他"];
+      kcal += (met * 3.5 * weightKg / 200) * (e.minutes || 0);
+    }
+  });
+  return Math.round(kcal);
+}
+function computeCalorieBalanceHistory(days) {
+  const targets = getTargets();
+  if (!targets) return null;
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  const weightKg = latestWeight.weight;
+  const history = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const dateStr = localDateStr(d);
+    const dayMeals = mealEntries.filter(m => m.date === dateStr);
+    const intake = dayMeals.reduce((s,m) => s + (m.calories||0), 0);
+    const burn = estimateExerciseBurnForDate(dateStr, weightKg);
+    const tdeeAdjusted = targets.tdee + burn;
+    history.push({ date: dateStr, intake, burn, tdeeAdjusted, balance: intake - tdeeAdjusted, hasData: dayMeals.length > 0 });
+  }
+  return history;
+}
+function generateBalanceAdvice(history) {
+  const withData = history.filter(x => x.hasData);
+  if (withData.length === 0) {
+    return { tone:"neutral", icon:"ℹ️", text:"食事を記録すると、TDEE(消費カロリー)との差から収支の傾向とアドバイスが表示されます。" };
+  }
+  const recent = withData.slice(-7);
+  const avg = recent.reduce((s,x) => s + x.balance, 0) / recent.length;
+  const avgR = Math.round(avg);
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  const goalDiff = latestWeight ? latestWeight.weight - goals.weight : 0;
+  const direction = goalDiff > 0.3 ? "loss" : goalDiff < -0.3 ? "gain" : "maintain";
+
+  if (direction === "loss") {
+    if (avg <= -750) return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり${avgR}kcalの赤字で、やや大きめのペースです。筋肉量の低下や体調不良につながることがあるので、食事量を少し増やすか運動強度を調整してみましょう。` };
+    if (avg <= -150) return { tone:"encourage", icon:"👍", text:`直近の平均収支は1日あたり${avgR}kcalの赤字です。目標体重に向けて順調なペースなので、この調子を続けましょう。` };
+    if (avg < 150) return { tone:"caution", icon:"💡", text:`直近の平均収支はほぼ均衡(${avgR}kcal)です。減量を進めたい場合は、間食を少し減らすか有酸素運動を増やしてみましょう。` };
+    return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり+${avgR}kcalの黒字(食べ過ぎ気味)です。目標体重から遠ざかる可能性があるので、次の食事から少し調整してみましょう。` };
+  }
+  if (direction === "gain") {
+    if (avg >= 750) return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり+${avgR}kcalとかなり大きめの黒字です。体脂肪の増え方が急すぎないか、体重の推移もあわせて確認しましょう。` };
+    if (avg >= 150) return { tone:"encourage", icon:"👍", text:`直近の平均収支は1日あたり+${avgR}kcalの黒字です。増量目標に向けて順調なペースです。` };
+    if (avg > -150) return { tone:"caution", icon:"💡", text:`直近の平均収支はほぼ均衡(${avgR}kcal)です。増量を進めたい場合は、間食やタンパク質を少し増やしてみましょう。` };
+    return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり${avgR}kcalの赤字です。増量目標から遠ざかっている可能性があるので、食事量を見直してみましょう。` };
+  }
+  if (Math.abs(avg) <= 150) return { tone:"encourage", icon:"👍", text:`直近の平均収支は1日あたり${avgR}kcalとほぼ均衡していて、体重維持にはちょうど良いペースです。` };
+  return { tone:"caution", icon:"💡", text:`直近の平均収支は1日あたり${avg>=0?"+":""}${avgR}kcalで、体重維持の目安から少しずれています。食事や運動量を見直してみましょう。` };
+}
+
 // ============ CHART HELPERS ============
 function lineChartSvg(points, colorHex, goalValue) {
   if (points.length < 2) return '<p class="muted">データが2件以上になるとグラフが表示されます。</p>';
@@ -348,6 +549,35 @@ function weeklyBarSvg(weeks, goal) {
   }).join("");
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">
     <line x1="${pad}" y1="${goalY}" x2="${w-pad}" y2="${goalY}" stroke="var(--slate)" stroke-dasharray="4 4" stroke-width="1"/>
+    ${bars}${labels}
+  </svg>`;
+}
+function balanceBarSvg(history) {
+  const w=300, h=110, pad=8, labelH=12;
+  const withData = history.filter(x => x.hasData);
+  if (withData.length === 0) return '<p class="muted" style="font-size:12px;">食事を記録すると、カロリー収支の推移が表示されます。</p>';
+  const maxAbs = Math.max(...history.map(x => Math.abs(x.balance)), 200);
+  const plotH = h - pad - labelH;
+  const zeroY = pad + plotH/2;
+  const slot = (w - pad*2) / history.length;
+  const bw = Math.min(14, slot - 4);
+  const scale = (plotH/2) / maxAbs;
+  const bars = history.map((x,i) => {
+    const slotX = pad + i*slot, bx = slotX + slot/2 - bw/2;
+    if (!x.hasData) return `<rect x="${bx}" y="${zeroY-1}" width="${bw}" height="2" rx="1" fill="var(--line)"/>`;
+    const barH = Math.max(Math.abs(x.balance) * scale, 1.5);
+    const y = x.balance >= 0 ? zeroY - barH : zeroY;
+    const color = x.balance >= 0 ? "var(--coral)" : "var(--teal)";
+    return `<rect x="${bx}" y="${y}" width="${bw}" height="${barH}" rx="2" fill="${color}"/>`;
+  }).join("");
+  const labelIdxs = [0, Math.floor((history.length-1)/2), history.length-1];
+  const labels = labelIdxs.map(i => {
+    const slotX = pad + i*slot;
+    const d = new Date(history[i].date + "T00:00:00");
+    return `<text x="${slotX+slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${d.getMonth()+1}/${d.getDate()}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:120px;">
+    <line x1="${pad}" y1="${zeroY}" x2="${w-pad}" y2="${zeroY}" stroke="var(--ink-faint)" stroke-width="1"/>
     ${bars}${labels}
   </svg>`;
 }
@@ -478,6 +708,7 @@ function renderTabContent() {
   else if (activeTab === "training") el.innerHTML = trainingHtml();
   else if (activeTab === "settings") el.innerHTML = settingsHtml();
   bindTrainingFormWidgets();
+  bindSettingsWidgets();
 }
 function switchTab(tab) {
   activeTab = tab;
@@ -516,6 +747,8 @@ function todayHtml() {
   const thisWeek = weekBuckets(1)[0];
   const targets = getTargets();
   const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
+  const balanceHistory = computeCalorieBalanceHistory(14);
+  const balanceAdvice = balanceHistory ? generateBalanceAdvice(balanceHistory) : null;
 
   return `
     <div class="card">
@@ -559,6 +792,19 @@ function todayHtml() {
         <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.targetCalories}kcal` : "未設定"}</span></div>
         ${targets ? meterHtml(todayCal, targets.targetCalories, "var(--teal)") : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力すると計算されます</p>'}
       </div>
+    </div>
+
+    <div class="card">
+      <p class="section-title">📉 カロリー収支の推移(直近14日)</p>
+      ${balanceHistory ? `
+        ${balanceBarSvg(balanceHistory)}
+        <p class="muted" style="font-size:10.5px;margin:4px 0 12px;">🟦 消費が上回った日(赤字) ／ 🟧 摂取が上回った日(黒字)。TDEEにその日の運動消費を上乗せして概算しています。</p>
+        <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
+          <span style="font-size:16px;">${balanceAdvice.icon}</span>
+          <p style="margin:0;font-size:13px;line-height:1.6;flex:1;">${esc(balanceAdvice.text)}</p>
+        </div>
+        <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの概算です(外部AIには接続していません)。運動の消費カロリーは種目・時間からの簡易推定です。</p>
+      ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、カロリー収支の推移とアドバイスが表示されます。</p>'}
     </div>`;
 }
 
@@ -602,7 +848,13 @@ function mealsHtml() {
       <div class="wrap" style="margin-bottom:10px;" id="meal-type-buttons">
         ${mealBtns}
       </div>
-      <input type="text" id="meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:8px;">
+      ${mealMaster.length ? `
+      <p class="muted" style="margin:0 0 6px;">よく食べるもの(タップで入力)</p>
+      <div class="wrap" style="margin-bottom:10px;">
+        ${mealMaster.map(m => `<button class="chip" data-action="select-meal-preset" data-id="${m.id}">${esc(m.name)}</button>`).join("")}
+      </div>` : ""}
+      <input type="text" id="meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
+      <div class="wrap" id="meal-name-suggestions" style="margin-bottom:8px;"></div>
       <div class="row" style="margin-bottom:8px;">
         <input type="date" id="meal-date-input" value="${today}" class="mono" style="width:auto;flex:0 0 auto;">
         <input type="number" id="meal-cal-input" placeholder="kcal(任意)" class="mono">
@@ -821,9 +1073,10 @@ function renderTrainingFormOptions() {
   partEl.innerHTML = PARTS.map(p => `<button class="chip ${selectedPart===p?"active-a":""}" data-action="select-part" data-val="${p}">${p}</button>`).join("");
   const exerciseInput = document.getElementById("exercise-input");
   const currentExercise = exerciseInput ? exerciseInput.value.trim() : "";
-  const exOptions = EXERCISES_BY_PART[selectedPart] || [];
-  document.getElementById("exercise-buttons").innerHTML = exOptions.map(ex =>
-    `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${ex}">${ex}</button>`).join("");
+  const exOptions = exerciseNamesForPart(selectedPart);
+  document.getElementById("exercise-buttons").innerHTML = exOptions.length
+    ? exOptions.map(ex => `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${ex}">${ex}</button>`).join("")
+    : '<span class="muted" style="font-size:11px;">未登録(設定タブの「種目マスタ」から追加できます)</span>';
   document.getElementById("cardio-buttons").innerHTML = CARDIO_OPTIONS.map(c =>
     `<button class="chip ${selectedCardio===c?"active-b":""}" data-action="select-cardio" data-val="${c}">${c}</button>`).join("");
   document.getElementById("cardio-custom-input").classList.toggle("hidden", selectedCardio !== "その他");
@@ -895,12 +1148,64 @@ function settingsHtml() {
     </div>
 
     <div class="card">
+      <p class="section-title">🗂️ マスタ管理</p>
+      <p class="muted" style="margin:0 0 12px;">よく使う筋トレ種目・食事をあらかじめ登録しておくと、記録時にワンタップで選べます。</p>
+
+      <p class="label" style="margin-bottom:6px;">筋トレ種目(部位ごと)</p>
+      <div class="wrap" id="master-ex-part-buttons" style="margin-bottom:8px;"></div>
+      <div id="master-ex-list" style="margin-bottom:8px;"></div>
+      <div class="row" style="margin-bottom:18px;">
+        <input type="text" id="master-ex-name-input" placeholder="種目名を追加(例: レッグプレスマシン)">
+        <button class="btn-icon" style="background:var(--coral);flex:0 0 auto;" data-action="add-exercise-master">＋</button>
+      </div>
+
+      <p class="label" style="margin-bottom:6px;">よく食べるもの</p>
+      <div id="master-meal-list" style="margin-bottom:8px;"></div>
+      <input type="text" id="master-meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
+      <div class="wrap" id="master-meal-name-suggestions" style="margin-bottom:8px;"></div>
+      <div class="row" style="margin-bottom:8px;">
+        <input type="number" id="master-meal-cal-input" placeholder="kcal(任意)" class="mono">
+      </div>
+      <div class="row" style="margin-bottom:10px;">
+        <input type="number" id="master-meal-protein-input" placeholder="P(g・任意)" class="mono">
+        <input type="number" id="master-meal-fat-input" placeholder="F(g・任意)" class="mono">
+        <input type="number" id="master-meal-carb-input" placeholder="C(g・任意)" class="mono">
+      </div>
+      <button class="chip" data-action="add-meal-master">＋ 食事を登録</button>
+    </div>
+
+    <div class="card">
       <p class="section-title">データ</p>
       ${confirmReset
         ? `<p class="muted" style="margin-bottom:8px;">本当にすべてのデータを削除しますか?</p>
            <div class="row"><button class="chip" data-action="reset-yes" style="color:var(--coral);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`
         : `<button class="chip" data-action="reset-show">すべてのデータを削除</button>`}
     </div>`;
+}
+
+// Targeted DOM patches for the master-data editor, mirroring the Training-tab
+// chip pattern: switching the body-part chip only rebuilds the part chips +
+// list, so an in-progress "new exercise name" input is never wiped.
+function bindSettingsWidgets() {
+  if (activeTab !== "settings") return;
+  renderMasterExerciseSection();
+  renderMasterMealList();
+}
+function renderMasterExerciseSection() {
+  const partEl = document.getElementById("master-ex-part-buttons");
+  if (!partEl) return;
+  partEl.innerHTML = PARTS.map(p => `<button class="chip ${masterExercisePart===p?"active-a":""}" data-action="select-master-ex-part" data-val="${p}">${p}</button>`).join("");
+  const list = exerciseMaster.filter(x => x.part === masterExercisePart);
+  document.getElementById("master-ex-list").innerHTML = list.length
+    ? list.map(x => `<div class="entry-row"><span style="flex:1;">${esc(x.name)}</span><button class="del-btn" data-action="del-exercise-master" data-id="${x.id}">🗑️</button></div>`).join("")
+    : '<p class="muted" style="font-size:11px;">この部位の種目はまだ登録されていません。</p>';
+}
+function renderMasterMealList() {
+  const el = document.getElementById("master-meal-list");
+  if (!el) return;
+  el.innerHTML = mealMaster.length
+    ? mealMaster.map(m => `<div class="entry-row"><div style="flex:1;">${esc(m.name)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}${(m.protein||m.fat||m.carb)?`<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>`:""}</div><button class="del-btn" data-action="del-meal-master" data-id="${m.id}">🗑️</button></div>`).join("")
+    : '<p class="muted" style="font-size:11px;">まだ登録がありません。</p>';
 }
 
 // ============ EDIT MODAL ============
@@ -933,6 +1238,10 @@ function bindEditModalDraftInputs() {
     const inp = document.getElementById(id);
     if (inp) inp.addEventListener("input", () => { editing[map[id]] = inp.value; });
   });
+  const textInp = document.getElementById("edit-text");
+  if (textInp && editing.kind === "meal") {
+    textInp.addEventListener("input", () => renderFoodSuggestions("edit-meal-suggestions", textInp.value, "edit"));
+  }
 }
 function renderEditModal() {
   const el = document.getElementById("modal-root");
@@ -943,7 +1252,7 @@ function renderEditModal() {
     const e = entries.find(x => x.id === editing.id);
     if (!e) { editing = null; el.innerHTML = ""; el.classList.add("hidden"); return; }
     if (e.type === "strength") {
-      const exOptions = EXERCISES_BY_PART[editing.tempPart] || [];
+      const exOptions = exerciseNamesForPart(editing.tempPart);
       body = `
         <label class="label">部位</label>
         <div class="wrap" style="margin-bottom:10px;">${PARTS.map(p => `<button class="chip ${editing.tempPart===p?"active-a":""}" data-edit-action="set-part" data-val="${p}">${p}</button>`).join("")}</div>
@@ -969,7 +1278,8 @@ function renderEditModal() {
     body = `
       <label class="label">区分</label>
       <div class="wrap" style="margin-bottom:10px;">${MEAL_TYPES.map(t => `<button class="chip ${editing.tempMealType===t?"active":""}" data-edit-action="set-mealtype" data-val="${t}">${t}</button>`).join("")}</div>
-      <label class="label">内容</label><input type="text" id="edit-text" value="${esc(editing.draftText||"")}" style="margin-bottom:10px;">
+      <label class="label">内容</label><input type="text" id="edit-text" value="${esc(editing.draftText||"")}" style="margin-bottom:6px;">
+      <div class="wrap" id="edit-meal-suggestions" style="margin-bottom:8px;"></div>
       <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
       <div class="row" style="margin-bottom:10px;">
         <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="P(g)" class="mono">
@@ -1127,6 +1437,17 @@ document.getElementById("app").addEventListener("click", (e) => {
     selectedMealType = t.dataset.val;
     document.querySelectorAll("#meal-type-buttons .chip").forEach(c => c.classList.toggle("active", c.dataset.val === t.dataset.val));
   }
+  else if (action === "select-meal-preset") {
+    const m = mealMaster.find(x => x.id === t.dataset.id);
+    if (!m) return;
+    document.getElementById("meal-name-input").value = m.name;
+    document.getElementById("meal-cal-input").value = m.calories != null ? m.calories : "";
+    document.getElementById("meal-protein-input").value = m.protein || "";
+    document.getElementById("meal-fat-input").value = m.fat || "";
+    document.getElementById("meal-carb-input").value = m.carb || "";
+    document.getElementById("meal-name-suggestions").innerHTML = "";
+  }
+  else if (action === "apply-food-suggestion") { applyFoodSuggestion(t.dataset.target, Number(t.dataset.idx)); }
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
   else if (action === "edit-training") { openEdit("training", t.dataset.id); }
@@ -1139,13 +1460,59 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "retry-sync") { syncToSheet(); }
+  else if (action === "select-master-ex-part") { masterExercisePart = t.dataset.val; renderMasterExerciseSection(); }
+  else if (action === "add-exercise-master") {
+    const inp = document.getElementById("master-ex-name-input");
+    const name = inp.value.trim();
+    if (!name) return;
+    exerciseMaster.push({ id: uid(), part: masterExercisePart, name });
+    inp.value = "";
+    saveState(); renderMasterExerciseSection();
+  }
+  else if (action === "del-exercise-master") {
+    exerciseMaster = exerciseMaster.filter(x => x.id !== t.dataset.id);
+    saveState(); renderMasterExerciseSection();
+  }
+  else if (action === "add-meal-master") {
+    const nameInp = document.getElementById("master-meal-name-input");
+    const name = nameInp.value.trim();
+    if (!name) return;
+    const cal = document.getElementById("master-meal-cal-input").value;
+    mealMaster.push({
+      id: uid(), name,
+      calories: cal ? Number(cal) : null,
+      protein: Number(document.getElementById("master-meal-protein-input").value) || 0,
+      fat: Number(document.getElementById("master-meal-fat-input").value) || 0,
+      carb: Number(document.getElementById("master-meal-carb-input").value) || 0,
+    });
+    nameInp.value = "";
+    document.getElementById("master-meal-cal-input").value = "";
+    document.getElementById("master-meal-protein-input").value = "";
+    document.getElementById("master-meal-fat-input").value = "";
+    document.getElementById("master-meal-carb-input").value = "";
+    document.getElementById("master-meal-name-suggestions").innerHTML = "";
+    saveState(); renderMasterMealList();
+  }
+  else if (action === "del-meal-master") {
+    mealMaster = mealMaster.filter(m => m.id !== t.dataset.id);
+    saveState(); renderMasterMealList();
+  }
   else if (action === "reset-show") { confirmReset = true; renderTabContent(); }
   else if (action === "reset-no") { confirmReset = false; renderTabContent(); }
   else if (action === "reset-yes") {
     entries = []; weightEntries = []; mealEntries = []; goals = { weight: 65, weeklyFreq: 3 };
     profile = null; moodByDate = {}; confirmReset = false; onboardStep = 0;
+    exerciseMaster = []; mealMaster = []; masterExercisePart = "胸";
+    seedExerciseMasterIfEmpty();
     onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
     saveState(); renderApp();
+  }
+});
+document.getElementById("app").addEventListener("input", (e) => {
+  if (e.target.id === "meal-name-input") {
+    renderFoodSuggestions("meal-name-suggestions", e.target.value, "meal");
+  } else if (e.target.id === "master-meal-name-input") {
+    renderFoodSuggestions("master-meal-name-suggestions", e.target.value, "master");
   }
 });
 document.getElementById("app").addEventListener("change", (e) => {
@@ -1166,6 +1533,8 @@ document.getElementById("app").addEventListener("click", (e) => {
 });
 document.getElementById("modal-root").addEventListener("click", (e) => {
   if (e.target.id === "modal-overlay") { editing = null; renderEditModal(); return; }
+  const suggestionBtn = e.target.closest('[data-action="apply-food-suggestion"]');
+  if (suggestionBtn) { applyFoodSuggestion(suggestionBtn.dataset.target, Number(suggestionBtn.dataset.idx)); return; }
   const t = e.target.closest("[data-edit-action]");
   if (!t) return;
   const action = t.dataset.editAction;
