@@ -221,6 +221,9 @@ let exerciseMaster = []; // {id, part, name} - user-editable list of gym machine
 let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
 let lastStrengthByExercise = {}; // "種目名"(または"(部位)") -> {reps, weight} の直近の入力値。次回そのままの値を提案する
 let lastCardioMinutes = {}; // 有酸素の種目名 -> 直近の分数
+let routineMaster = []; // {id, name, items:[{type:"strength",part,exercise,weight,reps} | {type:"cardio",exercise,minutes}]}
+                         // よく使う運動メニュー。複数種目をまとめて登録し、ワンタップで今日にまとめて記録できる
+let savingRoutine = false; // 「今日の内容をメニューとして保存」の名前入力欄を表示中か
 
 let activeTab = "today"; // today | meals | weight | training | settings
 let trainingSubTab = "strength"; // strength | cardio
@@ -357,6 +360,7 @@ function loadState() {
       mealMaster = data.mealMaster || [];
       lastStrengthByExercise = data.lastStrengthByExercise || {};
       lastCardioMinutes = data.lastCardioMinutes || {};
+      routineMaster = data.routineMaster || [];
     }
   } catch (e) { console.error("load error", e); }
   // First run (or upgrading from a version without a master list): seed the
@@ -373,7 +377,7 @@ function seedExerciseMasterIfEmpty() {
 }
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes, routineMaster }));
   } catch (e) { console.error("save error", e); }
 }
 
@@ -497,14 +501,15 @@ function generateDailyAdvice() {
   else if (!mood) parts.push("今日の調子を教えてください。それに合わせておすすめの運動を調整します。");
   else parts.push("いつも通りのペースで大丈夫です。");
 
-  const targets = getTargets();
+  const targets = getEffectiveCalorieTarget(today);
   if (targets) {
     const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
-    const remaining = targets.targetCalories - todayCal;
+    const remaining = targets.effectiveTarget - todayCal;
     if (todayCal > 0) {
       if (remaining < -100) parts.push(`カロリーは目標より${Math.abs(Math.round(remaining))}kcalほど多めですが、気にしすぎなくて大丈夫。明日以降で自然に調整できます。`);
-      else if (remaining > targets.targetCalories*0.5) parts.push("まだ食事の記録が少なめです。しっかり栄養を摂りましょう。");
+      else if (remaining > targets.effectiveTarget*0.5) parts.push("まだ食事の記録が少なめです。しっかり栄養を摂りましょう。");
     }
+    if (targets.exerciseBurn > 0) parts.push(`今日の運動で約${targets.exerciseBurn}kcal多く消費している分、目標カロリーを上乗せしています。`);
   }
   return parts.join(" ");
 }
@@ -522,6 +527,18 @@ function estimateExerciseBurnForDate(dateStr, weightKg) {
     }
   });
   return Math.round(kcal);
+}
+// その日の「摂取カロリー目標(TDEE±体重目標での増減) + その日の運動で消費した分」を返す。
+// トレーニングした日ほど、表示上の目標カロリーがその分だけ上乗せされる(=たくさん動いた日は
+// その分多く食べてよい、という考え方)。今日の状況・食事タブの表示に使う。
+function getEffectiveCalorieTarget(dateStr) {
+  const targets = getTargets();
+  if (!targets) return null;
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  const weightKg = latestWeight ? latestWeight.weight : null;
+  const exerciseBurn = weightKg ? estimateExerciseBurnForDate(dateStr, weightKg) : 0;
+  const effectiveTarget = Math.round(targets.targetCalories + exerciseBurn);
+  return { ...targets, exerciseBurn, effectiveTarget };
 }
 function computeCalorieBalanceHistory(days) {
   const targets = getTargets();
@@ -766,8 +783,18 @@ function renderTabContent() {
   bindTrainingFormWidgets();
   bindSettingsWidgets();
 }
+// 現在時刻から、いま記録しそうな食事区分を推測する(食事タブを開くたびに
+// 呼ばれる)。手で選び直せば当然その選択が優先される。
+function autoSelectMealTypeByTime() {
+  const h = new Date().getHours();
+  if (h >= 4 && h < 10) selectedMealType = "朝食";
+  else if (h >= 10 && h < 15) selectedMealType = "昼食";
+  else if (h >= 15 && h < 18) selectedMealType = "間食";
+  else selectedMealType = "夕食";
+}
 function switchTab(tab) {
   activeTab = tab;
+  if (tab === "meals") autoSelectMealTypeByTime();
   renderTabContent();
   updateTabbarActive();
 }
@@ -801,10 +828,11 @@ function todayHtml() {
       : Math.round(Math.min(100, Math.max(0, (latestW.weight - startW.weight) / (goals.weight - startW.weight) * 100)));
   }
   const thisWeek = weekBuckets(1)[0];
-  const targets = getTargets();
+  const targets = getEffectiveCalorieTarget(today);
   const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
   const balanceHistory = computeCalorieBalanceHistory(14);
   const balanceAdvice = balanceHistory ? generateBalanceAdvice(balanceHistory) : null;
+  const showCopyYesterday = yesterdayHasRecords();
 
   return `
     <div class="card">
@@ -819,6 +847,17 @@ function todayHtml() {
         </div>
       </div>
     </div>
+
+    ${showCopyYesterday ? `
+    <div class="card">
+      <div class="between" style="gap:10px;">
+        <div style="flex:1;min-width:0;">
+          <span class="muted">📋 昨日の記録をコピー</span>
+          <p style="margin:2px 0 0;font-size:12.5px;line-height:1.4;">昨日と同じトレーニング・食事をまとめて今日に記録します</p>
+        </div>
+        <button class="chip active-b" data-action="copy-yesterday" style="flex:0 0 auto;">コピー</button>
+      </div>
+    </div>` : ""}
 
     <div class="card">
       <p class="section-title">🤖 AIのひとこと</p>
@@ -845,8 +884,9 @@ function todayHtml() {
         ${meterHtml(thisWeek.count, goals.weeklyFreq, "var(--coral)")}
       </div>
       <div>
-        <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.targetCalories}kcal` : "未設定"}</span></div>
-        ${targets ? meterHtml(todayCal, targets.targetCalories, "var(--teal)") : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力すると計算されます</p>'}
+        <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.effectiveTarget}kcal` : "未設定"}</span></div>
+        ${targets ? meterHtml(todayCal, targets.effectiveTarget, "var(--teal)") : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力すると計算されます</p>'}
+        ${targets && targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">TDEE ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
       </div>
     </div>
 
@@ -872,26 +912,16 @@ function mealsHtml() {
   const todayProtein = todayMeals.reduce((s,m) => s + (m.protein||0), 0);
   const todayFat = todayMeals.reduce((s,m) => s + (m.fat||0), 0);
   const todayCarb = todayMeals.reduce((s,m) => s + (m.carb||0), 0);
-  const targets = getTargets();
-  const sortedDesc = [...mealEntries].sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt);
+  const targets = getEffectiveCalorieTarget(today);
   const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
-  const list = sortedDesc.slice(0,8).map(m => `
-    <div class="entry-row">
-      <div class="badge" style="background:var(--teal-soft);font-size:13px;">${m.mealType[0]}</div>
-      <div style="flex:1;">
-        <div>${esc(m.text)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}</div>
-        ${(m.protein||m.fat||m.carb) ? `<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>` : ""}
-      </div>
-      <button class="del-btn" data-action="edit-meal" data-id="${m.id}">✏️</button>
-      <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
-    </div>`).join("");
 
   return `
     <div class="card">
       <p class="section-title">🍽️ 今日の食事</p>
       ${targets ? `
-        <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${todayCal}</span><span class="muted">目標 ${targets.targetCalories} kcal</span></div>
-        ${meterHtml(todayCal, targets.targetCalories, "var(--teal)")}
+        <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${todayCal}</span><span class="muted">目標 ${targets.effectiveTarget} kcal</span></div>
+        ${meterHtml(todayCal, targets.effectiveTarget, "var(--teal)")}
+        ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">TDEE ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
         <div class="row" style="margin-top:12px;">
           <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
           <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
@@ -924,8 +954,45 @@ function mealsHtml() {
         </div>
       </div>
       <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
-      ${list || '<p class="muted" style="margin-top:10px;">まだ記録がありません。</p>'}
+    </div>
+
+    <div class="card">
+      <p class="section-title">📖 食事の履歴</p>
+      ${mealHistoryHtml()}
     </div>`;
+}
+// 食事を日付ごとにグループ化して新しい順に表示する。「今日の食事」カードは
+// 今日の分だけをまとめて表示するのに対し、こちらは過去に記録した食事も日付付きで
+// 探せるようにするための一覧(直近14日分まで)。
+function mealHistoryHtml() {
+  if (mealEntries.length === 0) return '<p class="muted" style="font-size:12px;margin:0;">まだ食事の記録がありません。</p>';
+  const today = localDateStr();
+  const grouped = {};
+  [...mealEntries].sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt)
+    .forEach(m => { (grouped[m.date] = grouped[m.date] || []).push(m); });
+  const dates = Object.keys(grouped).sort((a,b) => a < b ? 1 : -1).slice(0, 14);
+  return dates.map(d => {
+    const dd = new Date(d + "T00:00:00");
+    const dayTotal = grouped[d].reduce((s,m) => s + (m.calories||0), 0);
+    const items = grouped[d].map(m => `
+      <div class="entry-row">
+        <div class="badge" style="background:var(--teal-soft);font-size:13px;">${m.mealType[0]}</div>
+        <div style="flex:1;">
+          <div>${esc(m.text)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}</div>
+          ${(m.protein||m.fat||m.carb) ? `<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>` : ""}
+        </div>
+        <button class="del-btn" data-action="relog-meal" data-id="${m.id}" title="今日も記録する">🔁</button>
+        <button class="del-btn" data-action="edit-meal" data-id="${m.id}">✏️</button>
+        <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
+      </div>`).join("");
+    return `<div style="margin-bottom:14px;">
+      <div class="between" style="margin-bottom:6px;">
+        <span class="mono" style="font-weight:700;font-size:14px;">${d}${d===today?" (今日)":""} <span class="muted" style="font-weight:400;">(${WEEKDAY[dd.getDay()]})</span></span>
+        ${dayTotal ? `<span class="muted mono" style="font-size:11px;">計${dayTotal}kcal</span>` : ""}
+      </div>
+      ${items}
+    </div>`;
+  }).join("");
 }
 
 // ============ WEIGHT TAB ============
@@ -971,6 +1038,7 @@ function weightHtml() {
 
 // ============ TRAINING TAB(筋トレ・有酸素の記録 + 進捗 + 履歴) ============
 function trainingHtml() {
+  const todayHasTraining = entries.some(e => e.date === localDateStr());
   return `
     <div class="card">
       <div class="row" style="margin-bottom:14px;">
@@ -1012,6 +1080,27 @@ function trainingHtml() {
     </div>
 
     <div class="card">
+      <p class="section-title">📋 よく使う運動メニュー</p>
+      ${routineMaster.length ? routineMaster.map(r => `
+        <div class="entry-row">
+          <div class="badge" style="background:var(--coral-soft);">🏋️</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;">${esc(r.name)}</div>
+            <div class="muted" style="font-size:11px;">${r.items.length}種目をまとめて記録</div>
+          </div>
+          <button class="chip active-b" data-action="apply-routine" data-id="${r.id}">▶️ 実行</button>
+          <button class="del-btn" data-action="del-routine" data-id="${r.id}">🗑️</button>
+        </div>`).join("") : '<p class="muted" style="font-size:11.5px;margin:0 0 10px;">よく行うトレーニングの組み合わせを登録しておくと、次回からワンタップでまとめて記録できます。</p>'}
+      ${todayHasTraining ? (savingRoutine ? `
+        <div class="row" style="margin-top:8px;">
+          <input type="text" id="routine-name-input" placeholder="例: いつもの胸トレ" style="flex:1;">
+          <button class="chip active-b" data-action="save-routine-confirm">保存</button>
+          <button class="chip" data-action="save-routine-cancel">やめる</button>
+        </div>` : `<button type="button" class="chip" data-action="save-routine-start" style="margin-top:4px;">＋ 今日の内容をメニューとして保存</button>`
+      ) : '<p class="muted" style="font-size:11px;margin:4px 0 0;">今日トレーニングを記録すると、その内容をメニューとして保存できます。</p>'}
+    </div>
+
+    <div class="card">
       <p class="section-title">📈 進捗</p>
       <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
       ${weeklyBarSvg(weekBuckets(8), goals.weeklyFreq)}
@@ -1043,9 +1132,20 @@ function trainingEntryRowHtml(e) {
   return `<div class="entry-row">
     <div class="badge" style="background:${isStrength ? "var(--coral-soft)" : "var(--slate-soft)"};">${isStrength ? "🏋️" : "💨"}</div>
     <div style="flex:1;">${detail}</div>
+    <button class="del-btn" data-action="relog-training" data-id="${e.id}" title="今日も記録する">🔁</button>
     <button class="del-btn" data-action="edit-training" data-id="${e.id}">✏️</button>
     <button class="del-btn" data-action="del-training" data-id="${e.id}">🗑️</button>
   </div>`;
+}
+// dayDetailHtml/renderHistory(リスト表示)で共通して使う、食事1件分の行。
+function mealEntryRowHtml(m) {
+  return `<div class="entry-row">
+      <div class="badge" style="background:var(--teal-soft);">🍽️</div>
+      <div style="flex:1;">[${esc(m.mealType)}] ${esc(m.text)}${m.calories ? ` <span class="mono muted">(${m.calories}kcal)</span>` : ""}</div>
+      <button class="del-btn" data-action="relog-meal" data-id="${m.id}" title="今日も記録する">🔁</button>
+      <button class="del-btn" data-action="edit-meal" data-id="${m.id}">✏️</button>
+      <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
+    </div>`;
 }
 function calendarGridHtml() {
   const year = calMonth.getFullYear(), month = calMonth.getMonth();
@@ -1093,12 +1193,7 @@ function dayDetailHtml(dateStr) {
       <button class="del-btn" data-action="edit-weight" data-date="${dayWeight.date}">✏️</button>
       <button class="del-btn" data-action="del-weight" data-date="${dayWeight.date}">🗑️</button>
     </div>` : "";
-  const mealRows = dayMeals.map(m => `<div class="entry-row">
-      <div class="badge" style="background:var(--teal-soft);">🍽️</div>
-      <div style="flex:1;">[${esc(m.mealType)}] ${esc(m.text)}${m.calories ? ` <span class="mono muted">(${m.calories}kcal)</span>` : ""}</div>
-      <button class="del-btn" data-action="edit-meal" data-id="${m.id}">✏️</button>
-      <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
-    </div>`).join("");
+  const mealRows = dayMeals.map(mealEntryRowHtml).join("");
   return header + trainingRows + weightRow + mealRows;
 }
 function renderHistory() {
@@ -1114,22 +1209,35 @@ function renderHistory() {
   if (historyView === "calendar") {
     body = `${calendarGridHtml()}${dayDetailHtml(selectedCalDate)}`;
   } else {
-    const grouped = {};
-    [...entries].sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt)
-      .forEach(e => { (grouped[e.date] = grouped[e.date] || []).push(e); });
-    const dates = Object.keys(grouped);
+    // トレーニングだけでなく、体重・食事を記録した日もリストに含める
+    // (以前はトレーニング記録のある日しか出てこず、食事だけ記録した日が
+    // 「履歴」に出てこないように見える不具合があったため)。
+    const allDates = new Set([
+      ...entries.map(e => e.date),
+      ...weightEntries.map(w => w.date),
+      ...mealEntries.map(m => m.date),
+    ]);
+    const dates = [...allDates].sort((a,b) => a < b ? 1 : -1);
     if (dates.length === 0) {
       body = '<p class="muted">まだ記録がありません。今日のトレーニングを記録してみましょう。</p>';
     } else {
       body = dates.map(d => {
         const dd = new Date(d + "T00:00:00");
-        const items = grouped[d].map(trainingEntryRowHtml).join("");
+        const items = (entries.filter(e => e.date === d)).map(trainingEntryRowHtml).join("");
+        const dayWeight = weightEntries.find(w => w.date === d);
+        const weightRow = dayWeight ? `<div class="entry-row">
+            <div class="badge" style="background:var(--sand-soft);">⚖️</div>
+            <div style="flex:1;">体重 <span class="mono" style="color:var(--sand);">${dayWeight.weight}kg</span></div>
+            <button class="del-btn" data-action="edit-weight" data-date="${dayWeight.date}">✏️</button>
+            <button class="del-btn" data-action="del-weight" data-date="${dayWeight.date}">🗑️</button>
+          </div>` : "";
+        const mealRows = mealEntries.filter(m => m.date === d).map(mealEntryRowHtml).join("");
         return `<div style="margin-bottom:14px;">
           <div class="row" style="gap:6px;align-items:baseline;margin-bottom:6px;">
             <span class="mono" style="font-weight:700;font-size:14px;">${d}</span>
             <span class="muted">(${WEEKDAY[dd.getDay()]})</span>
           </div>
-          ${items}
+          ${items}${weightRow}${mealRows}
         </div>`;
       }).join("");
     }
@@ -1532,6 +1640,56 @@ function handleAddMeal() {
   saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
 }
 
+// ============ 毎日の入力を楽にするためのショートカット機能 ============
+// 履歴の各行にある「🔁」ボタン用: そのトレーニング/食事の内容をそのまま、
+// 今日の日付で新しい記録として複製する(元の記録は消えない)。
+function relogTraining(id) {
+  const src = entries.find(x => x.id === id);
+  if (!src) return;
+  entries.unshift({ ...src, id: uid(), date: localDateStr(), createdAt: Date.now() });
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+function relogMeal(id) {
+  const src = mealEntries.find(x => x.id === id);
+  if (!src) return;
+  mealEntries.unshift({ ...src, id: uid(), date: localDateStr(), createdAt: Date.now() });
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+// 「今日」タブ用: 昨日記録したトレーニング・食事をまとめて今日にコピーする。
+function yesterdayDateStr() { return localDateStr(new Date(Date.now() - 86400000)); }
+function yesterdayHasRecords() {
+  const y = yesterdayDateStr();
+  return entries.some(e => e.date === y) || mealEntries.some(m => m.date === y);
+}
+function copyYesterdayToToday() {
+  const y = yesterdayDateStr(), today = localDateStr();
+  entries.filter(e => e.date === y).forEach(e => entries.unshift({ ...e, id: uid(), date: today, createdAt: Date.now() }));
+  mealEntries.filter(m => m.date === y).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+// 「よく使う運動メニュー」: 今日すでに記録した筋トレ・有酸素の内容を、名前を付けて
+// テンプレートとして保存する。次回はワンタップでまとめて記録できる。
+function saveTodayAsRoutine(name) {
+  const today = localDateStr();
+  const todays = entries.filter(e => e.date === today);
+  if (!todays.length || !name) return;
+  const items = todays.map(e => e.type === "strength"
+    ? { type:"strength", part:e.part, exercise:e.exercise||"", weight:e.weight, reps:e.reps }
+    : { type:"cardio", exercise:e.exercise, minutes:e.minutes });
+  routineMaster.push({ id: uid(), name, items });
+  saveState();
+}
+function applyRoutine(routineId) {
+  const r = routineMaster.find(x => x.id === routineId);
+  if (!r) return;
+  const today = localDateStr();
+  r.items.forEach(it => {
+    if (it.type === "strength") entries.unshift({ id: uid(), type:"strength", date: today, part: it.part, exercise: it.exercise, weight: it.weight, reps: it.reps, createdAt: Date.now() });
+    else entries.unshift({ id: uid(), type:"cardio", date: today, exercise: it.exercise, minutes: it.minutes, createdAt: Date.now() });
+  });
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+
 // ============ EVENTS (bound once; #app content is replaced via innerHTML, so delegation is required) ============
 document.getElementById("app").addEventListener("click", (e) => {
   const tabBtn = e.target.closest("[data-tab]");
@@ -1623,6 +1781,21 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "del-training") { entries = entries.filter(x => x.id !== t.dataset.id); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
   else if (action === "del-weight") { weightEntries = weightEntries.filter(w => w.date !== t.dataset.date); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
   else if (action === "del-meal") { mealEntries = mealEntries.filter(m => m.id !== t.dataset.id); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
+  else if (action === "relog-training") { relogTraining(t.dataset.id); }
+  else if (action === "relog-meal") { relogMeal(t.dataset.id); }
+  else if (action === "copy-yesterday") { copyYesterdayToToday(); }
+  else if (action === "save-routine-start") { savingRoutine = true; renderTabContent(); }
+  else if (action === "save-routine-cancel") { savingRoutine = false; renderTabContent(); }
+  else if (action === "save-routine-confirm") {
+    const nameInp = document.getElementById("routine-name-input");
+    const name = nameInp ? nameInp.value.trim() : "";
+    if (!name) return;
+    saveTodayAsRoutine(name);
+    savingRoutine = false;
+    renderTabContent();
+  }
+  else if (action === "apply-routine") { applyRoutine(t.dataset.id); }
+  else if (action === "del-routine") { routineMaster = routineMaster.filter(r => r.id !== t.dataset.id); saveState(); renderTabContent(); }
   else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
@@ -1679,6 +1852,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     profile = null; moodByDate = {}; confirmReset = false; onboardStep = 0;
     exerciseMaster = []; mealMaster = []; masterExercisePart = "胸";
     lastStrengthByExercise = {}; lastCardioMinutes = {}; mealDetailOpen = false;
+    routineMaster = []; savingRoutine = false;
     seedExerciseMasterIfEmpty();
     onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
     saveState(); renderApp();
