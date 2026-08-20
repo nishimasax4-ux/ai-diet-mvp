@@ -9,9 +9,12 @@
 <title>TRAINING LOG + AI</title>
 <style>
   :root {
-    --paper:#F6F4EE; --card:#FFFFFF; --ink:#2B2B2E; --ink-faint:#726F65;
-    --line:#E3DFD2; --teal:#2F8F7A; --teal-soft:#2F8F7A22; --coral:#E8927C; --coral-soft:#E8927C22;
-    --sand:#C9A24B; --sand-soft:#C9A24B22; --slate:#5B6B73; --slate-soft:#5B6B7322;
+    /* 青系の明るいテーマ。変数名(--teal/--coral/--sand/--slate)は既存コードとの
+       互換のため据え置き、値だけ青系に統一しています。--coral は削除・警告など
+       「注意を引く」用途の意味づけを保つため、あえて暖色のまま残しています。 */
+    --paper:#EFF6FD; --card:#FFFFFF; --ink:#1C2B3A; --ink-faint:#5B7186;
+    --line:#D7E5F2; --teal:#2078C7; --teal-soft:#2078C722; --coral:#E8927C; --coral-soft:#E8927C22;
+    --sand:#4CB8D9; --sand-soft:#4CB8D922; --slate:#3E63C4; --slate-soft:#3E63C422;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
@@ -56,7 +59,7 @@
   .tab-item .ic { display: block; font-size: 19px; margin-bottom: 2px; }
   .tab-item.active { color: var(--teal); }
   .hidden { display: none !important; }
-  .banner { background: var(--slate-soft); border: 1px solid #5B6B7333; border-radius: 10px; padding: 10px 12px; font-size: 11px; color: var(--slate); line-height: 1.5; margin-bottom: 16px; }
+  .banner { background: var(--slate-soft); border: 1px solid #3E63C433; border-radius: 10px; padding: 10px 12px; font-size: 11px; color: var(--slate); line-height: 1.5; margin-bottom: 16px; }
   .onboard-step { display: none; }
   .onboard-step.active { display: block; }
   .progress-dots { display: flex; gap: 5px; justify-content: center; margin: 14px 0 4px; }
@@ -947,11 +950,21 @@ function weightHtml() {
         <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
       </div>
       ${lineChartSvg(points, "var(--slate)", goals.weight)}
-      <div class="row" style="margin-top:10px;">
-        <input type="date" id="weight-date-input" value="${localDateStr()}">
-        <input type="number" step="0.1" id="weight-value-input" placeholder="kg" class="mono" value="${latest ? latest.weight : ""}">
-        <button class="btn-icon" style="background:var(--slate);" data-action="add-weight">＋</button>
+    </div>
+
+    <div class="card">
+      <p class="section-title">体重を記録</p>
+      <div class="row" style="margin-bottom:10px;">
+        <div style="flex:1;">
+          <label class="label">日付</label>
+          <input type="date" id="weight-date-input" value="${localDateStr()}">
+        </div>
+        <div style="flex:1;">
+          <label class="label">体重 (kg)</label>
+          <input type="number" step="0.1" id="weight-value-input" placeholder="例: 65.0" class="mono" value="${latest ? latest.weight : ""}">
+        </div>
       </div>
+      <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
       ${list}
     </div>`;
 }
