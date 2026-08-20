@@ -102,7 +102,7 @@ const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","そ�
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
 const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "その他":5 };
 const STRENGTH_KCAL_PER_SET = 30; // 筋トレ1セットあたりの消費カロリー概算(目安)
-const WEIGHTS = [15,20,25,30,35,40,45,50];
+const REP_QUICK_OPTIONS = [5,8,10,12,15,20]; // 回数のワンタップ候補
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
 // 内蔵の食品カロリー概算表(外部APIには接続しません)。
 // 数値はすべて一般的な目安量あたりのおおよその値です(kcal, protein/fat/carbはg)。
@@ -179,21 +179,29 @@ const TIME_LEVELS = ["5-10分","10-15分","15-30分","30分以上","1時間"];
 const ACTIVITY_FACTOR = { "ほぼなし":1.2, "週1-2回":1.375, "週3-4回":1.55, "ほぼ毎日":1.725 };
 const TIME_TO_LEVEL = { "5-10分":"low", "10-15分":"medium", "15-30分":"high", "30分以上":"high", "1時間":"high" };
 const DEFAULT_FREQ = { "ほぼなし":2, "週1-2回":3, "週3-4回":4, "ほぼ毎日":5 };
+// おすすめ運動プール。type ごとに内容が異なります:
+//   cardio    … 有酸素運動をそのまま提案(name, min)
+//   strength  … 部位を指定し、実際の種目名はその日の「種目マスタ」から選ばれます(gym:trueはジムでの運動である旨を表示)
+//   combo     … 有酸素+筋トレの組み合わせ提案(ウォーキング+部位別トレーニングなど)
 const WORKOUTS = {
   low: [
-    { name:"ストレッチ&深呼吸", min:5, intensity:"ゆるめ" },
-    { name:"その場足踏み", min:8, intensity:"ゆるめ" },
-    { name:"軽い散歩", min:10, intensity:"ゆるめ" },
+    { type:"cardio", name:"ストレッチ&深呼吸", min:5, intensity:"ゆるめ" },
+    { type:"cardio", name:"その場足踏み", min:8, intensity:"ゆるめ" },
+    { type:"cardio", name:"軽い散歩", min:10, intensity:"ゆるめ" },
   ],
   medium: [
-    { name:"自重スクワット 3セット", min:10, intensity:"ふつう" },
-    { name:"ウォーキング", min:15, intensity:"ふつう" },
-    { name:"プランク&腕立て", min:12, intensity:"ふつう" },
+    { type:"cardio", name:"ウォーキング", min:15, intensity:"ふつう" },
+    { type:"strength", part:"脚", sets:3, reps:12, intensity:"ふつう" },
+    { type:"combo", cardioName:"ウォーキング", cardioMin:10, part:"腹筋", sets:2, reps:15, intensity:"ふつう" },
+    { type:"strength", part:"背中", sets:3, reps:12, intensity:"ふつう", gym:true },
+    { type:"cardio", name:"バイク", min:15, intensity:"ふつう" },
   ],
   high: [
-    { name:"HIIT風サーキット", min:15, intensity:"しっかりめ" },
-    { name:"ジョギング", min:20, intensity:"しっかりめ" },
-    { name:"自重トレーニング フルセット", min:20, intensity:"しっかりめ" },
+    { type:"cardio", name:"ジョギング", min:20, intensity:"しっかりめ" },
+    { type:"strength", part:"胸", sets:4, reps:10, intensity:"しっかりめ", gym:true },
+    { type:"combo", cardioName:"ウォーキング", cardioMin:15, part:"脚", sets:3, reps:15, intensity:"しっかりめ" },
+    { type:"strength", part:"肩", sets:3, reps:12, intensity:"しっかりめ", gym:true },
+    { type:"combo", cardioName:"ウォーキング", cardioMin:20, part:"腕", sets:3, reps:12, intensity:"しっかりめ" },
   ],
 };
 
@@ -208,6 +216,8 @@ let syncStatus = "idle";
 let lastSyncedAt = null;
 let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
 let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
+let lastStrengthByExercise = {}; // "種目名"(または"(部位)") -> {reps, weight} の直近の入力値。次回そのままの値を提案する
+let lastCardioMinutes = {}; // 有酸素の種目名 -> 直近の分数
 
 let activeTab = "today"; // today | meals | weight | training | settings
 let trainingSubTab = "strength"; // strength | cardio
@@ -221,6 +231,10 @@ let selectedCalDate = null;
 let progressExercise = null;
 let editing = null;
 let confirmReset = false;
+let mealDetailOpen = false; // 食事記録フォームの「詳細(カロリー・栄養素)」が開いているか
+// 設定タブの各セクションの開閉状態。よく使う同期・目標は常時表示、それ以外は
+// デフォルトで畳んでおき、スクロール量を減らす。
+let settingsOpenSections = { profile:false, master:false, data:false };
 
 let onboardStep = 0;
 let onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
@@ -310,6 +324,17 @@ function applyFoodSuggestion(target, idx) {
     editing.draftFat = f.fat || "";
     editing.draftCarb = f.carb || "";
   }
+  if (target === "meal") openMealDetail();
+}
+// 食事タブの「詳細を入力」セクションを開く(プリセット・カロリー候補をタップした
+// ときに、入力された値がすぐ見えるように)。フォーム全体は再描画しないので、
+// 食事名などタイプ中の内容は失われない。
+function openMealDetail() {
+  mealDetailOpen = true;
+  const detailEl = document.getElementById("meal-detail-fields");
+  if (detailEl) detailEl.classList.remove("hidden");
+  const toggleBtn = document.getElementById("meal-detail-toggle");
+  if (toggleBtn) toggleBtn.textContent = "▾ 詳細を入力(カロリー・栄養素・任意)";
 }
 function esc(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function dayOfYear(d) { const start = new Date(d.getFullYear(), 0, 0); return Math.floor((d - start) / 86400000); }
@@ -327,6 +352,8 @@ function loadState() {
       moodByDate = data.moodByDate || {};
       exerciseMaster = data.exerciseMaster || [];
       mealMaster = data.mealMaster || [];
+      lastStrengthByExercise = data.lastStrengthByExercise || {};
+      lastCardioMinutes = data.lastCardioMinutes || {};
     }
   } catch (e) { console.error("load error", e); }
   // First run (or upgrading from a version without a master list): seed the
@@ -343,7 +370,7 @@ function seedExerciseMasterIfEmpty() {
 }
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes }));
   } catch (e) { console.error("save error", e); }
 }
 
@@ -424,13 +451,39 @@ function getTargets() {
   if (!latestWeight) return null;
   return computeTargets(profile, latestWeight.weight, goals.weight);
 }
+// 部位に対して実際に提案する種目名を選ぶ。ユーザーが「設定」タブの種目マスタに
+// 登録した種目(ジムのマシン名など)があればそちらを優先し、未登録ならデフォルトの
+// おすすめ種目から選ぶ(その日の日付で決定的にローテーション)。
+function pickExerciseForPart(part) {
+  const registered = exerciseNamesForPart(part);
+  const pool = registered.length ? registered : (EXERCISES_BY_PART[part] || []);
+  if (!pool.length) return "";
+  return pool[dayOfYear(new Date()) % pool.length];
+}
+function resolveWorkoutSuggestion(w) {
+  if (w.type === "strength") {
+    const exercise = pickExerciseForPart(w.part);
+    const gymPrefix = w.gym ? "ジムで" : "";
+    const displayName = exercise ? `${gymPrefix}${w.part}: ${exercise}` : `${gymPrefix}${w.part}トレーニング`;
+    return { ...w, exercise, displayName, displayDetail: `${w.sets}セット×${w.reps}回` };
+  }
+  if (w.type === "combo") {
+    const exercise = pickExerciseForPart(w.part);
+    const strengthLabel = exercise ? `${w.part}(${exercise})` : `${w.part}トレーニング`;
+    const displayName = `${w.cardioName}${w.cardioMin}分 + ${strengthLabel}`;
+    return { ...w, exercise, displayName, displayDetail: `${w.sets}セット×${w.reps}回` };
+  }
+  // cardio
+  return { ...w, exercise: "", displayName: w.name, displayDetail: `${w.min}分` };
+}
 function pickWorkout(mood) {
   const baseLevel = TIME_TO_LEVEL[(profile && profile.timeAvail) || "10-15分"] || "medium";
   let level = baseLevel;
   if (mood === "tired") level = "low";
   else if (mood === "energetic") level = baseLevel === "low" ? "medium" : "high";
   const pool = WORKOUTS[level];
-  return pool[dayOfYear(new Date()) % pool.length];
+  const w = pool[dayOfYear(new Date()) % pool.length];
+  return resolveWorkoutSuggestion(w);
 }
 function generateDailyAdvice() {
   const today = localDateStr();
@@ -769,9 +822,9 @@ function todayHtml() {
       <div class="row" style="margin-bottom:10px;">${moodBtns}</div>
       <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${esc(generateDailyAdvice())}</p>
       <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
-        <div>
+        <div style="flex:1;min-width:0;">
           <span class="muted">今日のおすすめ</span>
-          <p style="margin:2px 0 0;font-weight:700;font-size:13.5px;">${workout.name} <span class="mono muted" style="font-weight:400;">(${workout.min}分・${workout.intensity})</span></p>
+          <p style="margin:2px 0 0;font-weight:700;font-size:13.5px;line-height:1.4;">${esc(workout.displayName)} <span class="mono muted" style="font-weight:400;">(${esc(workout.displayDetail)}・${esc(workout.intensity)})</span></p>
         </div>
         <button class="chip active-b" data-action="quicklog-workout" style="flex:0 0 auto;">記録する</button>
       </div>
@@ -855,14 +908,17 @@ function mealsHtml() {
       </div>` : ""}
       <input type="text" id="meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
       <div class="wrap" id="meal-name-suggestions" style="margin-bottom:8px;"></div>
-      <div class="row" style="margin-bottom:8px;">
-        <input type="date" id="meal-date-input" value="${today}" class="mono" style="width:auto;flex:0 0 auto;">
-        <input type="number" id="meal-cal-input" placeholder="kcal(任意)" class="mono">
-      </div>
-      <div class="row" style="margin-bottom:10px;">
-        <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
-        <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
-        <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
+      <input type="date" id="meal-date-input" value="${today}" class="mono" style="margin-bottom:8px;">
+      <button type="button" class="chip" data-action="toggle-meal-detail" id="meal-detail-toggle" style="margin-bottom:8px;">${mealDetailOpen ? "▾" : "▸"} 詳細を入力(カロリー・栄養素・任意)</button>
+      <div id="meal-detail-fields" class="${mealDetailOpen ? "" : "hidden"}">
+        <div class="row" style="margin-bottom:8px;">
+          <input type="number" id="meal-cal-input" placeholder="kcal(任意)" class="mono">
+        </div>
+        <div class="row" style="margin-bottom:10px;">
+          <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
+          <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
+          <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
+        </div>
       </div>
       <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
       ${list || '<p class="muted" style="margin-top:10px;">まだ記録がありません。</p>'}
@@ -893,7 +949,7 @@ function weightHtml() {
       ${lineChartSvg(points, "var(--slate)", goals.weight)}
       <div class="row" style="margin-top:10px;">
         <input type="date" id="weight-date-input" value="${localDateStr()}">
-        <input type="number" step="0.1" id="weight-value-input" placeholder="kg" class="mono">
+        <input type="number" step="0.1" id="weight-value-input" placeholder="kg" class="mono" value="${latest ? latest.weight : ""}">
         <button class="btn-icon" style="background:var(--slate);" data-action="add-weight">＋</button>
       </div>
       ${list}
@@ -916,10 +972,21 @@ function trainingHtml() {
         <label class="label">種目(任意)</label>
         <div class="wrap" id="exercise-buttons" style="margin-bottom:8px;"></div>
         <input type="text" id="exercise-input" placeholder="例: ベンチプレス(空欄可・自由入力もOK)" style="margin-bottom:10px;">
-        <div class="row" style="margin-bottom:10px;">
-          <div style="flex:1;"><label class="label">回数</label><input type="number" id="reps-input" placeholder="回" class="mono"></div>
-          <div style="flex:1;"><label class="label">負荷 (kg)</label><select id="weight-select" class="mono"></select></div>
+        <div class="row" style="margin-bottom:6px;align-items:flex-start;">
+          <div style="flex:1;">
+            <label class="label">回数</label>
+            <input type="number" id="reps-input" placeholder="回" class="mono">
+          </div>
+          <div style="flex:1;">
+            <label class="label">負荷 (kg)</label>
+            <div class="row" style="gap:4px;">
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="weight-step" data-val="-2.5">－</button>
+              <input type="number" step="0.5" id="weight-input" class="mono" style="text-align:center;padding:9px 4px;">
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="weight-step" data-val="2.5">＋</button>
+            </div>
+          </div>
         </div>
+        <div class="wrap" id="reps-quick-buttons" style="margin-bottom:10px;"></div>
       </div>
       <div id="cardio-fields" class="${trainingSubTab==="cardio"?"":"hidden"}">
         <label class="label">種目</label>
@@ -1080,11 +1147,40 @@ function renderTrainingFormOptions() {
   document.getElementById("cardio-buttons").innerHTML = CARDIO_OPTIONS.map(c =>
     `<button class="chip ${selectedCardio===c?"active-b":""}" data-action="select-cardio" data-val="${c}">${c}</button>`).join("");
   document.getElementById("cardio-custom-input").classList.toggle("hidden", selectedCardio !== "その他");
-  const sel = document.getElementById("weight-select");
-  if (sel && !sel.dataset.built) {
-    sel.innerHTML = WEIGHTS.map(w => `<option value="${w}">${w} kg</option>`).join("");
-    sel.value = "20";
-    sel.dataset.built = "1";
+
+  // 負荷(kg): 初回は20kgを既定値にしつつ、部位・種目に対して前回入力した
+  // 回数・負荷があればそれを優先して提案する(reps-inputが空のときだけ上書きし、
+  // 入力中の値は消さない)。
+  const weightInput = document.getElementById("weight-input");
+  const repsInput = document.getElementById("reps-input");
+  if (weightInput && !weightInput.dataset.built) {
+    weightInput.value = 20;
+    weightInput.dataset.built = "1";
+  }
+  if (repsInput && (repsInput.value === "" || repsInput.dataset.autofilled === "1")) {
+    const key = currentExercise || `(${selectedPart})`;
+    const remembered = lastStrengthByExercise[key];
+    if (remembered) {
+      repsInput.value = remembered.reps;
+      repsInput.dataset.autofilled = "1";
+      if (weightInput) weightInput.value = remembered.weight;
+    } else if (repsInput.dataset.autofilled === "1") {
+      // この部位・種目には過去の記録がない。前の候補が残らないようクリアする。
+      repsInput.value = "";
+      delete repsInput.dataset.autofilled;
+    }
+  }
+  const repsQuickEl = document.getElementById("reps-quick-buttons");
+  if (repsQuickEl) {
+    const currentReps = repsInput ? repsInput.value : "";
+    repsQuickEl.innerHTML = REP_QUICK_OPTIONS.map(r =>
+      `<button type="button" class="chip ${String(r)===String(currentReps)?"active-a":""}" data-action="select-reps" data-val="${r}">${r}回</button>`).join("");
+  }
+
+  // 時間(分): 有酸素の種目ごとに前回の分数を覚えておき、未入力なら提案する。
+  const minutesInput = document.getElementById("minutes-input");
+  if (minutesInput && minutesInput.value === "" && lastCardioMinutes[selectedCardio]) {
+    minutesInput.value = lastCardioMinutes[selectedCardio];
   }
 }
 function renderProgressCardExerciseSelect() {
@@ -1126,61 +1222,81 @@ function settingsHtml() {
     </div>
 
     <div class="card">
-      <p class="section-title">🤖 AIアドバイス用プロフィール</p>
-      <div class="row" style="margin-bottom:8px;">
-        <input type="number" id="profile-age-input" placeholder="年齢" class="mono" value="${esc(profile.age)}">
-        <input type="number" id="profile-height-input" placeholder="身長cm" class="mono" value="${esc(profile.height)}">
+      ${settingsSectionHeader("profile", "🤖 AIアドバイス用プロフィール")}
+      <div id="settings-section-profile" class="${settingsOpenSections.profile ? "" : "hidden"}" style="margin-top:10px;">
+        <div class="row" style="margin-bottom:8px;">
+          <div style="flex:1;">
+            <label class="label">年齢</label>
+            <input type="number" id="profile-age-input" placeholder="例: 32" class="mono" value="${esc(profile.age)}">
+          </div>
+          <div style="flex:1;">
+            <label class="label">身長 (cm)</label>
+            <input type="number" id="profile-height-input" placeholder="例: 170" class="mono" value="${esc(profile.height)}">
+          </div>
+        </div>
+        <div class="wrap" style="margin-bottom:8px;">
+          ${["男性","女性"].map(g => `<button class="chip ${profile.gender===g?"active":""}" data-action="set-gender" data-val="${g}">${g}</button>`).join("")}
+        </div>
+        <p class="muted" style="margin:0 0 4px;">運動習慣</p>
+        <div class="wrap" style="margin-bottom:8px;">
+          ${ACTIVITY_LEVELS.map(a => `<button class="chip ${profile.activity===a?"active":""}" data-action="set-activity" data-val="${a}">${a}</button>`).join("")}
+        </div>
+        <p class="muted" style="margin:0 0 4px;">1日に使える時間</p>
+        <div class="wrap" style="margin-bottom:10px;">
+          ${TIME_LEVELS.map(tl => `<button class="chip ${profile.timeAvail===tl?"active":""}" data-action="set-timeavail" data-val="${tl}">${tl}</button>`).join("")}
+        </div>
+        ${targets
+          ? `<p style="font-size:12.5px;line-height:1.8;margin:0;">推定BMR <span class="mono">${targets.bmr}</span>kcal / TDEE <span class="mono">${targets.tdee}</span>kcal<br>1日の目標: <span class="mono">${targets.targetCalories}</span>kcal(P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb})</p>`
+          : '<p class="muted" style="font-size:11px;margin:0;">年齢・身長と、体重タブでの体重記録がそろうと、AIが1日の目標カロリー・栄養バランスを計算します。</p>'}
       </div>
-      <div class="wrap" style="margin-bottom:8px;">
-        ${["男性","女性"].map(g => `<button class="chip ${profile.gender===g?"active":""}" data-action="set-gender" data-val="${g}">${g}</button>`).join("")}
-      </div>
-      <p class="muted" style="margin:0 0 4px;">運動習慣</p>
-      <div class="wrap" style="margin-bottom:8px;">
-        ${ACTIVITY_LEVELS.map(a => `<button class="chip ${profile.activity===a?"active":""}" data-action="set-activity" data-val="${a}">${a}</button>`).join("")}
-      </div>
-      <p class="muted" style="margin:0 0 4px;">1日に使える時間</p>
-      <div class="wrap" style="margin-bottom:10px;">
-        ${TIME_LEVELS.map(tl => `<button class="chip ${profile.timeAvail===tl?"active":""}" data-action="set-timeavail" data-val="${tl}">${tl}</button>`).join("")}
-      </div>
-      ${targets
-        ? `<p style="font-size:12.5px;line-height:1.8;margin:0;">推定BMR <span class="mono">${targets.bmr}</span>kcal / TDEE <span class="mono">${targets.tdee}</span>kcal<br>1日の目標: <span class="mono">${targets.targetCalories}</span>kcal(P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb})</p>`
-        : '<p class="muted" style="font-size:11px;margin:0;">年齢・身長と、体重タブでの体重記録がそろうと、AIが1日の目標カロリー・栄養バランスを計算します。</p>'}
     </div>
 
     <div class="card">
-      <p class="section-title">🗂️ マスタ管理</p>
-      <p class="muted" style="margin:0 0 12px;">よく使う筋トレ種目・食事をあらかじめ登録しておくと、記録時にワンタップで選べます。</p>
+      ${settingsSectionHeader("master", "🗂️ マスタ管理")}
+      <div id="settings-section-master" class="${settingsOpenSections.master ? "" : "hidden"}" style="margin-top:10px;">
+        <p class="muted" style="margin:0 0 12px;">よく使う筋トレ種目・食事をあらかじめ登録しておくと、記録時にワンタップで選べます。</p>
 
-      <p class="label" style="margin-bottom:6px;">筋トレ種目(部位ごと)</p>
-      <div class="wrap" id="master-ex-part-buttons" style="margin-bottom:8px;"></div>
-      <div id="master-ex-list" style="margin-bottom:8px;"></div>
-      <div class="row" style="margin-bottom:18px;">
-        <input type="text" id="master-ex-name-input" placeholder="種目名を追加(例: レッグプレスマシン)">
-        <button class="btn-icon" style="background:var(--coral);flex:0 0 auto;" data-action="add-exercise-master">＋</button>
-      </div>
+        <p class="label" style="margin-bottom:6px;">筋トレ種目(部位ごと)</p>
+        <div class="wrap" id="master-ex-part-buttons" style="margin-bottom:8px;"></div>
+        <div id="master-ex-list" style="margin-bottom:8px;"></div>
+        <div class="row" style="margin-bottom:18px;">
+          <input type="text" id="master-ex-name-input" placeholder="種目名を追加(例: レッグプレスマシン)">
+          <button class="btn-icon" style="background:var(--coral);flex:0 0 auto;" data-action="add-exercise-master">＋</button>
+        </div>
 
-      <p class="label" style="margin-bottom:6px;">よく食べるもの</p>
-      <div id="master-meal-list" style="margin-bottom:8px;"></div>
-      <input type="text" id="master-meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
-      <div class="wrap" id="master-meal-name-suggestions" style="margin-bottom:8px;"></div>
-      <div class="row" style="margin-bottom:8px;">
-        <input type="number" id="master-meal-cal-input" placeholder="kcal(任意)" class="mono">
+        <p class="label" style="margin-bottom:6px;">よく食べるもの</p>
+        <div id="master-meal-list" style="margin-bottom:8px;"></div>
+        <input type="text" id="master-meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
+        <div class="wrap" id="master-meal-name-suggestions" style="margin-bottom:8px;"></div>
+        <div class="row" style="margin-bottom:8px;">
+          <input type="number" id="master-meal-cal-input" placeholder="kcal(任意)" class="mono">
+        </div>
+        <div class="row" style="margin-bottom:10px;">
+          <input type="number" id="master-meal-protein-input" placeholder="P(g・任意)" class="mono">
+          <input type="number" id="master-meal-fat-input" placeholder="F(g・任意)" class="mono">
+          <input type="number" id="master-meal-carb-input" placeholder="C(g・任意)" class="mono">
+        </div>
+        <button class="chip" data-action="add-meal-master">＋ 食事を登録</button>
       </div>
-      <div class="row" style="margin-bottom:10px;">
-        <input type="number" id="master-meal-protein-input" placeholder="P(g・任意)" class="mono">
-        <input type="number" id="master-meal-fat-input" placeholder="F(g・任意)" class="mono">
-        <input type="number" id="master-meal-carb-input" placeholder="C(g・任意)" class="mono">
-      </div>
-      <button class="chip" data-action="add-meal-master">＋ 食事を登録</button>
     </div>
 
     <div class="card">
-      <p class="section-title">データ</p>
-      ${confirmReset
-        ? `<p class="muted" style="margin-bottom:8px;">本当にすべてのデータを削除しますか?</p>
-           <div class="row"><button class="chip" data-action="reset-yes" style="color:var(--coral);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`
-        : `<button class="chip" data-action="reset-show">すべてのデータを削除</button>`}
+      ${settingsSectionHeader("data", "データ")}
+      <div id="settings-section-data" class="${settingsOpenSections.data ? "" : "hidden"}" style="margin-top:10px;">
+        ${confirmReset
+          ? `<p class="muted" style="margin-bottom:8px;">本当にすべてのデータを削除しますか?</p>
+             <div class="row"><button class="chip" data-action="reset-yes" style="color:var(--coral);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`
+          : `<button class="chip" data-action="reset-show">すべてのデータを削除</button>`}
+      </div>
     </div>`;
+}
+// 設定タブの折りたたみ見出し。タップで対応するidの中身を表示/非表示にする
+// (フォーム全体を再描画しないので、他セクションの入力中の値は消えない)。
+function settingsSectionHeader(key, title) {
+  return `<button type="button" class="between" style="width:100%;background:none;border:none;padding:0;text-align:left;" data-action="toggle-settings-section" data-val="${key}">
+    <p class="section-title" style="margin:0;">${title}</p>
+    <span class="muted" id="settings-chevron-${key}">${settingsOpenSections[key] ? "▾" : "▸"}</span>
+  </button>`;
 }
 
 // Targeted DOM patches for the master-data editor, mirroring the Training-tab
@@ -1355,23 +1471,26 @@ function handleAddTraining() {
   if (trainingSubTab === "strength") {
     const reps = document.getElementById("reps-input").value;
     if (!reps) return;
+    const exercise = document.getElementById("exercise-input").value.trim();
+    const weight = Number(document.getElementById("weight-input").value) || 0;
     entries.unshift({
       id: uid(), date, type: "strength", createdAt: Date.now(),
-      part: selectedPart,
-      exercise: document.getElementById("exercise-input").value.trim(),
-      reps: Number(reps),
-      weight: Number(document.getElementById("weight-select").value),
+      part: selectedPart, exercise, reps: Number(reps), weight,
     });
+    // 次回この種目(または部位)を選んだときに、今回の回数・負荷を提案できるよう覚えておく。
+    lastStrengthByExercise[exercise || `(${selectedPart})`] = { reps: Number(reps), weight };
   } else {
     const minutes = document.getElementById("minutes-input").value;
     if (!minutes) return;
     const customVal = document.getElementById("cardio-custom-input").value.trim();
     if (selectedCardio === "その他" && !customVal) return;
+    const exercise = selectedCardio === "その他" ? customVal : selectedCardio;
     entries.unshift({
       id: uid(), date, type: "cardio", createdAt: Date.now(),
-      exercise: selectedCardio === "その他" ? customVal : selectedCardio,
-      minutes: Number(minutes),
+      exercise, minutes: Number(minutes),
     });
+    // 次回同じ種目を選んだときに、今回の時間を提案できるよう覚えておく。
+    lastCardioMinutes[selectedCardio === "その他" ? customVal : selectedCardio] = Number(minutes);
   }
   selectedCardio = "ランニング";
   saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
@@ -1414,19 +1533,47 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "set-mood") { moodByDate[today] = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "quicklog-workout") {
     const w = pickWorkout(moodByDate[today]);
-    trainingSubTab = "cardio";
-    switchTab("training");
-    selectedCardio = "その他";
-    renderTrainingFormOptions();
-    const customInput = document.getElementById("cardio-custom-input");
-    customInput.value = w.name;
-    document.getElementById("minutes-input").value = w.min;
-    customInput.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (w.type === "strength") {
+      trainingSubTab = "strength";
+      switchTab("training");
+      selectedPart = w.part;
+      renderTrainingFormOptions();
+      if (w.exercise) document.getElementById("exercise-input").value = w.exercise;
+      const repsInput = document.getElementById("reps-input");
+      repsInput.value = w.reps;
+      repsInput.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      // cardio, and the cardio portion of a combo suggestion (the strength
+      // half of a combo is shown in the recommendation text; log it separately
+      // from the training tab's 筋トレ sub-tab).
+      trainingSubTab = "cardio";
+      switchTab("training");
+      selectedCardio = "その他";
+      renderTrainingFormOptions();
+      const customInput = document.getElementById("cardio-custom-input");
+      customInput.value = w.type === "combo" ? w.cardioName : w.name;
+      document.getElementById("minutes-input").value = w.type === "combo" ? w.cardioMin : w.min;
+      customInput.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
   }
   else if (action === "select-training-type") { trainingSubTab = t.dataset.val; renderTabContent(); }
   else if (action === "select-part") { selectedPart = t.dataset.val; renderTrainingFormOptions(); }
   else if (action === "select-exercise") { document.getElementById("exercise-input").value = t.dataset.val; renderTrainingFormOptions(); }
   else if (action === "select-cardio") { selectedCardio = t.dataset.val; renderTrainingFormOptions(); }
+  else if (action === "weight-step") {
+    const inp = document.getElementById("weight-input");
+    if (!inp) return;
+    const delta = Number(t.dataset.val);
+    const v = Math.max(0, Math.round(((Number(inp.value) || 0) + delta) * 2) / 2);
+    inp.value = v;
+  }
+  else if (action === "select-reps") {
+    const repsInput = document.getElementById("reps-input");
+    if (!repsInput) return;
+    repsInput.value = t.dataset.val;
+    delete repsInput.dataset.autofilled;
+    renderTrainingFormOptions();
+  }
   else if (action === "add-training") { handleAddTraining(); }
   else if (action === "view-list") { historyView = "list"; renderHistory(); }
   else if (action === "view-calendar") { historyView = "calendar"; renderHistory(); }
@@ -1446,8 +1593,15 @@ document.getElementById("app").addEventListener("click", (e) => {
     document.getElementById("meal-fat-input").value = m.fat || "";
     document.getElementById("meal-carb-input").value = m.carb || "";
     document.getElementById("meal-name-suggestions").innerHTML = "";
+    openMealDetail();
   }
   else if (action === "apply-food-suggestion") { applyFoodSuggestion(t.dataset.target, Number(t.dataset.idx)); }
+  else if (action === "toggle-meal-detail") {
+    mealDetailOpen = !mealDetailOpen;
+    const detailEl = document.getElementById("meal-detail-fields");
+    if (detailEl) detailEl.classList.toggle("hidden", !mealDetailOpen);
+    t.textContent = (mealDetailOpen ? "▾" : "▸") + " 詳細を入力(カロリー・栄養素・任意)";
+  }
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
   else if (action === "edit-training") { openEdit("training", t.dataset.id); }
@@ -1460,6 +1614,14 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "retry-sync") { syncToSheet(); }
+  else if (action === "toggle-settings-section") {
+    const key = t.dataset.val;
+    settingsOpenSections[key] = !settingsOpenSections[key];
+    const body = document.getElementById("settings-section-" + key);
+    if (body) body.classList.toggle("hidden", !settingsOpenSections[key]);
+    const chev = document.getElementById("settings-chevron-" + key);
+    if (chev) chev.textContent = settingsOpenSections[key] ? "▾" : "▸";
+  }
   else if (action === "select-master-ex-part") { masterExercisePart = t.dataset.val; renderMasterExerciseSection(); }
   else if (action === "add-exercise-master") {
     const inp = document.getElementById("master-ex-name-input");
@@ -1503,6 +1665,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     entries = []; weightEntries = []; mealEntries = []; goals = { weight: 65, weeklyFreq: 3 };
     profile = null; moodByDate = {}; confirmReset = false; onboardStep = 0;
     exerciseMaster = []; mealMaster = []; masterExercisePart = "胸";
+    lastStrengthByExercise = {}; lastCardioMinutes = {}; mealDetailOpen = false;
     seedExerciseMasterIfEmpty();
     onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
     saveState(); renderApp();
@@ -1513,6 +1676,9 @@ document.getElementById("app").addEventListener("input", (e) => {
     renderFoodSuggestions("meal-name-suggestions", e.target.value, "meal");
   } else if (e.target.id === "master-meal-name-input") {
     renderFoodSuggestions("master-meal-name-suggestions", e.target.value, "master");
+  } else if (e.target.id === "reps-input") {
+    // ユーザーが自分で回数を書き換えたら、以後の自動提案で上書きしない。
+    delete e.target.dataset.autofilled;
   }
 });
 document.getElementById("app").addEventListener("change", (e) => {
