@@ -21,7 +21,11 @@
     margin: 0; background: var(--paper); color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
   }
-  #app { max-width: 480px; margin: 0 auto; padding: 20px 18px 96px; min-height: 100vh; }
+  /* ステータスバー(ノッチ/Dynamic Island)がタイトルに重なるのを防ぐため、
+     端末ごとの安全領域(env(safe-area-inset-top))分だけ上に余白を足す。
+     apple-mobile-web-app-status-bar-style が black-translucent のため、
+     何もしないとコンテンツがステータスバーの裏に潜り込んでしまう。 */
+  #app { max-width: 480px; margin: 0 auto; padding: calc(20px + env(safe-area-inset-top, 0px)) 18px 96px; min-height: 100vh; }
   h1 { font-size: 20px; font-weight: 800; margin: 0; }
   .mono { font-family: "SF Mono", "Courier New", monospace; }
   .muted { font-size: 12px; color: var(--ink-faint); }
@@ -89,7 +93,9 @@
 <script>
 // ============ CONFIG ============
 // Google Apps Script Webアプリの URL をここに貼り付けてください(README参照)
-const GAS_URL = "PUT_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyAAwRfWqvxwRBs9nQ3vva_-7gGZnUe0KaUtcYU_KIg3lRN_nhRk8Zqr8UXzbrCKY3D/exec";
+// アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
+const APP_VERSION = "v3";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -331,6 +337,53 @@ function applyFoodSuggestion(target, idx) {
     editing.draftCarb = f.carb || "";
   }
   if (target === "meal") openMealDetail();
+}
+// ============ AIによる栄養価の概算(オプション・要ネット接続) ============
+// 内蔵の食品辞書(estimateFoodMatches)に候補がない食品向け。GAS_URL(Apps Script)経由で
+// Google Gemini APIに食品名を送り、カロリー・P・F・Cの概算を取得する。
+// これはアプリの中で唯一「外部AI」に接続する機能で、以下の条件がすべて揃っているときだけ動く:
+//  1) 設定タブでGoogle Sheets連携(GAS_URL)が設定済み
+//  2) そのApps ScriptプロジェクトのスクリプトプロパティにGEMINI_API_KEYが設定済み(README参照)
+// 未設定の場合はエラーメッセージを表示するだけで、他の機能には一切影響しない。
+async function aiLookupNutrition(target) {
+  const ids = target === "meal"
+    ? { name:"meal-name-input", cal:"meal-cal-input", protein:"meal-protein-input", fat:"meal-fat-input", carb:"meal-carb-input", status:"ai-lookup-meal-status" }
+    : target === "master"
+    ? { name:"master-meal-name-input", cal:"master-meal-cal-input", protein:"master-meal-protein-input", fat:"master-meal-fat-input", carb:"master-meal-carb-input", status:"ai-lookup-master-status" }
+    : { name:"edit-text", cal:"edit-calories", protein:"edit-protein", fat:"edit-fat", carb:"edit-carb", status:"ai-lookup-edit-status" };
+  const nameEl = document.getElementById(ids.name);
+  const statusEl = document.getElementById(ids.status);
+  const foodName = nameEl ? nameEl.value.trim() : "";
+  if (!foodName) { if (statusEl) statusEl.textContent = "⚠️ 先に食品名を入力してください"; return; }
+  if (!GAS_URL || GAS_URL.indexOf("PUT_YOUR") === 0) {
+    if (statusEl) statusEl.textContent = "⚠️ AI栄養検索を使うには、まず設定タブでGoogle Sheets連携(GAS_URL)の設定が必要です(README参照)";
+    return;
+  }
+  if (statusEl) statusEl.textContent = "🔄 AIに問い合わせ中...(ネット接続が必要です)";
+  try {
+    const res = await fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "estimateNutrition", foodName }),
+    });
+    const data = await res.json();
+    if (data.status !== "ok" || !data.nutrition) {
+      if (statusEl) statusEl.textContent = "⚠️ 取得できませんでした: " + (data.message || "不明なエラー") + "(Apps Script側のGEMINI_API_KEY設定をご確認ください)";
+      return;
+    }
+    const n = data.nutrition;
+    const calEl = document.getElementById(ids.cal); if (calEl) calEl.value = n.kcal;
+    const pEl = document.getElementById(ids.protein); if (pEl) pEl.value = n.protein;
+    const fEl = document.getElementById(ids.fat); if (fEl) fEl.value = n.fat;
+    const cEl = document.getElementById(ids.carb); if (cEl) cEl.value = n.carb;
+    if (target === "edit" && editing) {
+      editing.draftCalories = n.kcal; editing.draftProtein = n.protein; editing.draftFat = n.fat; editing.draftCarb = n.carb;
+    }
+    if (target === "meal") openMealDetail();
+    if (statusEl) statusEl.textContent = `✅ AI概算: ${n.kcal}kcal (P${n.protein} F${n.fat} C${n.carb}) ※目安です。正確な値がわかる場合は上書きしてください`;
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "⚠️ 通信エラーが発生しました: " + err.message;
+  }
 }
 // 食事タブの「詳細を入力」セクションを開く(プリセット・カロリー候補をタップした
 // ときに、入力された値がすぐ見えるように)。フォーム全体は再描画しないので、
@@ -833,6 +886,8 @@ function todayHtml() {
   const balanceHistory = computeCalorieBalanceHistory(14);
   const balanceAdvice = balanceHistory ? generateBalanceAdvice(balanceHistory) : null;
   const showCopyYesterday = yesterdayHasRecords();
+  const yesterdayHadTraining = entries.some(e => e.date === yesterdayDateStr());
+  const yesterdayMealTypes = yesterdayMealTypesAvailable();
 
   return `
     <div class="card">
@@ -850,13 +905,18 @@ function todayHtml() {
 
     ${showCopyYesterday ? `
     <div class="card">
-      <div class="between" style="gap:10px;">
-        <div style="flex:1;min-width:0;">
-          <span class="muted">📋 昨日の記録をコピー</span>
-          <p style="margin:2px 0 0;font-size:12.5px;line-height:1.4;">昨日と同じトレーニング・食事をまとめて今日に記録します</p>
-        </div>
-        <button class="chip active-b" data-action="copy-yesterday" style="flex:0 0 auto;">コピー</button>
-      </div>
+      <p class="section-title" style="margin:0 0 8px;">📋 昨日の記録をコピー</p>
+      ${yesterdayHadTraining ? `
+      <div class="between" style="margin-bottom:8px;">
+        <span style="font-size:12.5px;">🏋️ 運動</span>
+        <button class="chip active-b" data-action="copy-yesterday-training">コピー</button>
+      </div>` : ""}
+      ${yesterdayMealTypes.length ? `
+      <p class="muted" style="font-size:11px;margin:0 0 6px;">🍽️ 食事(区分ごとにコピーできます)</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${yesterdayMealTypes.map(t => `<button class="chip" data-action="copy-yesterday-meal" data-val="${t}">${t}</button>`).join("")}
+      </div>` : ""}
+      <button class="chip" data-action="copy-yesterday" style="width:100%;text-align:center;">まとめて全部コピー</button>
     </div>` : ""}
 
     <div class="card">
@@ -941,6 +1001,8 @@ function mealsHtml() {
       </div>` : ""}
       <input type="text" id="meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
       <div class="wrap" id="meal-name-suggestions" style="margin-bottom:8px;"></div>
+      <button type="button" class="chip" data-action="ai-lookup-nutrition" data-target="meal" style="margin-bottom:4px;">🔍 AIで栄養を調べる</button>
+      <p id="ai-lookup-meal-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
       <input type="date" id="meal-date-input" value="${today}" class="mono" style="margin-bottom:8px;">
       <button type="button" class="chip" data-action="toggle-meal-detail" id="meal-detail-toggle" style="margin-bottom:8px;">${mealDetailOpen ? "▾" : "▸"} 詳細を入力(カロリー・栄養素・任意)</button>
       <div id="meal-detail-fields" class="${mealDetailOpen ? "" : "hidden"}">
@@ -1389,6 +1451,8 @@ function settingsHtml() {
         <div id="master-meal-list" style="margin-bottom:8px;"></div>
         <input type="text" id="master-meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
         <div class="wrap" id="master-meal-name-suggestions" style="margin-bottom:8px;"></div>
+        <button type="button" class="chip" data-action="ai-lookup-nutrition" data-target="master" style="margin-bottom:4px;">🔍 AIで栄養を調べる</button>
+        <p id="ai-lookup-master-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
         <div class="row" style="margin-bottom:8px;">
           <input type="number" id="master-meal-cal-input" placeholder="kcal(任意)" class="mono">
         </div>
@@ -1409,7 +1473,9 @@ function settingsHtml() {
              <div class="row"><button class="chip" data-action="reset-yes" style="color:var(--coral);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`
           : `<button class="chip" data-action="reset-show">すべてのデータを削除</button>`}
       </div>
-    </div>`;
+    </div>
+
+    <p class="muted" style="text-align:center;font-size:10px;margin:16px 0 0;">${APP_VERSION}</p>`;
 }
 // 設定タブの折りたたみ見出し。タップで対応するidの中身を表示/非表示にする
 // (フォーム全体を再描画しないので、他セクションの入力中の値は消えない)。
@@ -1517,6 +1583,8 @@ function renderEditModal() {
       <div class="wrap" style="margin-bottom:10px;">${MEAL_TYPES.map(t => `<button class="chip ${editing.tempMealType===t?"active":""}" data-edit-action="set-mealtype" data-val="${t}">${t}</button>`).join("")}</div>
       <label class="label">内容</label><input type="text" id="edit-text" value="${esc(editing.draftText||"")}" style="margin-bottom:6px;">
       <div class="wrap" id="edit-meal-suggestions" style="margin-bottom:8px;"></div>
+      <button type="button" class="chip" data-action="ai-lookup-nutrition" data-target="edit" style="margin-bottom:4px;">🔍 AIで栄養を調べる</button>
+      <p id="ai-lookup-edit-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
       <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
       <div class="row" style="margin-bottom:10px;">
         <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="P(g)" class="mono">
@@ -1667,6 +1735,21 @@ function copyYesterdayToToday() {
   mealEntries.filter(m => m.date === y).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
   saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
 }
+// 運動だけ/食事区分(朝食・昼食・夕食・間食)だけ、を個別にコピーしたいという要望向け。
+function copyYesterdayTraining() {
+  const y = yesterdayDateStr(), today = localDateStr();
+  entries.filter(e => e.date === y).forEach(e => entries.unshift({ ...e, id: uid(), date: today, createdAt: Date.now() }));
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+function copyYesterdayMealType(mealType) {
+  const y = yesterdayDateStr(), today = localDateStr();
+  mealEntries.filter(m => m.date === y && m.mealType === mealType).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
+  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+}
+function yesterdayMealTypesAvailable() {
+  const y = yesterdayDateStr();
+  return MEAL_TYPES.filter(t => mealEntries.some(m => m.date === y && m.mealType === t));
+}
 // 「よく使う運動メニュー」: 今日すでに記録した筋トレ・有酸素の内容を、名前を付けて
 // テンプレートとして保存する。次回はワンタップでまとめて記録できる。
 function saveTodayAsRoutine(name) {
@@ -1767,6 +1850,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     openMealDetail();
   }
   else if (action === "apply-food-suggestion") { applyFoodSuggestion(t.dataset.target, Number(t.dataset.idx)); }
+  else if (action === "ai-lookup-nutrition") { aiLookupNutrition(t.dataset.target); }
   else if (action === "toggle-meal-detail") {
     mealDetailOpen = !mealDetailOpen;
     const detailEl = document.getElementById("meal-detail-fields");
@@ -1784,6 +1868,8 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "relog-training") { relogTraining(t.dataset.id); }
   else if (action === "relog-meal") { relogMeal(t.dataset.id); }
   else if (action === "copy-yesterday") { copyYesterdayToToday(); }
+  else if (action === "copy-yesterday-training") { copyYesterdayTraining(); }
+  else if (action === "copy-yesterday-meal") { copyYesterdayMealType(t.dataset.val); }
   else if (action === "save-routine-start") { savingRoutine = true; renderTabContent(); }
   else if (action === "save-routine-cancel") { savingRoutine = false; renderTabContent(); }
   else if (action === "save-routine-confirm") {
@@ -1888,6 +1974,8 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
   if (e.target.id === "modal-overlay") { editing = null; renderEditModal(); return; }
   const suggestionBtn = e.target.closest('[data-action="apply-food-suggestion"]');
   if (suggestionBtn) { applyFoodSuggestion(suggestionBtn.dataset.target, Number(suggestionBtn.dataset.idx)); return; }
+  const aiLookupBtn = e.target.closest('[data-action="ai-lookup-nutrition"]');
+  if (aiLookupBtn) { aiLookupNutrition(aiLookupBtn.dataset.target); return; }
   const t = e.target.closest("[data-edit-action]");
   if (!t) return;
   const action = t.dataset.editAction;
