@@ -95,7 +95,7 @@
 // Google Apps Script Webアプリの URL をここに貼り付けてください(README参照)
 const GAS_URL = "https://script.google.com/macros/s/AKfycbyAAwRfWqvxwRBs9nQ3vva_-7gGZnUe0KaUtcYU_KIg3lRN_nhRk8Zqr8UXzbrCKY3D/exec";
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v3";
+const APP_VERSION = "v4";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -223,6 +223,7 @@ let profile = null; // null until onboarding completes: {age, gender, height, ac
 let moodByDate = {};
 let syncStatus = "idle";
 let lastSyncedAt = null;
+let lastSyncError = null; // 直近の同期エラーの詳細(設定タブの「同期」カードに表示。原因調査用)
 let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
 let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
 let lastStrengthByExercise = {}; // "種目名"(または"(部位)") -> {reps, weight} の直近の入力値。次回そのままの値を提案する
@@ -461,13 +462,30 @@ async function syncToSheet() {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ rows: buildRows() }),
     });
-    const data = await res.json();
-    syncStatus = (data && data.status === "ok") ? "synced" : "error";
-    if (syncStatus === "synced") lastSyncedAt = new Date();
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      // Apps Scriptがエラー時にHTML(ログイン画面など)を返すとここに来る。
+      // 典型的な原因は「デプロイ時のアクセス権限が「全員」になっていない」。
+      throw new Error(`応答がJSONではありません(HTTP ${res.status})。Apps Scriptのデプロイ設定(アクセスできるユーザー:全員)をご確認ください。`);
+    }
+    if (data && data.status === "ok") {
+      syncStatus = "synced";
+      lastSyncedAt = new Date();
+      lastSyncError = null;
+    } else {
+      syncStatus = "error";
+      lastSyncError = (data && data.message) ? String(data.message) : `不明なエラー(HTTP ${res.status})`;
+    }
   } catch (e) {
     syncStatus = "error";
+    lastSyncError = e && e.message ? e.message : String(e);
   }
   renderSyncStatus();
+  // 設定タブを開いているときは、同期カードのエラー詳細表示も最新化する
+  // (ヘッダーの☁️アイコンだけでなく、タップ後の結果がその場で見えるように)。
+  if (activeTab === "settings") renderTabContent();
 }
 function renderSyncStatus() {
   const el = document.getElementById("sync-status");
@@ -1380,6 +1398,7 @@ function settingsHtml() {
       <p class="section-title">同期</p>
       <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
       <button class="chip" data-action="retry-sync">今すぐ同期を試す</button>
+      ${syncStatus === "error" && lastSyncError ? `<p style="font-size:11px;margin:10px 0 0;color:var(--coral);line-height:1.5;">エラー内容: ${esc(lastSyncError)}</p>` : ""}
     </div>
 
     <div class="card">
