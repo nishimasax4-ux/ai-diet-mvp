@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v8";
+const APP_VERSION = "v15";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -128,7 +128,7 @@ const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","そ�
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
 const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "その他":5 };
 const STRENGTH_KCAL_PER_SET = 30; // 筋トレ1セットあたりの消費カロリー概算(目安)
-const REP_QUICK_OPTIONS = [5,8,10,12,15,20]; // 回数のワンタップ候補
+const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
 // 内蔵の食品カロリー概算表(外部APIには接続しません)。
 // 数値はすべて一般的な目安量あたりのおおよその値です(kcal, protein/fat/carbはg)。
@@ -308,6 +308,28 @@ function weekBuckets(n) {
 }
 function uid() { return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
 function exerciseNamesForPart(part) { return exerciseMaster.filter(x => x.part === part).map(x => x.name); }
+// 種目チップの並び順(画面表示用)。登録順のままだと、実際にはやらない種目が上に残って
+// 毎回スクロールが必要になるので、「よく使う種目ほど上」に並べ替える。
+// 並び順: ①記録した回数が多い順 → ②同数なら直近に記録した日が新しい順 →
+//         ③一度も記録していない種目は、そのあとに登録順のまま並べる。
+// (「今日のおすすめ」のローテーション pickExerciseForPart() は、日中に順番が変わって
+//  提案が入れ替わらないよう、意図的に登録順のまま exerciseNamesForPart() を使っている。)
+function exerciseNamesForPartByUsage(part) {
+  const stats = {};
+  entries.forEach(e => {
+    if (e.type !== "strength" || !e.exercise) return;
+    const s = stats[e.exercise] || (stats[e.exercise] = { count: 0, last: "" });
+    s.count++;
+    if (e.date > s.last) s.last = e.date;
+  });
+  return exerciseNamesForPart(part)
+    .map((name, idx) => ({ name, idx, count: (stats[name] || {}).count || 0, last: (stats[name] || {}).last || "" }))
+    .sort((a, b) =>
+      (b.count - a.count) ||
+      (a.last < b.last ? 1 : a.last > b.last ? -1 : 0) ||
+      (a.idx - b.idx))
+    .map(x => x.name);
+}
 
 // ============ FOOD CALORIE LOOKUP (offline, built-in dictionary — no external API) ============
 function normalizeFoodText(s) { return String(s ?? "").toLowerCase().replace(/[\s　]/g, ""); }
@@ -375,12 +397,41 @@ function applyFoodSuggestion(target, idx) {
 //  1) 設定タブで接続先URL・トークンが登録済み
 //  2) そのApps ScriptプロジェクトのスクリプトプロパティにGEMINI_API_KEYが設定済み(README参照)
 // 未設定の場合はエラーメッセージを表示するだけで、他の機能には一切影響しない。
-async function aiLookupNutrition(target) {
-  const ids = target === "meal"
-    ? { name:"meal-name-input", cal:"meal-cal-input", protein:"meal-protein-input", fat:"meal-fat-input", carb:"meal-carb-input", status:"ai-lookup-meal-status" }
+//
+// Apps Scriptから返ったエラーメッセージに、原因ごとの対処法を添える。
+// 以前はどんなエラーにも一律で「GEMINI_API_KEY設定をご確認ください」と付けていたため、
+// 実際にはGoogle側の一時的な混雑(503)などキー設定と無関係な場合にも、設定を疑わせる
+// 誤解を招く案内になっていた。原因に応じて出し分ける。
+function friendlyAiError_(rawMessage) {
+  const msg = String(rawMessage || "不明なエラー");
+  if (/HTTP 503|UNAVAILABLE|high demand|overloaded/i.test(msg)) {
+    return "Google側が一時的に混雑しています。しばらく待ってからもう一度お試しください(設定に問題はありません)。";
+  }
+  if (/HTTP 429|RESOURCE_EXHAUSTED|quota/i.test(msg)) {
+    return "Gemini APIの無料枠の上限に達したようです。時間をおいてから再度お試しください。";
+  }
+  if (/GEMINI_API_KEY/i.test(msg)) {
+    return msg + "(Apps Scriptの「プロジェクトの設定」→「スクリプト プロパティ」をご確認ください)";
+  }
+  if (/HTTP 404|NOT_FOUND|no longer available/i.test(msg)) {
+    return msg + "(Googleがこのモデルを廃止した可能性があります。apps-script.gsのGEMINI_MODELを最新のモデル名に更新してください)";
+  }
+  if (/HTTP 400|API key not valid|INVALID_ARGUMENT/i.test(msg)) {
+    return msg + "(APIキーが正しくない可能性があります。Google AI Studioで発行したキーを再確認してください)";
+  }
+  return msg;
+}
+// 各フォーム(食事タブ/よく食べるもの登録/編集画面)の入力欄IDの対応表。
+// AI検索と「よく食べるものに登録」の両方から参照する。
+function foodFieldIds_(target) {
+  return target === "meal"
+    ? { name:"meal-name-input", cal:"meal-cal-input", protein:"meal-protein-input", fat:"meal-fat-input", carb:"meal-carb-input", status:"ai-lookup-meal-status", saveMaster:"meal-save-master" }
     : target === "master"
-    ? { name:"master-meal-name-input", cal:"master-meal-cal-input", protein:"master-meal-protein-input", fat:"master-meal-fat-input", carb:"master-meal-carb-input", status:"ai-lookup-master-status" }
-    : { name:"edit-text", cal:"edit-calories", protein:"edit-protein", fat:"edit-fat", carb:"edit-carb", status:"ai-lookup-edit-status" };
+    ? { name:"master-meal-name-input", cal:"master-meal-cal-input", protein:"master-meal-protein-input", fat:"master-meal-fat-input", carb:"master-meal-carb-input", status:"ai-lookup-master-status", saveMaster:null }
+    : { name:"edit-text", cal:"edit-calories", protein:"edit-protein", fat:"edit-fat", carb:"edit-carb", status:"ai-lookup-edit-status", saveMaster:"edit-save-master" };
+}
+async function aiLookupNutrition(target) {
+  const ids = foodFieldIds_(target);
   const nameEl = document.getElementById(ids.name);
   const statusEl = document.getElementById(ids.status);
   const foodName = nameEl ? nameEl.value.trim() : "";
@@ -393,7 +444,7 @@ async function aiLookupNutrition(target) {
   try {
     const data = await gasPost({ action: "estimateNutrition", foodName });
     if (data.status !== "ok" || !data.nutrition) {
-      if (statusEl) statusEl.textContent = "⚠️ 取得できませんでした: " + (data.message || "不明なエラー") + "(Apps Script側のGEMINI_API_KEY設定をご確認ください)";
+      if (statusEl) statusEl.textContent = "⚠️ 取得できませんでした: " + friendlyAiError_(data.message);
       return;
     }
     const n = data.nutrition;
@@ -406,8 +457,44 @@ async function aiLookupNutrition(target) {
     }
     if (target === "meal") openMealDetail();
     if (statusEl) statusEl.textContent = `✅ AI概算: ${n.kcal}kcal (P${n.protein} F${n.fat} C${n.carb}) ※目安です。正確な値がわかる場合は上書きしてください`;
+    // AI検索は1回ごとに通信が発生するので、同じ食品を次回から検索し直さずに済むよう、
+    // その場で「よく食べるもの」に登録できるボタンを出す。
+    renderSaveToMasterButton_(target);
   } catch (err) {
     if (statusEl) statusEl.textContent = "⚠️ 通信エラーが発生しました: " + friendlySyncError_(err.message);
+  }
+}
+// 「よく食べるものに登録」ボタンの表示。AI検索が成功した直後にだけ出す。
+function renderSaveToMasterButton_(target) {
+  const ids = foodFieldIds_(target);
+  if (!ids.saveMaster) return; // 「よく食べるもの」登録フォーム自身からは登録不要
+  const el = document.getElementById(ids.saveMaster);
+  if (!el) return;
+  el.innerHTML = `<button type="button" class="chip active-b" data-action="save-food-to-master" data-target="${target}">📌 よく食べるものに登録</button>`;
+}
+// いま入力欄にある食品名・カロリー・PFCを、そのまま「よく食べるもの」マスタに登録する。
+// 同じ名前がすでにある場合は、重複させずに新しい値で上書きする。
+function saveFoodToMaster(target) {
+  const ids = foodFieldIds_(target);
+  const el = ids.saveMaster ? document.getElementById(ids.saveMaster) : null;
+  const nameEl = document.getElementById(ids.name);
+  const name = nameEl ? nameEl.value.trim() : "";
+  if (!name) {
+    if (el) el.innerHTML = `<span class="muted" style="font-size:10.5px;">⚠️ 先に食品名を入力してください</span>`;
+    return;
+  }
+  const numOf = (id) => { const v = document.getElementById(id); const n = v ? Number(v.value) : NaN; return Number.isFinite(n) ? n : 0; };
+  const calEl = document.getElementById(ids.cal);
+  const calories = calEl && calEl.value !== "" ? Number(calEl.value) : null;
+  const entry = { name, calories, protein: numOf(ids.protein), fat: numOf(ids.fat), carb: numOf(ids.carb) };
+  const existing = mealMaster.find(m => m.name === name);
+  if (existing) Object.assign(existing, entry);
+  else mealMaster.push({ id: uid(), ...entry });
+  saveState();
+  // フォーム全体は再描画しない(入力中の内容が消えてしまうため)。マスタのチップ一覧に
+  // 反映されるのは次にこのタブを開いたときなので、その旨も添えて案内する。
+  if (el) {
+    el.innerHTML = `<span class="muted" style="font-size:10.5px;">${existing ? "✅ 登録済みの内容を更新しました" : "✅「よく食べるもの」に登録しました"}(次にこの画面を開いたときからタップで入力できます)</span>`;
   }
 }
 // 食事タブの「詳細を入力」セクションを開く(プリセット・カロリー候補をタップした
@@ -661,7 +748,7 @@ async function fetchAiAdvice() {
       aiAdviceStatus = "idle";
     } else {
       aiAdviceStatus = "error";
-      aiAdviceError = (data && data.message) ? String(data.message) : "AIコメントを取得できませんでした(Apps Script側のGEMINI_API_KEY設定をご確認ください)";
+      aiAdviceError = friendlyAiError_(data && data.message);
     }
   } catch (e) {
     aiAdviceStatus = "error";
@@ -1279,6 +1366,7 @@ function mealsHtml() {
       <div class="wrap" id="meal-name-suggestions" style="margin-bottom:8px;"></div>
       <button type="button" class="chip" data-action="ai-lookup-nutrition" data-target="meal" style="margin-bottom:4px;">🔍 AIで栄養を調べる</button>
       <p id="ai-lookup-meal-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
+      <div class="wrap" id="meal-save-master" style="margin-bottom:8px;"></div>
       <input type="date" id="meal-date-input" value="${today}" class="mono" style="margin-bottom:8px;">
       <button type="button" class="chip" data-action="toggle-meal-detail" id="meal-detail-toggle" style="margin-bottom:8px;">${mealDetailOpen ? "▾" : "▸"} 詳細を入力(カロリー・栄養素・任意)</button>
       <div id="meal-detail-fields" class="${mealDetailOpen ? "" : "hidden"}">
@@ -1535,9 +1623,15 @@ function dayDetailHtml(dateStr) {
   return header + trainingRows + weightRow + mealRows;
 }
 function renderHistory() {
+  // 「運動」タブの履歴なので、リスト表示は運動の記録だけを見せる。
+  // (以前はここに体重・食事の記録も混ざって表示されており、「運動の履歴なのに
+  //  食事が出てくる」と分かりづらい状態だった。体重は「体重」タブ、食事は
+  //  「食事」タブの「📖 食事の履歴」にそれぞれ専用の一覧がある。)
+  // 一方カレンダー表示は「その日に何をしたか」を一目で見るためのものなので、
+  // 運動・体重・食事の3色の印と、日付をタップしたときの全記録表示はそのまま残す。
   const toggle = `
     <div class="between" style="margin-bottom:8px;">
-      <p class="section-title" style="margin:0;">履歴</p>
+      <p class="section-title" style="margin:0;">${historyView === "calendar" ? "カレンダー(全記録)" : "運動の履歴"}</p>
       <div class="row" style="gap:4px;width:auto;">
         <button class="chip ${historyView==="list"?"active":""}" data-action="view-list">リスト</button>
         <button class="chip ${historyView==="calendar"?"active":""}" data-action="view-calendar">カレンダー</button>
@@ -1545,39 +1639,24 @@ function renderHistory() {
     </div>`;
   let body;
   if (historyView === "calendar") {
-    body = `${calendarGridHtml()}${dayDetailHtml(selectedCalDate)}`;
+    body = `<p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.5;">印: 🔴運動 / 🟡体重 / 🔵食事。日付をタップするとその日の全記録が見られます。</p>${calendarGridHtml()}${dayDetailHtml(selectedCalDate)}`;
   } else {
-    // トレーニングだけでなく、体重・食事を記録した日もリストに含める
-    // (以前はトレーニング記録のある日しか出てこず、食事だけ記録した日が
-    // 「履歴」に出てこないように見える不具合があったため)。
-    const allDates = new Set([
-      ...entries.map(e => e.date),
-      ...weightEntries.map(w => w.date),
-      ...mealEntries.map(m => m.date),
-    ]);
-    const dates = [...allDates].sort((a,b) => a < b ? 1 : -1);
+    const dates = [...new Set(entries.map(e => e.date))].sort((a,b) => a < b ? 1 : -1);
     if (dates.length === 0) {
-      body = '<p class="muted">まだ記録がありません。今日のトレーニングを記録してみましょう。</p>';
+      body = '<p class="muted">まだ運動の記録がありません。今日のトレーニングを記録してみましょう。</p>';
     } else {
       body = dates.map(d => {
         const dd = new Date(d + "T00:00:00");
-        const items = (entries.filter(e => e.date === d)).map(trainingEntryRowHtml).join("");
-        const dayWeight = weightEntries.find(w => w.date === d);
-        const weightRow = dayWeight ? `<div class="entry-row">
-            <div class="badge" style="background:var(--sand-soft);">⚖️</div>
-            <div style="flex:1;">体重 <span class="mono" style="color:var(--sand);">${dayWeight.weight}kg</span></div>
-            <button class="del-btn" data-action="edit-weight" data-date="${dayWeight.date}">✏️</button>
-            <button class="del-btn" data-action="del-weight" data-date="${dayWeight.date}">🗑️</button>
-          </div>` : "";
-        const mealRows = mealEntries.filter(m => m.date === d).map(mealEntryRowHtml).join("");
+        const items = entries.filter(e => e.date === d).map(trainingEntryRowHtml).join("");
         return `<div style="margin-bottom:14px;">
           <div class="row" style="gap:6px;align-items:baseline;margin-bottom:6px;">
             <span class="mono" style="font-weight:700;font-size:14px;">${d}</span>
             <span class="muted">(${WEEKDAY[dd.getDay()]})</span>
           </div>
-          ${items}${weightRow}${mealRows}
+          ${items}
         </div>`;
       }).join("");
+      body += '<p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.5;">体重は「体重」タブ、食事は「食事」タブの「📖 食事の履歴」で確認できます。カレンダー表示なら、その日の全記録をまとめて見られます。</p>';
     }
   }
   const el = document.getElementById("history-section");
@@ -1599,7 +1678,7 @@ function renderTrainingFormOptions() {
   partEl.innerHTML = PARTS.map(p => `<button class="chip ${selectedPart===p?"active-a":""}" data-action="select-part" data-val="${p}">${p}</button>`).join("");
   const exerciseInput = document.getElementById("exercise-input");
   const currentExercise = exerciseInput ? exerciseInput.value.trim() : "";
-  const exOptions = exerciseNamesForPart(selectedPart);
+  const exOptions = exerciseNamesForPartByUsage(selectedPart);
   document.getElementById("exercise-buttons").innerHTML = exOptions.length
     ? exOptions.map(ex => `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${esc(ex)}">${esc(ex)}</button>`).join("")
     : '<span class="muted" style="font-size:11px;">未登録(設定タブの「種目マスタ」から追加できます)</span>';
@@ -1852,7 +1931,7 @@ function renderEditModal() {
     const e = entries.find(x => x.id === editing.id);
     if (!e) { editing = null; el.innerHTML = ""; el.classList.add("hidden"); return; }
     if (e.type === "strength") {
-      const exOptions = exerciseNamesForPart(editing.tempPart);
+      const exOptions = exerciseNamesForPartByUsage(editing.tempPart);
       body = `
         <label class="label">部位</label>
         <div class="wrap" style="margin-bottom:10px;">${PARTS.map(p => `<button class="chip ${editing.tempPart===p?"active-a":""}" data-edit-action="set-part" data-val="${p}">${p}</button>`).join("")}</div>
@@ -1882,6 +1961,7 @@ function renderEditModal() {
       <div class="wrap" id="edit-meal-suggestions" style="margin-bottom:8px;"></div>
       <button type="button" class="chip" data-action="ai-lookup-nutrition" data-target="edit" style="margin-bottom:4px;">🔍 AIで栄養を調べる</button>
       <p id="ai-lookup-edit-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
+      <div class="wrap" id="edit-save-master" style="margin-bottom:8px;"></div>
       <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
       <div class="row" style="margin-bottom:10px;">
         <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="P(g)" class="mono">
@@ -2148,6 +2228,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "apply-food-suggestion") { applyFoodSuggestion(t.dataset.target, Number(t.dataset.idx)); }
   else if (action === "ai-lookup-nutrition") { aiLookupNutrition(t.dataset.target); }
+  else if (action === "save-food-to-master") { saveFoodToMaster(t.dataset.target); }
   else if (action === "toggle-meal-detail") {
     mealDetailOpen = !mealDetailOpen;
     const detailEl = document.getElementById("meal-detail-fields");
@@ -2310,6 +2391,8 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
   if (suggestionBtn) { applyFoodSuggestion(suggestionBtn.dataset.target, Number(suggestionBtn.dataset.idx)); return; }
   const aiLookupBtn = e.target.closest('[data-action="ai-lookup-nutrition"]');
   if (aiLookupBtn) { aiLookupNutrition(aiLookupBtn.dataset.target); return; }
+  const saveMasterBtn = e.target.closest('[data-action="save-food-to-master"]');
+  if (saveMasterBtn) { saveFoodToMaster(saveMasterBtn.dataset.target); return; }
   const t = e.target.closest("[data-edit-action]");
   if (!t) return;
   const action = t.dataset.editAction;

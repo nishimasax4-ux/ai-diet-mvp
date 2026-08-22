@@ -14,7 +14,11 @@
  *     URLを知られただけでは書き込まれません。
  */
 
-var GEMINI_MODEL = 'gemini-2.0-flash';
+// 2026年8月時点でGoogleがgemini-2.0-flashを廃止したため更新(HTTP 404で通知されました)。
+// gemini-3.7-flashは執筆時点でのFlash系最新モデルで、無料枠の対象にも含まれています。
+// 将来また廃止される可能性はあるので、同様のHTTP 404エラーが出た場合はここを最新のモデルIDに
+// 書き換えてください(https://ai.google.dev/gemini-api/docs/models で確認できます)。
+var GEMINI_MODEL = 'gemini-3.7-flash';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -122,10 +126,10 @@ function handleNutrition_(foodName) {
     '形式: {"kcal": 数値, "protein": 数値, "fat": 数値, "carb": 数値}\n' +
     'protein/fat/carb の単位はグラム、小数第1位まで。';
 
-  var text = callGemini_(key, prompt, 256);
+  var text = callGemini_(key, prompt, 512);
   var n = parseJson_(text);
   if (!n || typeof n.kcal === 'undefined') {
-    return { status: 'error', message: 'AIの応答を解釈できませんでした' };
+    return { status: 'error', message: 'AIの応答を解釈できませんでした(応答: ' + String(text).slice(0, 200) + ')' };
   }
   return {
     status: 'ok',
@@ -160,7 +164,7 @@ function handleAdvice_(ctx) {
     '### 記録\n' +
     JSON.stringify(ctx);
 
-  var text = callGemini_(key, prompt, 512);
+  var text = callGemini_(key, prompt, 768);
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
 }
@@ -168,21 +172,43 @@ function handleAdvice_(ctx) {
 function callGemini_(apiKey, prompt, maxTokens) {
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
             GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
-  var res = UrlFetchApp.fetch(url, {
+  var options = {
     method: 'post',
     contentType: 'application/json',
     muteHttpExceptions: true,
     payload: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: maxTokens || 512 },
+      // thinkingBudget:0 で「思考」を無効化する。gemini-3.x系のFlashモデルは既定で
+      // 思考トークンを使うため、有効なままだと短い構造化出力(JSON概算・短文コメント)でも
+      // maxOutputTokensを思考側だけで使い切ってしまい、本文が空になることがあった
+      // (「AIの応答を解釈できませんでした」エラーの原因)。この用途では思考は不要なので無効化する。
+      generationConfig: { temperature: 0.4, maxOutputTokens: maxTokens || 512, thinkingConfig: { thinkingBudget: 0 } },
     }),
-  });
-  var code = res.getResponseCode();
-  var body = res.getContentText();
+  };
+
+  // 503(混雑)・429(レート超過)・500系は、Google側の一時的な状態であることが多い。
+  // 利用者に手動で押し直してもらう前に、間隔を空けて自動で数回リトライする。
+  // Apps Scriptのウェブアプリには実行時間の上限があるため、待ち時間は控えめにしている。
+  var RETRY_DELAYS_MS = [800, 2000, 4000];
+  var code, body;
+  for (var attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    var res = UrlFetchApp.fetch(url, options);
+    code = res.getResponseCode();
+    body = res.getContentText();
+    if (code === 200) break;
+    var retriable = (code === 429 || code === 503 || (code >= 500 && code < 600));
+    if (!retriable || attempt === RETRY_DELAYS_MS.length) break;
+    Utilities.sleep(RETRY_DELAYS_MS[attempt]);
+  }
+
   if (code !== 200) throw new Error('Gemini APIエラー (HTTP ' + code + '): ' + body.slice(0, 300));
   var data = JSON.parse(body);
   var cand = data.candidates && data.candidates[0];
-  if (!cand || !cand.content || !cand.content.parts) return '';
+  if (!cand || !cand.content || !cand.content.parts) {
+    // 空応答の原因調査用にfinishReason(MAX_TOKENS/SAFETYなど)を添えて返す。
+    var reason = cand && cand.finishReason ? cand.finishReason : '不明';
+    throw new Error('Geminiから本文が返りませんでした(finishReason: ' + reason + ')');
+  }
   return cand.content.parts.map(function (p) { return p.text || ''; }).join('');
 }
 
