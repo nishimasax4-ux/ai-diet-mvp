@@ -12,8 +12,16 @@
  * 【オプション】「🔍 AIで栄養を調べる」機能を使う場合のみ、追加でもう1手順必要です:
  * 5. Google AI Studio (https://aistudio.google.com/apikey) で無料のGemini APIキーを取得する
  * 6. このApps Scriptプロジェクトの「プロジェクトの設定」→「スクリプト プロパティ」で
- *    プロパティ名 GEMINI_API_KEY / 値にそのキーを追加して保存する
+ *    プロパティ名 GEMINI_API_KEY / 値にそのキーを追加して、必ず保存ボタンまで押す
  * この機能を使わない場合、5・6の手順は不要です(他の機能には一切影響しません)。
+ *
+ * 【設定確認用】6.まで終えたのにアプリ側で「APIキーが未設定」と出る場合は、
+ * このデプロイURLの末尾に ?check=key を付けてSafariで直接開いてください
+ * (例: https://script.google.com/macros/s/.../exec?check=key )。
+ * キーの中身は表示せず、設定できているかどうかと文字数だけを返します。
+ * コードを今回のバージョンに更新した場合は、末尾の手順で必ず「新しいバージョン」として
+ * デプロイし直してください(スクリプト プロパティの追加だけなら再デプロイ不要ですが、
+ * コード自体の変更は再デプロイしないと反映されません)。
  */
 
 const SHEET_NAME = "ログ";
@@ -128,7 +136,23 @@ function handleEstimateNutrition_(foodName) {
 
 function doGet(e) {
   // 動作確認用。ブラウザでWebアプリのURLを直接開いたときに返る内容。
+  // URLの末尾に ?check=key を付けて開くと、GEMINI_API_KEYがこのApps Scriptプロジェクトに
+  // 正しく設定されているかどうかを確認できます(キーの中身自体は表示されません。
+  // 設定の有無と文字数だけを返すので、安全に確認用として使えます)。
+  if (e && e.parameter && e.parameter.check === "key") {
+    const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        status: "ready",
+        geminiKeyConfigured: !!apiKey,
+        geminiKeyLength: apiKey ? apiKey.length : 0,
+        message: apiKey
+          ? "GEMINI_API_KEYはこのApps Scriptプロジェクトに設定されています(値は安全のため表示しません)。それでもアプリ側で「未設定」エラーが出る場合は、index.htmlのGAS_URLと、このプロジェクトのデプロイURLが一致しているかご確認ください。"
+          : "GEMINI_API_KEYはこのApps Scriptプロジェクトに設定されていません。「プロジェクトの設定」(歯車アイコン)→ 一番下の「スクリプト プロパティ」で、プロパティ名 GEMINI_API_KEY / 値にAPIキーを追加し、必ず保存ボタンまで押してください。",
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
   return ContentService
-    .createTextOutput(JSON.stringify({ status: "ready", message: "このURLはPOST専用です。index.htmlから自動的に呼び出されます。" }))
+    .createTextOutput(JSON.stringify({ status: "ready", message: "このURLはPOST専用です。index.htmlから自動的に呼び出されます。URLの末尾に ?check=key を付けて開くと、GEMINI_API_KEYの設定状況を確認できます。" }))
     .setMimeType(ContentService.MimeType.JSON);
 }
