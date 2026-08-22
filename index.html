@@ -92,10 +92,27 @@
 
 <script>
 // ============ CONFIG ============
-// Google Apps Script Webアプリの URL をここに貼り付けてください(README参照)
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyAAwRfWqvxwRBs9nQ3vva_-7gGZnUe0KaUtcYU_KIg3lRN_nhRk8Zqr8UXzbrCKY3D/exec";
+// Apps ScriptのURLとアクセストークンは【ソースコードに書きません】。
+// このリポジトリは公開されているため、URLを直書きすると、それを見た第三者が誰でも
+// シートに書き込んだりGemini APIのクォータを消費できてしまいます。
+// そのため接続情報は端末ごとに「設定」タブから入力し、localStorageにだけ保存します。
+const CONFIG_KEY = "training-log-config";
+let gasConfig = { url: "", token: "" };
+function loadConfig() {
+  try {
+    const raw = localStorage.getItem(CONFIG_KEY);
+    if (raw) gasConfig = Object.assign({ url:"", token:"" }, JSON.parse(raw));
+  } catch (e) { console.error("config load error", e); }
+}
+function saveConfig() {
+  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(gasConfig)); }
+  catch (e) { console.error("config save error", e); }
+}
+function gasConfigured() {
+  return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
+}
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7";
+const APP_VERSION = "v8";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -244,12 +261,18 @@ let selectedCalDate = null;
 let progressExercise = null;
 let editing = null;
 let confirmReset = false;
+let dataOpMessage = null;   // バックアップ/復元の結果メッセージ
+let dataOpError = false;
+let confirmRestore = null;  // "sheet" | "file" — 上書き確認待ちの復元元
 let mealDetailOpen = false; // 食事記録フォームの「詳細(カロリー・栄養素)」が開いているか
 // 設定タブの各セクションの開閉状態。よく使う同期・目標は常時表示、それ以外は
 // デフォルトで畳んでおき、スクロール量を減らす。
 let settingsOpenSections = { profile:false, master:false, data:false };
 
 let onboardStep = 0;
+let onboardListenerBound = false; // #appは毎回innerHTMLごと差し替わるが要素自体は使い回すため、
+                                   // クリックリスナーはrenderOnboarding呼び出しのたびにではなく一度だけ登録する
+                                   // (毎回登録すると多重登録され、1回のタップでonboardStepが2以上進んでしまう)
 let onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
 
 // ============ HELPERS ============
@@ -346,10 +369,10 @@ function applyFoodSuggestion(target, idx) {
   if (target === "meal") openMealDetail();
 }
 // ============ AIによる栄養価の概算(オプション・要ネット接続) ============
-// 内蔵の食品辞書(estimateFoodMatches)に候補がない食品向け。GAS_URL(Apps Script)経由で
+// 内蔵の食品辞書(estimateFoodMatches)に候補がない食品向け。Apps Script経由で
 // Google Gemini APIに食品名を送り、カロリー・P・F・Cの概算を取得する。
-// これはアプリの中で唯一「外部AI」に接続する機能で、以下の条件がすべて揃っているときだけ動く:
-//  1) 設定タブでGoogle Sheets連携(GAS_URL)が設定済み
+// 以下の条件がすべて揃っているときだけ動く:
+//  1) 設定タブで接続先URL・トークンが登録済み
 //  2) そのApps ScriptプロジェクトのスクリプトプロパティにGEMINI_API_KEYが設定済み(README参照)
 // 未設定の場合はエラーメッセージを表示するだけで、他の機能には一切影響しない。
 async function aiLookupNutrition(target) {
@@ -362,18 +385,13 @@ async function aiLookupNutrition(target) {
   const statusEl = document.getElementById(ids.status);
   const foodName = nameEl ? nameEl.value.trim() : "";
   if (!foodName) { if (statusEl) statusEl.textContent = "⚠️ 先に食品名を入力してください"; return; }
-  if (!GAS_URL || GAS_URL.indexOf("PUT_YOUR") === 0) {
-    if (statusEl) statusEl.textContent = "⚠️ AI栄養検索を使うには、まず設定タブでGoogle Sheets連携(GAS_URL)の設定が必要です(README参照)";
+  if (!gasConfigured()) {
+    if (statusEl) statusEl.textContent = "⚠️ AI栄養検索を使うには、まず設定タブで接続先URLとトークンの設定が必要です(README参照)";
     return;
   }
   if (statusEl) statusEl.textContent = "🔄 AIに問い合わせ中...(ネット接続が必要です)";
   try {
-    const res = await fetchWithRetry_(GAS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "estimateNutrition", foodName }),
-    });
-    const data = await res.json();
+    const data = await gasPost({ action: "estimateNutrition", foodName });
     if (data.status !== "ok" || !data.nutrition) {
       if (statusEl) statusEl.textContent = "⚠️ 取得できませんでした: " + (data.message || "不明なエラー") + "(Apps Script側のGEMINI_API_KEY設定をご確認ください)";
       return;
@@ -441,22 +459,50 @@ function saveState() {
   } catch (e) { console.error("save error", e); }
 }
 
-function buildRows() {
-  const rows = [];
+// シートへ送るデータ。以前は全カテゴリを同じ6列("項目1〜4")に詰め込んでいたため、
+// 行によって列の意味が変わり、集計にも分析にも使いづらかった。
+// カテゴリごとにシートを分け、数値は "20kg" ではなく 20 (数値)で送る。
+function num_(v) { const n = Number(v); return Number.isFinite(n) ? n : ""; }
+function buildPayload() {
+  const strength = [], cardio = [], weight = [], meals = [];
   entries.forEach(e => {
-    if (e.type === "strength") {
-      rows.push([e.date, "筋トレ", e.part, e.exercise || "", `${e.weight}kg`, `${e.reps}回`]);
-    } else {
-      rows.push([e.date, "有酸素", e.exercise, `${e.minutes}分`, "", ""]);
-    }
+    if (e.type === "strength") strength.push([e.date, e.part, e.exercise || "", num_(e.weight), num_(e.reps)]);
+    else cardio.push([e.date, e.exercise, num_(e.minutes)]);
   });
-  weightEntries.forEach(w => rows.push([w.date, "体重", `${w.weight}kg`, "", "", ""]));
-  mealEntries.forEach(m => {
-    const pfc = (m.protein || m.fat || m.carb) ? `P${m.protein||0} F${m.fat||0} C${m.carb||0}` : "";
-    rows.push([m.date, "食事", m.mealType, m.text, m.calories ? `${m.calories}kcal` : "", pfc]);
+  weightEntries.forEach(w => weight.push([w.date, num_(w.weight)]));
+  mealEntries.forEach(m => meals.push([m.date, m.mealType, m.text, num_(m.calories), num_(m.protein), num_(m.fat), num_(m.carb)]));
+  const byDate = (a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+  [strength, cardio, weight, meals].forEach(a => a.sort(byDate));
+  return {
+    "筋トレ": { header: ["日付","部位","種目","重量kg","回数"], rows: strength },
+    "有酸素": { header: ["日付","種目","時間分"], rows: cardio },
+    "体重":   { header: ["日付","体重kg"], rows: weight },
+    "食事":   { header: ["日付","区分","メニュー","kcal","P","F","C"], rows: meals },
+  };
+}
+// シートから復元したデータ(buildPayloadと同じ形)をアプリの状態に戻す。
+function applyPayload(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("データの形式が正しくありません");
+  const nextEntries = [], nextWeights = [], nextMeals = [];
+  (payload["筋トレ"] && payload["筋トレ"].rows || []).forEach(r => {
+    if (!r[0]) return;
+    nextEntries.push({ id: uid(), type:"strength", date: String(r[0]).slice(0,10), part: r[1] || "", exercise: r[2] || "", weight: Number(r[3]) || 0, reps: Number(r[4]) || 0, createdAt: Date.now() });
   });
-  rows.sort((a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
-  return rows;
+  (payload["有酸素"] && payload["有酸素"].rows || []).forEach(r => {
+    if (!r[0]) return;
+    nextEntries.push({ id: uid(), type:"cardio", date: String(r[0]).slice(0,10), exercise: r[1] || "", minutes: Number(r[2]) || 0, createdAt: Date.now() });
+  });
+  (payload["体重"] && payload["体重"].rows || []).forEach(r => {
+    if (!r[0]) return;
+    nextWeights.push({ date: String(r[0]).slice(0,10), weight: Number(r[1]) || 0 });
+  });
+  (payload["食事"] && payload["食事"].rows || []).forEach(r => {
+    if (!r[0]) return;
+    nextMeals.push({ id: uid(), date: String(r[0]).slice(0,10), mealType: r[1] || "朝食", text: r[2] || "", calories: Number(r[3]) || 0, protein: Number(r[4]) || 0, fat: Number(r[5]) || 0, carb: Number(r[6]) || 0, createdAt: Date.now() });
+  });
+  entries = nextEntries.sort((a,b) => a.date < b.date ? 1 : -1);
+  weightEntries = nextWeights;
+  mealEntries = nextMeals.sort((a,b) => a.date < b.date ? 1 : -1);
 }
 
 // iOS Safari(特にホーム画面に追加したPWA)では、アプリがバックグラウンドから
@@ -483,36 +529,66 @@ async function fetchWithRetry_(url, options, retries = 1, delayMs = 400) {
   }
 }
 
+// Apps Scriptへの共通POST。トークンを必ず添えて、レスポンスのJSON化まで面倒を見る。
+async function gasPost(payload) {
+  const res = await fetchWithRetry_(gasConfig.url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(Object.assign({ token: gasConfig.token }, payload)),
+  });
+  try {
+    return await res.json();
+  } catch (parseErr) {
+    // Apps Scriptがエラー時にHTML(ログイン画面など)を返すとここに来る。
+    // 典型的な原因は「デプロイ時のアクセス権限が「全員」になっていない」。
+    throw new Error(`応答がJSONではありません(HTTP ${res.status})。Apps Scriptのデプロイ設定(アクセスできるユーザー:全員)をご確認ください。`);
+  }
+}
+
+// 記録するたびに全件を送っていたので、連続入力すると同じ処理が何本も並走し、
+// あとから始まったリクエストが先に終わって古いデータで上書きする可能性があった。
+// (1)一定時間まとめてから送る (2)同時に1本しか走らせない、の2点で直す。
+const SYNC_DEBOUNCE_MS = 2500;
+let syncTimer = null;
+let syncInFlight = false;
+let syncPending = false;
+function scheduleSync() {
+  if (!gasConfigured()) { syncStatus = "idle"; renderSyncStatus(); return; }
+  syncPending = true;
+  if (syncStatus !== "syncing") { syncStatus = "pending"; renderSyncStatus(); }
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { syncTimer = null; syncToSheet(); }, SYNC_DEBOUNCE_MS);
+}
+// 画面を閉じる/バックグラウンドに回るときは、待ち中の変更を取りこぼさないよう即送信する。
+function flushSync() {
+  if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+  if (syncPending) syncToSheet();
+}
 async function syncToSheet() {
-  if (!GAS_URL || GAS_URL.indexOf("PUT_YOUR") === 0) { syncStatus = "idle"; renderSyncStatus(); return; }
+  if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+  if (!gasConfigured()) { syncStatus = "idle"; renderSyncStatus(); return; }
+  if (syncInFlight) { syncPending = true; return; } // 走っている分が終わってから追いかける
+  syncInFlight = true;
+  syncPending = false;
   syncStatus = "syncing"; renderSyncStatus();
   try {
-    const res = await fetchWithRetry_(GAS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ rows: buildRows() }),
-    });
-    let data;
-    try {
-      data = await res.json();
-    } catch (parseErr) {
-      // Apps Scriptがエラー時にHTML(ログイン画面など)を返すとここに来る。
-      // 典型的な原因は「デプロイ時のアクセス権限が「全員」になっていない」。
-      throw new Error(`応答がJSONではありません(HTTP ${res.status})。Apps Scriptのデプロイ設定(アクセスできるユーザー:全員)をご確認ください。`);
-    }
+    const data = await gasPost({ action: "save", payload: buildPayload() });
     if (data && data.status === "ok") {
       syncStatus = "synced";
       lastSyncedAt = new Date();
       lastSyncError = null;
     } else {
       syncStatus = "error";
-      lastSyncError = (data && data.message) ? String(data.message) : `不明なエラー(HTTP ${res.status})`;
+      lastSyncError = (data && data.message) ? String(data.message) : "不明なエラー";
     }
   } catch (e) {
     syncStatus = "error";
     lastSyncError = friendlySyncError_(e && e.message ? e.message : String(e));
   }
+  syncInFlight = false;
   renderSyncStatus();
+  // 送信中にさらに変更があった場合は、その分をもう一度だけ送る。
+  if (syncPending && syncStatus !== "error") { syncPending = false; syncToSheet(); return; }
   // 設定タブを開いているときは、同期カードのエラー詳細表示も最新化する
   // (ヘッダーの☁️アイコンだけでなく、タップ後の結果がその場で見えるように)。
   if (activeTab === "settings") renderTabContent();
@@ -521,9 +597,10 @@ function renderSyncStatus() {
   const el = document.getElementById("sync-status");
   if (!el) return;
   el.classList.toggle("error", syncStatus === "error");
-  const icon = { idle: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️" }[syncStatus];
+  const icon = { idle: "☁️", pending: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️" }[syncStatus];
   const text = {
-    idle: GAS_URL.indexOf("PUT_YOUR") === 0 ? "Google Sheets 未設定" : "Google Sheets 未同期",
+    idle: gasConfigured() ? "Google Sheets 未同期" : "Google Sheets 未設定",
+    pending: "変更あり(まもなく同期)",
     syncing: "同期中...",
     synced: `同期済み${lastSyncedAt ? ` (${String(lastSyncedAt.getHours()).padStart(2,"0")}:${String(lastSyncedAt.getMinutes()).padStart(2,"0")})` : ""}`,
     error: "同期エラー(タップして再試行)",
@@ -532,7 +609,66 @@ function renderSyncStatus() {
 }
 
 // ============ AI ADVICE HELPERS ============
-// Rule-based "AI": no external AI API is called.
+// 下の computeTargets / generateDailyAdvice / generateBalanceAdvice はすべて
+// ルールベースの計算で、外部AIには接続していない(オフラインでも動く既定の動作)。
+// 設定タブで接続先を登録している場合は、fetchAiAdvice() でApps Script経由の
+// Gemini に直近のデータを渡し、本物のAIコメントを取得できる。取得できないときは
+// 常にこのルールベースの文言にフォールバックする。
+const AI_ADVICE_KEY = "training-log-ai-advice";
+let aiAdvice = null;          // {date, text}
+let aiAdviceStatus = "idle";  // idle | loading | error
+let aiAdviceError = null;
+function loadAiAdvice() {
+  try {
+    const raw = localStorage.getItem(AI_ADVICE_KEY);
+    if (raw) aiAdvice = JSON.parse(raw);
+  } catch (e) { aiAdvice = null; }
+  // 日付が変わったら前日のコメントは捨てる
+  if (aiAdvice && aiAdvice.date !== localDateStr()) aiAdvice = null;
+}
+// 直近14日分だけを要約して送る。全履歴を送るとトークンも通信量も無駄になる。
+function buildAdviceContext() {
+  const since = localDateStr(new Date(Date.now() - 13 * 86400000));
+  const targets = getTargets();
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  return {
+    today: localDateStr(),
+    mood: moodByDate[localDateStr()] || null,
+    profile: profile ? { age: profile.age, gender: profile.gender, height: profile.height, activity: profile.activity, timeAvail: profile.timeAvail } : null,
+    goals: { weight: goals.weight, weeklyFreq: goals.weeklyFreq },
+    currentWeight: latestWeight ? latestWeight.weight : null,
+    targets: targets ? { tdee: targets.tdee, targetCalories: targets.targetCalories, targetProtein: targets.targetProtein } : null,
+    weights: weightEntries.filter(w => w.date >= since).map(w => [w.date, w.weight]),
+    training: entries.filter(e => e.date >= since).map(e => e.type === "strength"
+      ? [e.date, "筋トレ", e.part, e.exercise || "", e.weight, e.reps]
+      : [e.date, "有酸素", e.exercise, e.minutes]),
+    meals: mealEntries.filter(m => m.date >= since).map(m => [m.date, m.mealType, m.text, m.calories || 0, m.protein || 0, m.fat || 0, m.carb || 0]),
+  };
+}
+async function fetchAiAdvice() {
+  if (!gasConfigured()) {
+    aiAdviceStatus = "error";
+    aiAdviceError = "設定タブで接続先URLとトークンを登録すると、AIコメントを取得できます。";
+    renderTabContent();
+    return;
+  }
+  aiAdviceStatus = "loading"; aiAdviceError = null; renderTabContent();
+  try {
+    const data = await gasPost({ action: "advice", context: buildAdviceContext() });
+    if (data && data.status === "ok" && data.text) {
+      aiAdvice = { date: localDateStr(), text: String(data.text) };
+      try { localStorage.setItem(AI_ADVICE_KEY, JSON.stringify(aiAdvice)); } catch (e) {}
+      aiAdviceStatus = "idle";
+    } else {
+      aiAdviceStatus = "error";
+      aiAdviceError = (data && data.message) ? String(data.message) : "AIコメントを取得できませんでした(Apps Script側のGEMINI_API_KEY設定をご確認ください)";
+    }
+  } catch (e) {
+    aiAdviceStatus = "error";
+    aiAdviceError = friendlySyncError_(e && e.message ? e.message : String(e));
+  }
+  renderTabContent();
+}
 function computeTargets(p, weight, goalWeight) {
   const age = Number(p.age), height = Number(p.height);
   if (!age || !height || !weight) return null;
@@ -686,6 +822,87 @@ function generateBalanceAdvice(history) {
   return { tone:"caution", icon:"💡", text:`直近の平均収支は1日あたり${avg>=0?"+":""}${avgR}kcalで、体重維持の目安から少しずれています。食事や運動量を見直してみましょう。` };
 }
 
+// ============ BACKUP / RESTORE ============
+// これまで「すべて削除」しかなく、記録の持ち出しも復元もできなかった。
+// localStorageはブラウザに消される可能性があるので、手元にファイルで残せるようにする。
+function exportJson() {
+  try {
+    const dump = {
+      app: "training-log", version: APP_VERSION, exportedAt: new Date().toISOString(),
+      entries, weightEntries, mealEntries, goals, profile, moodByDate,
+      exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes, routineMaster,
+    };
+    const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `training-log-${localDateStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    dataOpMessage = "書き出しました。ファイルアプリなどに保存してください。"; dataOpError = false;
+  } catch (e) {
+    dataOpMessage = "書き出しに失敗しました: " + (e && e.message ? e.message : String(e)); dataOpError = true;
+  }
+  renderTabContent();
+}
+function importJsonFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(String(reader.result));
+      if (!data || (!Array.isArray(data.entries) && !Array.isArray(data.mealEntries))) {
+        throw new Error("このアプリの書き出しファイルではないようです");
+      }
+      entries = data.entries || [];
+      weightEntries = data.weightEntries || [];
+      mealEntries = data.mealEntries || [];
+      if (data.goals) goals = Object.assign({}, goals, data.goals);
+      if (data.profile) profile = data.profile;
+      moodByDate = data.moodByDate || {};
+      exerciseMaster = data.exerciseMaster || [];
+      mealMaster = data.mealMaster || [];
+      lastStrengthByExercise = data.lastStrengthByExercise || {};
+      lastCardioMinutes = data.lastCardioMinutes || {};
+      routineMaster = data.routineMaster || [];
+      seedExerciseMasterIfEmpty();
+      saveState();
+      dataOpMessage = `復元しました(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)`;
+      dataOpError = false;
+      scheduleSync();
+      renderApp();
+    } catch (e) {
+      dataOpMessage = "復元に失敗しました: " + (e && e.message ? e.message : String(e));
+      dataOpError = true;
+      renderTabContent();
+    }
+  };
+  reader.onerror = () => {
+    dataOpMessage = "ファイルを読み込めませんでした"; dataOpError = true; renderTabContent();
+  };
+  reader.readAsText(file);
+}
+async function restoreFromSheet() {
+  if (!gasConfigured()) {
+    dataOpMessage = "先に接続設定(URL・トークン)を保存してください"; dataOpError = true; renderTabContent(); return;
+  }
+  dataOpMessage = "シートから読み込み中..."; dataOpError = false; renderTabContent();
+  try {
+    const data = await gasPost({ action: "load" });
+    if (!data || data.status !== "ok" || !data.payload) throw new Error((data && data.message) || "読み込みに失敗しました");
+    applyPayload(data.payload);
+    saveState();
+    dataOpMessage = `シートから復元しました(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)`;
+    dataOpError = false;
+    renderApp();
+  } catch (e) {
+    dataOpMessage = "シートからの復元に失敗しました: " + friendlySyncError_(e && e.message ? e.message : String(e));
+    dataOpError = true;
+    renderTabContent();
+  }
+}
+
 // ============ CHART HELPERS ============
 function lineChartSvg(points, colorHex, goalValue) {
   if (points.length < 2) return '<p class="muted">データが2件以上になるとグラフが表示されます。</p>';
@@ -812,7 +1029,10 @@ function renderOnboarding() {
       if (key) onboardDraft[key] = inp.value;
     });
   });
-  document.getElementById("app").addEventListener("click", handleOnboardClick);
+  if (!onboardListenerBound) {
+    document.getElementById("app").addEventListener("click", handleOnboardClick);
+    onboardListenerBound = true;
+  }
 }
 function initialPlanPreview() {
   const w = Number(onboardDraft.weight) || 0, gw = Number(onboardDraft.goalWeight) || 0;
@@ -970,7 +1190,13 @@ function todayHtml() {
     <div class="card">
       <p class="section-title">🤖 AIのひとこと</p>
       <div class="row" style="margin-bottom:10px;">${moodBtns}</div>
-      <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${esc(generateDailyAdvice())}</p>
+      <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${
+        aiAdvice ? esc(aiAdvice.text).replace(/\n/g, "<br>") : esc(generateDailyAdvice())
+      }</p>
+      <div class="wrap" style="margin-bottom:10px;">
+        <button class="chip" data-action="fetch-ai-advice">${aiAdviceStatus === "loading" ? "🔄 AIに問い合わせ中..." : (aiAdvice ? "🤖 AIコメントを更新" : "🤖 AIにコメントをもらう")}</button>
+      </div>
+      ${aiAdviceStatus === "error" && aiAdviceError ? `<p style="font-size:11px;margin:0 0 10px;color:var(--coral);line-height:1.5;">${esc(aiAdviceError)}</p>` : ""}
       <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
         <div style="flex:1;min-width:0;">
           <span class="muted">今日のおすすめ</span>
@@ -978,7 +1204,9 @@ function todayHtml() {
         </div>
         <button class="chip active-b" data-action="quicklog-workout" style="flex:0 0 auto;">記録する</button>
       </div>
-      <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの簡易アドバイスです(外部AIには接続していません)</p>
+      <p class="muted" style="font-size:10.5px;margin:8px 0 0;">${aiAdvice
+        ? "※Gemini による生成コメントです(あくまで一般的な目安。体調に不安があるときは医療機関へ)"
+        : "※ルールベースの簡易アドバイスです(外部AIには接続していません)"}</p>
     </div>
 
     <div class="card">
@@ -1373,7 +1601,7 @@ function renderTrainingFormOptions() {
   const currentExercise = exerciseInput ? exerciseInput.value.trim() : "";
   const exOptions = exerciseNamesForPart(selectedPart);
   document.getElementById("exercise-buttons").innerHTML = exOptions.length
-    ? exOptions.map(ex => `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${ex}">${ex}</button>`).join("")
+    ? exOptions.map(ex => `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${esc(ex)}">${esc(ex)}</button>`).join("")
     : '<span class="muted" style="font-size:11px;">未登録(設定タブの「種目マスタ」から追加できます)</span>';
   document.getElementById("cardio-buttons").innerHTML = CARDIO_OPTIONS.map(c =>
     `<button class="chip ${selectedCardio===c?"active-b":""}" data-action="select-cardio" data-val="${c}">${c}</button>`).join("");
@@ -1429,6 +1657,14 @@ function settingsHtml() {
       <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
       <button class="chip" data-action="retry-sync">今すぐ同期を試す</button>
       ${syncStatus === "error" && lastSyncError ? `<p style="font-size:11px;margin:10px 0 0;color:var(--coral);line-height:1.5;">エラー内容: ${esc(lastSyncError)}</p>` : ""}
+      <div style="margin-top:12px;">
+        <label class="label">Apps Script Webアプリ URL</label>
+        <input type="url" id="gas-url-input" value="${esc(gasConfig.url)}" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:8px;font-size:12px;">
+        <label class="label">アクセストークン</label>
+        <input type="password" id="gas-token-input" value="${esc(gasConfig.token)}" placeholder="Apps Script側に設定した合言葉" style="margin-bottom:8px;font-size:12px;">
+        <button class="chip active-b" data-action="save-gas-config">接続設定を保存</button>
+        <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">この2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはApps Script側のスクリプトプロパティ <span class="mono">APP_TOKEN</span> と一致させてください。</p>
+      </div>
     </div>
 
     <div class="card">
@@ -1517,6 +1753,18 @@ function settingsHtml() {
     <div class="card">
       ${settingsSectionHeader("data", "データ")}
       <div id="settings-section-data" class="${settingsOpenSections.data ? "" : "hidden"}" style="margin-top:10px;">
+        <p class="muted" style="font-size:11px;margin:0 0 8px;line-height:1.5;">記録はこの端末のブラウザに保存されています。iOSがストレージを消すと失われるので、ときどきバックアップを取ってください。</p>
+        <div class="wrap" style="margin-bottom:10px;">
+          <button class="chip" data-action="export-json">⬇️ JSONで書き出し</button>
+          <button class="chip" data-action="import-json">⬆️ JSONから復元</button>
+          <button class="chip" data-action="restore-from-sheet">☁️ シートから復元</button>
+        </div>
+        <input type="file" id="import-file-input" accept="application/json,.json" class="hidden">
+        ${confirmRestore
+          ? `<p class="muted" style="margin-bottom:8px;color:var(--coral);">${confirmRestore === "sheet" ? "シートの内容で今の記録を上書きします。よろしいですか?(現在の記録は失われます)" : "選択したファイルの内容で今の記録を上書きします。よろしいですか?(現在の記録は失われます)"}</p>
+             <div class="row" style="margin-bottom:10px;"><button class="chip" data-action="restore-confirm-yes" style="color:var(--coral);">上書きして復元する</button><button class="chip" data-action="restore-confirm-no">キャンセル</button></div>`
+          : ""}
+        ${dataOpMessage ? `<p style="font-size:11px;margin:0 0 10px;color:${dataOpError ? "var(--coral)" : "var(--ink)"};line-height:1.5;">${esc(dataOpMessage)}</p>` : ""}
         ${confirmReset
           ? `<p class="muted" style="margin-bottom:8px;">本当にすべてのデータを削除しますか?</p>
              <div class="row"><button class="chip" data-action="reset-yes" style="color:var(--coral);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`
@@ -1609,7 +1857,7 @@ function renderEditModal() {
         <label class="label">部位</label>
         <div class="wrap" style="margin-bottom:10px;">${PARTS.map(p => `<button class="chip ${editing.tempPart===p?"active-a":""}" data-edit-action="set-part" data-val="${p}">${p}</button>`).join("")}</div>
         <label class="label">種目(任意)</label>
-        <div class="wrap" style="margin-bottom:8px;">${exOptions.map(ex => `<button class="chip ${editing.draftExercise===ex?"active-a":""}" data-edit-action="set-exercise" data-val="${ex}">${ex}</button>`).join("")}</div>
+        <div class="wrap" style="margin-bottom:8px;">${exOptions.map(ex => `<button class="chip ${editing.draftExercise===ex?"active-a":""}" data-edit-action="set-exercise" data-val="${esc(ex)}">${esc(ex)}</button>`).join("")}</div>
         <input type="text" id="edit-exercise" value="${esc(editing.draftExercise||"")}" style="margin-bottom:10px;">
         <div class="row" style="margin-bottom:10px;">
           <div style="flex:1;"><label class="label">回数</label><input type="number" id="edit-reps" value="${editing.draftReps}" class="mono"></div>
@@ -1693,14 +1941,14 @@ function handleEditSave() {
     m.carb = Number(document.getElementById("edit-carb").value) || 0;
   }
   editing = null;
-  saveState(); renderTabContent(); renderEditModal(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); renderEditModal(); scheduleSync();
 }
 function handleEditDelete() {
   if (editing.kind === "training") entries = entries.filter(x => x.id !== editing.id);
   else if (editing.kind === "weight") weightEntries = weightEntries.filter(x => x.date !== editing.date);
   else if (editing.kind === "meal") mealEntries = mealEntries.filter(x => x.id !== editing.id);
   editing = null;
-  saveState(); renderTabContent(); renderEditModal(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); renderEditModal(); scheduleSync();
 }
 
 // ============ ACTIONS ============
@@ -1731,7 +1979,7 @@ function handleAddTraining() {
     lastCardioMinutes[selectedCardio === "その他" ? customVal : selectedCardio] = Number(minutes);
   }
   selectedCardio = "ランニング";
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 function handleAddWeight() {
   const date = document.getElementById("weight-date-input").value || localDateStr();
@@ -1739,7 +1987,7 @@ function handleAddWeight() {
   if (!val || val <= 0) return;
   weightEntries = weightEntries.filter(w => w.date !== date);
   weightEntries.unshift({ date, weight: val });
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 function handleAddMeal() {
   const text = document.getElementById("meal-name-input").value.trim();
@@ -1754,7 +2002,7 @@ function handleAddMeal() {
     carb: Number(document.getElementById("meal-carb-input").value) || 0,
     createdAt: Date.now(),
   });
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 
 // ============ 毎日の入力を楽にするためのショートカット機能 ============
@@ -1764,13 +2012,13 @@ function relogTraining(id) {
   const src = entries.find(x => x.id === id);
   if (!src) return;
   entries.unshift({ ...src, id: uid(), date: localDateStr(), createdAt: Date.now() });
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 function relogMeal(id) {
   const src = mealEntries.find(x => x.id === id);
   if (!src) return;
   mealEntries.unshift({ ...src, id: uid(), date: localDateStr(), createdAt: Date.now() });
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 // 「今日」タブ用: 昨日記録したトレーニング・食事をまとめて今日にコピーする。
 function yesterdayDateStr() { return localDateStr(new Date(Date.now() - 86400000)); }
@@ -1782,18 +2030,18 @@ function copyYesterdayToToday() {
   const y = yesterdayDateStr(), today = localDateStr();
   entries.filter(e => e.date === y).forEach(e => entries.unshift({ ...e, id: uid(), date: today, createdAt: Date.now() }));
   mealEntries.filter(m => m.date === y).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 // 運動だけ/食事区分(朝食・昼食・夕食・間食)だけ、を個別にコピーしたいという要望向け。
 function copyYesterdayTraining() {
   const y = yesterdayDateStr(), today = localDateStr();
   entries.filter(e => e.date === y).forEach(e => entries.unshift({ ...e, id: uid(), date: today, createdAt: Date.now() }));
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 function copyYesterdayMealType(mealType) {
   const y = yesterdayDateStr(), today = localDateStr();
   mealEntries.filter(m => m.date === y && m.mealType === mealType).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 function yesterdayMealTypesAvailable() {
   const y = yesterdayDateStr();
@@ -1819,7 +2067,7 @@ function applyRoutine(routineId) {
     if (it.type === "strength") entries.unshift({ id: uid(), type:"strength", date: today, part: it.part, exercise: it.exercise, weight: it.weight, reps: it.reps, createdAt: Date.now() });
     else entries.unshift({ id: uid(), type:"cardio", date: today, exercise: it.exercise, minutes: it.minutes, createdAt: Date.now() });
   });
-  saveState(); renderTabContent(); renderSyncStatus(); syncToSheet();
+  saveState(); renderTabContent(); scheduleSync();
 }
 
 // ============ EVENTS (bound once; #app content is replaced via innerHTML, so delegation is required) ============
@@ -1911,9 +2159,9 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "edit-training") { openEdit("training", t.dataset.id); }
   else if (action === "edit-weight") { openEdit("weight", t.dataset.date); }
   else if (action === "edit-meal") { openEdit("meal", t.dataset.id); }
-  else if (action === "del-training") { entries = entries.filter(x => x.id !== t.dataset.id); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
-  else if (action === "del-weight") { weightEntries = weightEntries.filter(w => w.date !== t.dataset.date); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
-  else if (action === "del-meal") { mealEntries = mealEntries.filter(m => m.id !== t.dataset.id); saveState(); renderTabContent(); renderSyncStatus(); syncToSheet(); }
+  else if (action === "del-training") { entries = entries.filter(x => x.id !== t.dataset.id); saveState(); renderTabContent(); scheduleSync(); }
+  else if (action === "del-weight") { weightEntries = weightEntries.filter(w => w.date !== t.dataset.date); saveState(); renderTabContent(); scheduleSync(); }
+  else if (action === "del-meal") { mealEntries = mealEntries.filter(m => m.id !== t.dataset.id); saveState(); renderTabContent(); scheduleSync(); }
   else if (action === "relog-training") { relogTraining(t.dataset.id); }
   else if (action === "relog-meal") { relogMeal(t.dataset.id); }
   else if (action === "copy-yesterday") { copyYesterdayToToday(); }
@@ -1935,6 +2183,37 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "retry-sync") { syncToSheet(); }
+  else if (action === "fetch-ai-advice") { fetchAiAdvice(); }
+  else if (action === "save-gas-config") {
+    const urlEl = document.getElementById("gas-url-input");
+    const tokenEl = document.getElementById("gas-token-input");
+    const url = urlEl ? urlEl.value.trim() : "";
+    const token = tokenEl ? tokenEl.value.trim() : "";
+    gasConfig = { url, token };
+    saveConfig();
+    if (gasConfigured()) { syncStatus = "idle"; syncToSheet(); }
+    else { syncStatus = "idle"; renderSyncStatus(); }
+    renderTabContent();
+  }
+  else if (action === "export-json") { exportJson(); }
+  // 復元(JSONから/シートから)は現在の記録を無条件に上書きするため、実行前に必ず
+  // 確認ステップを挟む(confirmResetの「すべて削除」と同じ二段階確認パターン)。
+  else if (action === "import-json") { confirmRestore = "file"; renderTabContent(); }
+  else if (action === "restore-from-sheet") { confirmRestore = "sheet"; renderTabContent(); }
+  else if (action === "restore-confirm-no") { confirmRestore = null; renderTabContent(); }
+  else if (action === "restore-confirm-yes") {
+    const kind = confirmRestore;
+    confirmRestore = null;
+    if (kind === "file") {
+      const fileEl = document.getElementById("import-file-input");
+      if (fileEl) fileEl.click();
+      else renderTabContent();
+    } else if (kind === "sheet") {
+      restoreFromSheet();
+    } else {
+      renderTabContent();
+    }
+  }
   else if (action === "toggle-settings-section") {
     const key = t.dataset.val;
     settingsOpenSections[key] = !settingsOpenSections[key];
@@ -2016,6 +2295,12 @@ document.getElementById("app").addEventListener("change", (e) => {
     profile.height = e.target.value; saveState(); renderTabContent();
   }
 });
+document.getElementById("app").addEventListener("change", (e) => {
+  if (e.target.id === "import-file-input" && e.target.files && e.target.files[0]) {
+    importJsonFile(e.target.files[0]);
+    e.target.value = "";
+  }
+});
 document.getElementById("app").addEventListener("click", (e) => {
   if (e.target.closest("#sync-status") && syncStatus === "error") syncToSheet();
 });
@@ -2038,7 +2323,12 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 
 // ============ INIT ============
 selectedCalDate = localDateStr();
+loadConfig();
 loadState();
+loadAiAdvice();
+// 未送信の変更を残したままアプリを閉じないよう、離脱時にまとめて送る。
+window.addEventListener("pagehide", flushSync);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushSync(); });
 if (!profile) {
   // Returning user upgrading from a version without the AI profile: prefill the
   // onboarding draft from whatever they already recorded, so they aren't asked

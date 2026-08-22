@@ -1,158 +1,229 @@
 /**
- * トレーニングログアプリ用 Google Apps Script
+ * Training Log + AI — Apps Script バックエンド (v8)
  *
- * 使い方は README.md を参照してください。概要:
- * 1. 記録用のGoogleスプレッドシートを新規作成する
- * 2. 拡張機能 > Apps Script を開き、このファイルの内容を貼り付ける
- * 3. デプロイ > 新しいデプロイ > 種類「ウェブアプリ」
- *    - 実行するユーザー: 自分
- *    - アクセスできるユーザー: 全員
- * 4. 発行されたURLを index.html の GAS_URL に貼り付ける
+ * 【スクリプトプロパティに設定するもの】
+ *   APP_TOKEN       … アプリの「設定」タブに入れる合言葉。適当な長い文字列でOK。
+ *                     (例: openssl rand -hex 24 の出力)
+ *   GEMINI_API_KEY  … Google AI Studio で発行したAPIキー。AI機能を使う場合のみ。
+ *   SHEET_ID        … 書き込み先スプレッドシートのID。省略時はこのスクリプトの
+ *                     コンテナ(バインドされたシート)を使う。
  *
- * 【オプション】「🔍 AIで栄養を調べる」機能を使う場合のみ、追加でもう1手順必要です:
- * 5. Google AI Studio (https://aistudio.google.com/apikey) で無料のGemini APIキーを取得する
- * 6. このApps Scriptプロジェクトの「プロジェクトの設定」→「スクリプト プロパティ」で
- *    プロパティ名 GEMINI_API_KEY / 値にそのキーを追加して、必ず保存ボタンまで押す
- * この機能を使わない場合、5・6の手順は不要です(他の機能には一切影響しません)。
- *
- * 【設定確認用】6.まで終えたのにアプリ側で「APIキーが未設定」と出る場合は、
- * このデプロイURLの末尾に ?check=key を付けてSafariで直接開いてください
- * (例: https://script.google.com/macros/s/.../exec?check=key )。
- * キーの中身は表示せず、設定できているかどうかと文字数だけを返します。
- * コードを今回のバージョンに更新した場合は、末尾の手順で必ず「新しいバージョン」として
- * デプロイし直してください(スクリプト プロパティの追加だけなら再デプロイ不要ですが、
- * コード自体の変更は再デプロイしないと反映されません)。
+ * 【デプロイ】
+ *   「ウェブアプリ」/ 実行するユーザー: 自分 / アクセスできるユーザー: 全員
+ *   ※「全員」でないと動きませんが、APP_TOKEN が無いリクエストは弾くので、
+ *     URLを知られただけでは書き込まれません。
  */
 
-const SHEET_NAME = "ログ";
-const HEADER = ["日付", "カテゴリ", "項目1", "項目2", "項目3", "項目4"];
-const GEMINI_MODEL = "gemini-2.0-flash"; // 変更したい場合はここを書き換えてください
+var GEMINI_MODEL = 'gemini-2.0-flash';
 
-function getSheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_NAME);
-  }
-  return sheet;
+function doGet() {
+  return json_({ status: 'error', message: 'POST only' });
 }
 
 function doPost(e) {
   try {
-    const body = JSON.parse(e.postData.contents);
+    var body = JSON.parse(e.postData.contents);
 
-    // 「🔍 AIで栄養を調べる」からのリクエストはシート同期とは別処理。
-    if (body.action === "estimateNutrition") {
-      return handleEstimateNutrition_(body.foodName);
+    // ---- 認証 ----------------------------------------------------------
+    var expected = prop_('APP_TOKEN');
+    if (!expected) return json_({ status: 'error', message: 'サーバ側にAPP_TOKENが設定されていません' });
+    if (!body.token || !safeEqual_(String(body.token), expected)) {
+      return json_({ status: 'error', message: '認証に失敗しました(トークンが一致しません)' });
     }
 
-    // 既定の動作(これまで通り): 記録全体をシートへ同期
-    const rows = body.rows || [];
-    const sheet = getSheet_();
+    var action = body.action || 'save';
+    if (action === 'save')              return json_(handleSave_(body.payload));
+    if (action === 'load')              return json_(handleLoad_());
+    if (action === 'estimateNutrition') return json_(handleNutrition_(body.foodName));
+    if (action === 'advice')            return json_(handleAdvice_(body.context));
+    return json_({ status: 'error', message: '不明なaction: ' + action });
 
-    sheet.clearContents();
-    sheet.appendRow(HEADER);
-    if (rows.length > 0) {
-      sheet.getRange(2, 1, rows.length, HEADER.length).setValues(rows);
-    }
-
-    return ContentService
-      .createTextOutput(JSON.stringify({ status: "ok", count: rows.length }))
-      .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ status: "error", message: String(err) }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return json_({ status: 'error', message: String(err && err.message ? err.message : err) });
   }
 }
 
-// 食品名からカロリー・タンパク質・脂質・炭水化物を概算する(Google Gemini APIを利用)。
-// GEMINI_API_KEY が未設定の場合はエラーを返すだけで、シート同期など他の機能には影響しない。
-function handleEstimateNutrition_(foodName) {
-  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
-  if (!apiKey) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ status: "error", message: "GEMINI_API_KEY が未設定です(Apps Scriptのスクリプトプロパティを確認してください)" }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-  if (!foodName) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ status: "error", message: "食品名が空です" }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
+/* ====================== 保存 / 読み込み ====================== */
 
-  const prompt = "次の食品・料理の一般的な1人前あたりのおおよその栄養価を推定してください。" +
-    "出力は必ず次のJSON形式のみとし、説明文やコードブロックの記号は付けないでください。" +
-    '{"kcal": 数値, "protein": 数値(g), "fat": 数値(g), "carb": 数値(g)}\n' +
-    "食品名: " + foodName;
-
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_MODEL + ":generateContent?key=" + apiKey;
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
-  };
-
+/**
+ * payload は { シート名: {header:[...], rows:[[...],...]}, ... } の形。
+ * 以前は全カテゴリを同じ6列に詰め込んでいたため、行によって列の意味が変わって
+ * 集計に使えなかった。カテゴリごとにシートを分け、数値は数値のまま書き込む。
+ */
+function handleSave_(payload) {
+  if (!payload || typeof payload !== 'object') return { status: 'error', message: 'payloadがありません' };
+  var ss = spreadsheet_();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { status: 'error', message: '他の同期処理と競合しました。少し待って再試行してください。' };
   try {
-    const res = UrlFetchApp.fetch(url, {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true,
+    var written = 0;
+    Object.keys(payload).forEach(function (name) {
+      var t = payload[name] || {};
+      var header = t.header || [];
+      var rows = t.rows || [];
+      var sh = ss.getSheetByName(name) || ss.insertSheet(name);
+      sh.clear();
+      if (header.length) {
+        sh.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
+        sh.setFrozenRows(1);
+      }
+      if (rows.length) {
+        var width = header.length || rows[0].length;
+        var norm = rows.map(function (r) {
+          var out = r.slice(0, width);
+          while (out.length < width) out.push('');
+          return out;
+        });
+        sh.getRange(2, 1, norm.length, width).setValues(norm);
+        written += norm.length;
+      }
+      sh.autoResizeColumns(1, Math.max(1, header.length));
     });
-    const code = res.getResponseCode();
-    const text = res.getContentText();
-    if (code < 200 || code >= 300) {
-      return ContentService
-        .createTextOutput(JSON.stringify({ status: "error", message: "Gemini API エラー(" + code + "): " + text.slice(0, 300) }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    const data = JSON.parse(text);
-    const raw = data.candidates && data.candidates[0] && data.candidates[0].content &&
-      data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
-      data.candidates[0].content.parts[0].text;
-    if (!raw) {
-      return ContentService
-        .createTextOutput(JSON.stringify({ status: "error", message: "Geminiからの応答を解析できませんでした" }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    const nutrition = JSON.parse(raw);
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        status: "ok",
-        nutrition: {
-          kcal: Math.round(Number(nutrition.kcal) || 0),
-          protein: Math.round(Number(nutrition.protein) || 0),
-          fat: Math.round(Number(nutrition.fat) || 0),
-          carb: Math.round(Number(nutrition.carb) || 0),
-        },
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ status: "error", message: String(err) }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return { status: 'ok', written: written, at: new Date().toISOString() };
+  } finally {
+    lock.releaseLock();
   }
 }
 
-function doGet(e) {
-  // 動作確認用。ブラウザでWebアプリのURLを直接開いたときに返る内容。
-  // URLの末尾に ?check=key を付けて開くと、GEMINI_API_KEYがこのApps Scriptプロジェクトに
-  // 正しく設定されているかどうかを確認できます(キーの中身自体は表示されません。
-  // 設定の有無と文字数だけを返すので、安全に確認用として使えます)。
-  if (e && e.parameter && e.parameter.check === "key") {
-    const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        status: "ready",
-        geminiKeyConfigured: !!apiKey,
-        geminiKeyLength: apiKey ? apiKey.length : 0,
-        message: apiKey
-          ? "GEMINI_API_KEYはこのApps Scriptプロジェクトに設定されています(値は安全のため表示しません)。それでもアプリ側で「未設定」エラーが出る場合は、index.htmlのGAS_URLと、このプロジェクトのデプロイURLが一致しているかご確認ください。"
-          : "GEMINI_API_KEYはこのApps Scriptプロジェクトに設定されていません。「プロジェクトの設定」(歯車アイコン)→ 一番下の「スクリプト プロパティ」で、プロパティ名 GEMINI_API_KEY / 値にAPIキーを追加し、必ず保存ボタンまで押してください。",
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
+function handleLoad_() {
+  var ss = spreadsheet_();
+  var payload = {};
+  ['筋トレ', '有酸素', '体重', '食事'].forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) { payload[name] = { header: [], rows: [] }; return; }
+    var values = sh.getDataRange().getValues();
+    if (values.length < 1) { payload[name] = { header: [], rows: [] }; return; }
+    var header = values[0];
+    var rows = values.slice(1)
+      .filter(function (r) { return String(r[0] || '').trim() !== ''; })
+      .map(function (r) { return r.map(normalizeCell_); });
+    payload[name] = { header: header, rows: rows };
+  });
+  return { status: 'ok', payload: payload };
+}
+
+/** Sheetsが日付型で返してきたセルを YYYY-MM-DD の文字列に揃える。 */
+function normalizeCell_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return v;
+}
+
+/* ====================== Gemini ====================== */
+
+function handleNutrition_(foodName) {
+  if (!foodName) return { status: 'error', message: '食品名が空です' };
+  var key = prop_('GEMINI_API_KEY');
+  if (!key) return { status: 'error', message: 'GEMINI_API_KEYが未設定です' };
+
+  var prompt =
+    '次の食品の栄養価を、日本で一般的な1食あたりの目安量で概算してください。\n' +
+    '食品名: ' + foodName + '\n\n' +
+    'JSONのみを返してください。前置き・後書き・コードフェンスは不要です。\n' +
+    '形式: {"kcal": 数値, "protein": 数値, "fat": 数値, "carb": 数値}\n' +
+    'protein/fat/carb の単位はグラム、小数第1位まで。';
+
+  var text = callGemini_(key, prompt, 256);
+  var n = parseJson_(text);
+  if (!n || typeof n.kcal === 'undefined') {
+    return { status: 'error', message: 'AIの応答を解釈できませんでした' };
   }
-  return ContentService
-    .createTextOutput(JSON.stringify({ status: "ready", message: "このURLはPOST専用です。index.htmlから自動的に呼び出されます。URLの末尾に ?check=key を付けて開くと、GEMINI_API_KEYの設定状況を確認できます。" }))
+  return {
+    status: 'ok',
+    nutrition: {
+      kcal: Math.round(Number(n.kcal) || 0),
+      protein: round1_(n.protein),
+      fat: round1_(n.fat),
+      carb: round1_(n.carb),
+    },
+  };
+}
+
+/**
+ * 直近のトレーニング・食事・体重データを渡して、コメントを生成させる。
+ * アプリ側の「AIのひとこと」は既定ではルールベースなので、ここが唯一
+ * 本物のAIが文章を書く場所になる。
+ */
+function handleAdvice_(ctx) {
+  var key = prop_('GEMINI_API_KEY');
+  if (!key) return { status: 'error', message: 'GEMINI_API_KEYが未設定です' };
+  if (!ctx) return { status: 'error', message: 'contextがありません' };
+
+  var prompt =
+    'あなたは親しみやすいパーソナルトレーナー兼栄養サポート役です。\n' +
+    '以下は利用者の直近2週間の記録(JSON)です。これをもとに、日本語で3〜4文の短いコメントを書いてください。\n\n' +
+    '### 守ること\n' +
+    '- 具体的な数字や種目名に触れ、記録をちゃんと見ていると伝わる内容にする\n' +
+    '- 良かった点を1つ、次にやると良いことを1つ、必ず入れる\n' +
+    '- 断定的な医学的助言・診断はしない。極端な食事制限は勧めない\n' +
+    '- 記録が少ない日を責めない。前向きで落ち着いた口調で\n' +
+    '- 見出しや箇条書きは使わず、地の文だけで書く\n\n' +
+    '### 記録\n' +
+    JSON.stringify(ctx);
+
+  var text = callGemini_(key, prompt, 512);
+  if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
+  return { status: 'ok', text: String(text).trim() };
+}
+
+function callGemini_(apiKey, prompt, maxTokens) {
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+            GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
+  var res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: maxTokens || 512 },
+    }),
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code !== 200) throw new Error('Gemini APIエラー (HTTP ' + code + '): ' + body.slice(0, 300));
+  var data = JSON.parse(body);
+  var cand = data.candidates && data.candidates[0];
+  if (!cand || !cand.content || !cand.content.parts) return '';
+  return cand.content.parts.map(function (p) { return p.text || ''; }).join('');
+}
+
+/* ====================== ユーティリティ ====================== */
+
+function prop_(name) {
+  return PropertiesService.getScriptProperties().getProperty(name);
+}
+
+function spreadsheet_() {
+  var id = prop_('SHEET_ID');
+  if (id) return SpreadsheetApp.openById(id);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('SHEET_ID を設定するか、スプレッドシートにバインドしてください');
+  return ss;
+}
+
+/** 文字列比較の所要時間から中身を推測されないようにする(タイミング攻撃対策)。 */
+function safeEqual_(a, b) {
+  if (a.length !== b.length) return false;
+  var diff = 0;
+  for (var i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** ```json ... ``` で囲まれて返ってくることがあるので剥がしてからパースする。 */
+function parseJson_(text) {
+  if (!text) return null;
+  var cleaned = String(text).replace(/```json/gi, '').replace(/```/g, '').trim();
+  var start = cleaned.indexOf('{');
+  var end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1) return null;
+  try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (e) { return null; }
+}
+
+function round1_(v) {
+  var n = Number(v);
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
