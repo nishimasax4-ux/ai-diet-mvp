@@ -95,7 +95,7 @@
 // Google Apps Script Webアプリの URL をここに貼り付けてください(README参照)
 const GAS_URL = "https://script.google.com/macros/s/AKfycbyAAwRfWqvxwRBs9nQ3vva_-7gGZnUe0KaUtcYU_KIg3lRN_nhRk8Zqr8UXzbrCKY3D/exec";
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v4";
+const APP_VERSION = "v6";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -319,10 +319,13 @@ function applyFoodSuggestion(target, idx) {
   const f = (foodSuggestionCache[target] || [])[idx];
   if (!f) return;
   const ids = target === "meal"
-    ? { cal:"meal-cal-input", protein:"meal-protein-input", fat:"meal-fat-input", carb:"meal-carb-input" }
+    ? { name:"meal-name-input", suggest:"meal-name-suggestions", cal:"meal-cal-input", protein:"meal-protein-input", fat:"meal-fat-input", carb:"meal-carb-input" }
     : target === "master"
-    ? { cal:"master-meal-cal-input", protein:"master-meal-protein-input", fat:"master-meal-fat-input", carb:"master-meal-carb-input" }
-    : { cal:"edit-calories", protein:"edit-protein", fat:"edit-fat", carb:"edit-carb" };
+    ? { name:"master-meal-name-input", suggest:"master-meal-name-suggestions", cal:"master-meal-cal-input", protein:"master-meal-protein-input", fat:"master-meal-fat-input", carb:"master-meal-carb-input" }
+    : { name:"edit-text", suggest:"edit-meal-suggestions", cal:"edit-calories", protein:"edit-protein", fat:"edit-fat", carb:"edit-carb" };
+  // 候補をタップしたら、検索用に入力していた文字ではなく候補の食品名そのものを記録名として使う。
+  const nameEl = document.getElementById(ids.name);
+  if (nameEl) nameEl.value = f.name;
   const calEl = document.getElementById(ids.cal);
   if (calEl) calEl.value = f.kcal;
   const pEl = document.getElementById(ids.protein);
@@ -331,7 +334,10 @@ function applyFoodSuggestion(target, idx) {
   if (fEl) fEl.value = f.fat || "";
   const cEl = document.getElementById(ids.carb);
   if (cEl) cEl.value = f.carb || "";
+  const suggestEl = document.getElementById(ids.suggest);
+  if (suggestEl) suggestEl.innerHTML = "";
   if (target === "edit" && editing) {
+    editing.draftText = f.name;
     editing.draftCalories = f.kcal;
     editing.draftProtein = f.protein || "";
     editing.draftFat = f.fat || "";
@@ -362,7 +368,7 @@ async function aiLookupNutrition(target) {
   }
   if (statusEl) statusEl.textContent = "🔄 AIに問い合わせ中...(ネット接続が必要です)";
   try {
-    const res = await fetch(GAS_URL, {
+    const res = await fetchWithRetry_(GAS_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ action: "estimateNutrition", foodName }),
@@ -383,7 +389,7 @@ async function aiLookupNutrition(target) {
     if (target === "meal") openMealDetail();
     if (statusEl) statusEl.textContent = `✅ AI概算: ${n.kcal}kcal (P${n.protein} F${n.fat} C${n.carb}) ※目安です。正確な値がわかる場合は上書きしてください`;
   } catch (err) {
-    if (statusEl) statusEl.textContent = "⚠️ 通信エラーが発生しました: " + err.message;
+    if (statusEl) statusEl.textContent = "⚠️ 通信エラーが発生しました: " + friendlySyncError_(err.message);
   }
 }
 // 食事タブの「詳細を入力」セクションを開く(プリセット・カロリー候補をタップした
@@ -453,11 +459,35 @@ function buildRows() {
   return rows;
 }
 
+// iOS Safari(特にホーム画面に追加したPWA)では、アプリがバックグラウンドから
+// 復帰した直後などにfetch()が一時的に「Load failed」という汎用的なネットワーク
+// エラーで失敗することがある(WebKitの既知の挙動)。一度だけ短い間隔を空けて
+// 自動的に再試行することで、こうした一時的な失敗を吸収する。
+function sleep_(ms) { return new Promise(r => setTimeout(r, ms)); }
+// "Load failed"(Safari)や"Failed to fetch"(Chrome)など、fetch自体が届かなかった
+// ことを示す汎用的なネットワークエラーには、原因の見当がつくよう補足説明を添える。
+function friendlySyncError_(rawMessage) {
+  const msg = String(rawMessage || "");
+  if (/load failed|failed to fetch|networkerror|network error/i.test(msg)) {
+    return `${msg}(ネットワーク接続、またはApps ScriptのURL・デプロイ設定に問題がある可能性があります。時間をおいて再試行するか、SafariでそのURLを直接開けるか確認してください)`;
+  }
+  return msg;
+}
+async function fetchWithRetry_(url, options, retries = 1, delayMs = 400) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    if (retries <= 0) throw err;
+    await sleep_(delayMs);
+    return fetchWithRetry_(url, options, retries - 1, delayMs);
+  }
+}
+
 async function syncToSheet() {
   if (!GAS_URL || GAS_URL.indexOf("PUT_YOUR") === 0) { syncStatus = "idle"; renderSyncStatus(); return; }
   syncStatus = "syncing"; renderSyncStatus();
   try {
-    const res = await fetch(GAS_URL, {
+    const res = await fetchWithRetry_(GAS_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ rows: buildRows() }),
@@ -480,7 +510,7 @@ async function syncToSheet() {
     }
   } catch (e) {
     syncStatus = "error";
-    lastSyncError = e && e.message ? e.message : String(e);
+    lastSyncError = friendlySyncError_(e && e.message ? e.message : String(e));
   }
   renderSyncStatus();
   // 設定タブを開いているときは、同期カードのエラー詳細表示も最新化する
