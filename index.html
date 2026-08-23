@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v26";
+const APP_VERSION = "v28";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -127,7 +127,7 @@ const EXERCISES_BY_PART = {
 const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","その他"];
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
 const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "その他":5 };
-const STRENGTH_KCAL_PER_SET = 30; // 筋トレ1セットあたりの消費カロリー概算(目安)
+const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
 // 内蔵の食品カロリー概算表(外部APIには接続しません)。
@@ -202,7 +202,20 @@ const FOOD_CALORIE_DB = [
 const WEEKDAY = ["日","月","火","水","木","金","土"];
 const ACTIVITY_LEVELS = ["ほぼなし","週1-2回","週3-4回","ほぼ毎日"];
 const TIME_LEVELS = ["5-10分","10-15分","15-30分","30分以上","1時間"];
-const ACTIVITY_FACTOR = { "ほぼなし":1.2, "週1-2回":1.375, "週3-4回":1.55, "ほぼ毎日":1.725 };
+// ---- 日常生活の活動量(運動は【含まない】) ----
+// 消費カロリーの土台は「基礎代謝 × 日常生活の活動量」で出し、運動ぶんは記録された
+// トレーニングから実測ぶんだけを上乗せする。
+//
+// 【重要】以前はここで「運動習慣(週何回運動するか)」の係数(1.2〜1.725)を掛けたうえで、
+// さらにその日の運動の消費カロリーも足していた。運動習慣の係数はその中に運動ぶんを
+// 含んだ数字なので、運動が二重に計上され、消費を多く見積もりすぎていた
+// (「週3-4回」で1日あたり500〜600kcalほど過大)。カロリー収支の赤字が実際より
+// 大きく出てしまうため、土台からは運動ぶんを外し、実測のみを足す方式に変更した。
+const LIFESTYLE_LEVELS = ["デスクワーク中心","よく歩く・立ち仕事","力仕事が多い"];
+const LIFESTYLE_FACTOR = { "デスクワーク中心":1.2, "よく歩く・立ち仕事":1.35, "力仕事が多い":1.5 };
+const DEFAULT_LIFESTYLE = "デスクワーク中心";
+// 運動習慣は、おすすめ運動の頻度やAIへの申し送りにのみ使う。
+// (以前ここにあった運動習慣ごとの係数 ACTIVITY_FACTOR は、上記の二重計上の原因だったため廃止)
 const TIME_TO_LEVEL = { "5-10分":"low", "10-15分":"medium", "15-30分":"high", "30分以上":"high", "1時間":"high" };
 const DEFAULT_FREQ = { "ほぼなし":2, "週1-2回":3, "週3-4回":4, "ほぼ毎日":5 };
 // おすすめ運動プール。type ごとに内容が異なります:
@@ -620,6 +633,9 @@ function loadState() {
       mealEntries = data.mealEntries || [];
       if (data.goals) goals = Object.assign({}, goals, data.goals);
       if (data.profile) profile = data.profile;
+      // v27より前のプロフィールには「日常生活の活動量」が無いので既定値を補う。
+      // (消費カロリーの土台をこの項目で計算するようになったため。運動ぶんは記録から別途加算)
+      if (profile && !profile.lifestyle) profile.lifestyle = DEFAULT_LIFESTYLE;
       moodByDate = data.moodByDate || {};
       exerciseMaster = data.exerciseMaster || [];
       mealMaster = data.mealMaster || [];
@@ -852,10 +868,10 @@ function buildAdviceContext() {
   return {
     今日: localDateStr(),
     今日の調子: moodByDate[localDateStr()] || null,
-    プロフィール: profile ? { 年齢: profile.age, 性別: profile.gender, 身長cm: profile.height, 運動習慣: profile.activity, 使える時間: profile.timeAvail } : null,
+    プロフィール: profile ? { 年齢: profile.age, 性別: profile.gender, 身長cm: profile.height, 日常の活動量: profile.lifestyle || "デスクワーク中心", 運動習慣: profile.activity, 使える時間: profile.timeAvail } : null,
     目標: { 目標体重kg: goals.weight, 週の運動回数: goals.weeklyFreq },
     現在体重kg: latestWeight ? latestWeight.weight : null,
-    目安: targets ? { TDEE: targets.tdee, 目標kcal: targets.targetCalories, 目標タンパク質g: targets.targetProtein } : null,
+    目安: targets ? { 基礎消費kcal_運動除く: targets.tdee, 目標kcal: targets.targetCalories, 目標タンパク質g: targets.targetProtein } : null,
     体重推移: weightEntries.filter(w => w.date >= since).map(w => [w.date, w.weight]),
     日ごとの記録: Object.keys(byDate).sort().map(d => byDate[d]),
     よくやる種目,
@@ -892,7 +908,9 @@ function computeTargets(p, weight, goalWeight) {
   const bmr = p.gender === "男性"
     ? 10*weight + 6.25*height - 5*age + 5
     : 10*weight + 6.25*height - 5*age - 161;
-  const tdee = bmr * (ACTIVITY_FACTOR[p.activity] || 1.375);
+  // 運動ぶんを含まない土台(基礎代謝 × 日常生活の活動量)。運動の消費は記録から
+  // 実測ぶんだけを別途上乗せする(LIFESTYLE_FACTOR の説明を参照)。
+  const tdee = bmr * (LIFESTYLE_FACTOR[p.lifestyle] || LIFESTYLE_FACTOR[DEFAULT_LIFESTYLE]);
   const diff = weight - (goalWeight != null ? goalWeight : weight);
   let targetCalories;
   if (diff > 0.5) targetCalories = tdee - (diff > 5 ? 500 : 300);
@@ -1038,7 +1056,7 @@ function computeCalorieBalanceHistory(days) {
 function generateBalanceAdvice(history) {
   const withData = history.filter(x => x.hasData);
   if (withData.length === 0) {
-    return { tone:"neutral", icon:"ℹ️", text:"食事を記録すると、TDEE(消費カロリー)との差から収支の傾向とアドバイスが表示されます。" };
+    return { tone:"neutral", icon:"ℹ️", text:"食事を記録すると、消費カロリーとの差から収支の傾向とアドバイスが表示されます。" };
   }
   const recent = withData.slice(-7);
   const avg = recent.reduce((s,x) => s + x.balance, 0) / recent.length;
@@ -1101,6 +1119,9 @@ function importJsonFile(file) {
       mealEntries = data.mealEntries || [];
       if (data.goals) goals = Object.assign({}, goals, data.goals);
       if (data.profile) profile = data.profile;
+      // v27より前のプロフィールには「日常生活の活動量」が無いので既定値を補う。
+      // (消費カロリーの土台をこの項目で計算するようになったため。運動ぶんは記録から別途加算)
+      if (profile && !profile.lifestyle) profile.lifestyle = DEFAULT_LIFESTYLE;
       moodByDate = data.moodByDate || {};
       exerciseMaster = data.exerciseMaster || [];
       mealMaster = data.mealMaster || [];
@@ -1408,6 +1429,7 @@ function finishOnboarding() {
     gender: onboardDraft.gender,
     height: Number(onboardDraft.height) || 165,
     activity: onboardDraft.activity,
+    lifestyle: DEFAULT_LIFESTYLE, // 設定タブで変更できる(運動ぶんは記録から自動加算)
     timeAvail: onboardDraft.timeAvail,
   };
   const w = Number(onboardDraft.weight);
@@ -1572,7 +1594,7 @@ function todayHtml() {
       <div>
         <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.effectiveTarget}kcal` : "未設定"}</span></div>
         ${targets ? meterHtml(todayCal, targets.effectiveTarget, "var(--teal)") : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力すると計算されます</p>'}
-        ${targets && targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">TDEE ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
+        ${targets && targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">基礎消費 ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
       </div>
     </div>
 
@@ -1580,7 +1602,7 @@ function todayHtml() {
       <p class="section-title">📉 カロリー収支の推移(直近14日)</p>
       ${balanceHistory ? `
         ${balanceBarSvg(balanceHistory)}
-        <p class="muted" style="font-size:10.5px;margin:4px 0 12px;">🟦 消費が上回った日(赤字) ／ 🟧 摂取が上回った日(黒字)。TDEEにその日の運動消費を上乗せして概算しています。</p>
+        <p class="muted" style="font-size:10.5px;margin:4px 0 12px;">🟦 消費が上回った日(赤字) ／ 🟧 摂取が上回った日(黒字)。基礎消費(基礎代謝+日常生活)に、その日の運動の消費を上乗せして概算しています。</p>
         <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
           <span style="font-size:16px;">${balanceAdvice.icon}</span>
           <p style="margin:0;font-size:13px;line-height:1.6;flex:1;">${esc(balanceAdvice.text)}</p>
@@ -1610,7 +1632,7 @@ function mealsHtml() {
       ${targets ? `
         <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${todayCal}</span><span class="muted">目標 ${targets.effectiveTarget} kcal</span></div>
         ${meterHtml(todayCal, targets.effectiveTarget, "var(--teal)")}
-        ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">TDEE ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
+        ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">基礎消費 ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
         <div class="row" style="margin-top:12px;">
           <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
           <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
@@ -1658,7 +1680,7 @@ function mealsHtml() {
         ${intakeTdeeChartSvg(intakeHistory)}
         <p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.6;">
           棒 = その日の摂取カロリー(🟦 消費より少ない日 ／ 🟧 消費を上回った日)。<br>
-          紫の線 = その日の消費カロリー(TDEE + 運動の消費)。棒が線より下なら赤字、上なら黒字です。
+          紫の線 = その日の消費カロリー(基礎消費 + 運動の消費)。棒が線より下なら赤字、上なら黒字です。
         </p>
       ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、摂取と消費のグラフが表示されます。</p>'}
     </div>
@@ -1693,8 +1715,8 @@ function dayEnergyLineHtml_(dateStr) {
   const s = dayEnergySummary_(dateStr);
   if (!s) return "";
   const burnText = s.burn > 0
-    ? `消費 ${s.totalBurn}kcal(TDEE ${s.tdee} + 運動 ${s.burn})`
-    : `消費 ${s.totalBurn}kcal(TDEE)`;
+    ? `消費 ${s.totalBurn}kcal(基礎消費 ${s.tdee} + 運動 ${s.burn})`
+    : `消費 ${s.totalBurn}kcal(基礎消費のみ)`;
   if (!s.hasIntakeData) {
     return `<p class="muted mono" style="font-size:10.5px;margin:0 0 6px;line-height:1.5;">摂取 未入力 ／ ${burnText}</p>`;
   }
@@ -2112,16 +2134,22 @@ function settingsHtml() {
         <div class="wrap" style="margin-bottom:8px;">
           ${["男性","女性"].map(g => `<button class="chip ${profile.gender===g?"active":""}" data-action="set-gender" data-val="${g}">${g}</button>`).join("")}
         </div>
+        <p class="muted" style="margin:0 0 4px;">日常生活の活動量(運動は除く)</p>
+        <div class="wrap" style="margin-bottom:4px;">
+          ${LIFESTYLE_LEVELS.map(l => `<button class="chip ${(profile.lifestyle||DEFAULT_LIFESTYLE)===l?"active":""}" data-action="set-lifestyle" data-val="${l}">${l}</button>`).join("")}
+        </div>
+        <p class="muted" style="font-size:10.5px;margin:0 0 10px;">仕事や家事など、運動以外の普段の動き方を選んでください。運動で消費したぶんは、記録した内容から自動で上乗せされます。</p>
         <p class="muted" style="margin:0 0 4px;">運動習慣</p>
-        <div class="wrap" style="margin-bottom:8px;">
+        <div class="wrap" style="margin-bottom:4px;">
           ${ACTIVITY_LEVELS.map(a => `<button class="chip ${profile.activity===a?"active":""}" data-action="set-activity" data-val="${a}">${a}</button>`).join("")}
         </div>
+        <p class="muted" style="font-size:10.5px;margin:0 0 10px;">おすすめ運動の頻度に使います(消費カロリーの計算には使いません)。</p>
         <p class="muted" style="margin:0 0 4px;">1日に使える時間</p>
         <div class="wrap" style="margin-bottom:10px;">
           ${TIME_LEVELS.map(tl => `<button class="chip ${profile.timeAvail===tl?"active":""}" data-action="set-timeavail" data-val="${tl}">${tl}</button>`).join("")}
         </div>
         ${targets
-          ? `<p style="font-size:12.5px;line-height:1.8;margin:0;">推定BMR <span class="mono">${targets.bmr}</span>kcal / TDEE <span class="mono">${targets.tdee}</span>kcal<br>1日の目標: <span class="mono">${targets.targetCalories}</span>kcal(P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb})</p>`
+          ? `<p style="font-size:12.5px;line-height:1.8;margin:0;">推定BMR <span class="mono">${targets.bmr}</span>kcal / 基礎消費 <span class="mono">${targets.tdee}</span>kcal(運動ぶんは記録から別途加算)<br>1日の目標: <span class="mono">${targets.targetCalories}</span>kcal(P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb})</p>`
           : '<p class="muted" style="font-size:11px;margin:0;">年齢・身長と、体重タブでの体重記録がそろうと、AIが1日の目標カロリー・栄養バランスを計算します。</p>'}
       </div>
     </div>
@@ -2593,6 +2621,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "del-routine") { routineMaster = routineMaster.filter(r => r.id !== t.dataset.id); saveState(); renderTabContent(); }
   else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
+  else if (action === "set-lifestyle") { profile.lifestyle = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "retry-sync") { syncToSheet(); }
   else if (action === "fetch-ai-advice") { fetchAiAdvice(); }
