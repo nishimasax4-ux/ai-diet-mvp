@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v20";
+const APP_VERSION = "v21";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -263,7 +263,39 @@ let confirmReset = false;
 let dataOpMessage = null;   // バックアップ/復元の結果メッセージ
 let dataOpError = false;
 let confirmRestore = null;  // "sheet" | "file" — 上書き確認待ちの復元元
-let mealDetailOpen = false; // 食事記録フォームの「詳細(カロリー・栄養素)」が開いているか
+let mealDetailOpen = false; // 食事記録フォームの「詳細(栄養素)」が開いているか
+// 食事・体重・運動の各フォームで選んでいる日付。過去の分をまとめて入力するとき、
+// 1件記録するたびに今日へ戻ってしまうと、2件目以降が気づかないうちに今日の記録に
+// なってしまうため、選んだ日付を明示的に覚えておく(null = 今日)。
+let entryDates = { meal: null, weight: null, training: null };
+function entryDate(kind) {
+  const today = localDateStr();
+  const v = entryDates[kind];
+  // 日付をまたいで開きっぱなしだった場合や未来日付が入った場合は今日に戻す。
+  return v && v <= today ? v : today;
+}
+function isPastEntryDate(kind) { return entryDate(kind) !== localDateStr(); }
+// 過去の日付で記録しようとしていることを、記録ボタンの手前で必ず気づけるようにする。
+// 中身だけを返し、外側の入れ物(#entry-date-notice-<kind>)は常に描画しておく。日付を
+// 変えたときにタブ全体を作り直すと、入力中の食事名などが消えてしまうため、この
+// 入れ物の中身だけを差し替える(updateEntryDateNotice)。
+function entryDateNoticeInner(kind) {
+  if (!isPastEntryDate(kind)) return "";
+  const d = new Date(entryDate(kind) + "T00:00:00");
+  return `<div class="between" style="background:#FDF1E7;border-radius:8px;padding:6px 10px;margin-bottom:8px;gap:8px;">
+      <span style="font-size:11.5px;">📅 <strong>${d.getMonth()+1}/${d.getDate()}</strong>(過去の日付)で記録します</span>
+      <button type="button" class="chip" data-action="reset-entry-date" data-kind="${kind}">今日に戻す</button>
+    </div>`;
+}
+function entryDateNoticeHtml(kind) {
+  return `<div id="entry-date-notice-${kind}">${entryDateNoticeInner(kind)}</div>`;
+}
+function updateEntryDateNotice(kind) {
+  const el = document.getElementById(`entry-date-notice-${kind}`);
+  if (el) el.innerHTML = entryDateNoticeInner(kind);
+  const input = document.querySelector(`[data-entry-date="${kind}"]`);
+  if (input && input.value !== entryDate(kind)) input.value = entryDate(kind);
+}
 // 設定タブの各セクションの開閉状態。よく使う同期・目標は常時表示、それ以外は
 // デフォルトで畳んでおき、スクロール量を減らす。
 let settingsOpenSections = { profile:false, master:false, data:false };
@@ -1578,18 +1610,21 @@ function mealsHtml() {
       <button type="button" class="chip" data-action="ai-lookup-nutrition" data-target="meal" style="margin-bottom:4px;">🔍 AIで栄養を調べる</button>
       <p id="ai-lookup-meal-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
       <div class="wrap" id="meal-save-master" style="margin-bottom:8px;"></div>
-      <input type="date" id="meal-date-input" value="${today}" class="mono" style="margin-bottom:8px;">
-      <button type="button" class="chip" data-action="toggle-meal-detail" id="meal-detail-toggle" style="margin-bottom:8px;">${mealDetailOpen ? "▾" : "▸"} 詳細を入力(カロリー・栄養素・任意)</button>
+      <input type="date" id="meal-date-input" data-entry-date="meal" value="${entryDate("meal")}" class="mono" style="margin-bottom:8px;">
+      ${entryDateNoticeHtml("meal")}
+      <p class="label" style="margin:0 0 4px;">カロリー</p>
+      <div class="row" style="margin-bottom:8px;">
+        <input type="number" id="meal-cal-input" placeholder="kcal" class="mono">
+      </div>
+      <button type="button" class="chip" data-action="toggle-meal-detail" id="meal-detail-toggle" style="margin-bottom:8px;">${mealDetailOpen ? "▾" : "▸"} 栄養素も入力(P・F・C・任意)</button>
       <div id="meal-detail-fields" class="${mealDetailOpen ? "" : "hidden"}">
-        <div class="row" style="margin-bottom:8px;">
-          <input type="number" id="meal-cal-input" placeholder="kcal(任意)" class="mono">
-        </div>
         <div class="row" style="margin-bottom:10px;">
           <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
           <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
           <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
         </div>
       </div>
+      <p class="muted" style="font-size:10.5px;margin:0 0 8px;">カロリーを入れておくと、「今日」タブのカロリー収支グラフに反映されます。分からないときは「🔍 AIで栄養を調べる」で自動入力できます。</p>
       <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
     </div>
 
@@ -1705,13 +1740,14 @@ function weightHtml() {
       <div class="row" style="margin-bottom:10px;">
         <div style="flex:1;">
           <label class="label">日付</label>
-          <input type="date" id="weight-date-input" value="${localDateStr()}">
+          <input type="date" id="weight-date-input" data-entry-date="weight" value="${entryDate("weight")}">
         </div>
         <div style="flex:1;">
           <label class="label">体重 (kg)</label>
           <input type="number" step="0.1" id="weight-value-input" placeholder="例: 65.0" class="mono" value="${latest ? latest.weight : ""}">
         </div>
       </div>
+      ${entryDateNoticeHtml("weight")}
       <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
       ${list}
     </div>`;
@@ -1727,7 +1763,8 @@ function trainingHtml() {
         <button class="sub-tab-btn ${trainingSubTab==="cardio"?"active-b":""}" data-action="select-training-type" data-val="cardio">💨 有酸素</button>
       </div>
       <label class="label">日付</label>
-      <input type="date" id="date-input" value="${localDateStr()}" style="margin-bottom:10px;">
+      <input type="date" id="date-input" data-entry-date="training" value="${entryDate("training")}" style="margin-bottom:10px;">
+      ${entryDateNoticeHtml("training")}
       <div id="strength-fields" class="${trainingSubTab==="strength"?"":"hidden"}">
         <label class="label">部位</label>
         <div class="wrap" id="part-buttons" style="margin-bottom:10px;"></div>
@@ -2473,6 +2510,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTrainingFormOptions();
   }
   else if (action === "add-training") { handleAddTraining(); }
+  else if (action === "reset-entry-date") { entryDates[t.dataset.kind] = null; updateEntryDateNotice(t.dataset.kind); }
   else if (action === "view-list") { historyView = "list"; renderHistory(); }
   else if (action === "view-calendar") { historyView = "calendar"; renderHistory(); }
   else if (action === "cal-prev") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderHistory(); }
@@ -2614,6 +2652,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     profile = null; moodByDate = {}; confirmReset = false; onboardStep = 0;
     exerciseMaster = []; mealMaster = []; masterExercisePart = "胸";
     lastStrengthByExercise = {}; lastCardioMinutes = {}; mealDetailOpen = false;
+    entryDates = { meal: null, weight: null, training: null };
     routineMaster = []; savingRoutine = false;
     nutritionCache = {}; saveNutritionCache();
     seedExerciseMasterIfEmpty();
@@ -2630,6 +2669,14 @@ document.getElementById("app").addEventListener("input", (e) => {
     // ユーザーが自分で回数を書き換えたら、以後の自動提案で上書きしない。
     delete e.target.dataset.autofilled;
   }
+});
+// 日付欄を変えたら、その日付を覚えておく(1件記録するたびに今日へ戻らないように)。
+document.getElementById("app").addEventListener("change", (e) => {
+  const kind = e.target.dataset && e.target.dataset.entryDate;
+  if (!kind) return;
+  entryDates[kind] = e.target.value || null;
+  // タブ全体を作り直すと入力途中の内容が消えるので、注意書きだけを差し替える。
+  updateEntryDateNotice(kind);
 });
 document.getElementById("app").addEventListener("change", (e) => {
   if (e.target.id === "goal-weight-input") {
