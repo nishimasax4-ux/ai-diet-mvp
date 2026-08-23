@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v15";
+const APP_VERSION = "v17";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -877,7 +877,11 @@ function computeCalorieBalanceHistory(days) {
     const intake = dayMeals.reduce((s,m) => s + (m.calories||0), 0);
     const burn = estimateExerciseBurnForDate(dateStr, weightKg);
     const tdeeAdjusted = targets.tdee + burn;
-    history.push({ date: dateStr, intake, burn, tdeeAdjusted, balance: intake - tdeeAdjusted, hasData: dayMeals.length > 0 });
+    // カロリーを入力していない食事(名前だけ記録した日)は「摂取0kcal」ではなく
+    // 「その日は不明」として扱う。0kcal扱いにすると、実際には食べているのに
+    // TDEE分まるごと(−2000kcal前後)の赤字として集計され、グラフも平均も大きく狂うため。
+    const hasData = dayMeals.some(m => (m.calories || 0) > 0);
+    history.push({ date: dateStr, intake, burn, tdeeAdjusted, balance: intake - tdeeAdjusted, hasData });
   }
   return history;
 }
@@ -1034,7 +1038,10 @@ function balanceBarSvg(history) {
   const w=300, h=110, pad=8, labelH=12;
   const withData = history.filter(x => x.hasData);
   if (withData.length === 0) return '<p class="muted" style="font-size:12px;">食事を記録すると、カロリー収支の推移が表示されます。</p>';
-  const maxAbs = Math.max(...history.map(x => Math.abs(x.balance)), 200);
+  // 縦の目盛りは「記録がある日」だけで決める。全日を対象にすると、食事を記録して
+  // いない日(摂取0kcal=TDEE分まるごとの赤字)が最大値になってしまい、実際に記録した
+  // 日の棒が数ピクセルまで潰れて、食事を追加しても変化して見えなくなっていた。
+  const maxAbs = Math.max(...withData.map(x => Math.abs(x.balance)), 200);
   const plotH = h - pad - labelH;
   const zeroY = pad + plotH/2;
   const slot = (w - pad*2) / history.length;
@@ -1054,9 +1061,12 @@ function balanceBarSvg(history) {
     const d = new Date(history[i].date + "T00:00:00");
     return `<text x="${slotX+slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${d.getMonth()+1}/${d.getDate()}</text>`;
   }).join("");
+  // 目盛りの大きさを数値で添える。棒の高さは自動的に伸縮するため、これがないと
+  // 「棒が伸びた=何kcal変わったのか」が読み取れず、変化しているのか分かりにくい。
+  const scaleLabel = `<text x="${w-pad}" y="${pad+6}" font-size="7" fill="var(--ink-faint)" text-anchor="end">上端 ±${Math.round(maxAbs)}kcal</text>`;
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:120px;">
     <line x1="${pad}" y1="${zeroY}" x2="${w-pad}" y2="${zeroY}" stroke="var(--ink-faint)" stroke-width="1"/>
-    ${bars}${labels}
+    ${bars}${labels}${scaleLabel}
   </svg>`;
 }
 function meterHtml(value, target, colorHex) {
@@ -1390,6 +1400,38 @@ function mealsHtml() {
 // 食事を日付ごとにグループ化して新しい順に表示する。「今日の食事」カードは
 // 今日の分だけをまとめて表示するのに対し、こちらは過去に記録した食事も日付付きで
 // 探せるようにするための一覧(直近14日分まで)。
+// その日の「摂取カロリー」と「消費カロリー(TDEE + その日の運動)」をまとめて返す。
+// カロリー収支グラフ(computeCalorieBalanceHistory)とまったく同じ計算式を使うことで、
+// 食事タブの日別表示とグラフの数字が食い違わないようにしている。
+// プロフィール・体重が未入力で計算できない場合は null。
+function dayEnergySummary_(dateStr) {
+  const targets = getTargets();
+  if (!targets) return null;
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  if (!latestWeight) return null;
+  const dayMeals = mealEntries.filter(m => m.date === dateStr);
+  const intake = dayMeals.reduce((s,m) => s + (m.calories||0), 0);
+  const burn = estimateExerciseBurnForDate(dateStr, latestWeight.weight);
+  const totalBurn = targets.tdee + burn;
+  // グラフと同じ判定: カロリーを1つも入力していない日は「不明」扱いにして収支を出さない。
+  const hasIntakeData = dayMeals.some(m => (m.calories || 0) > 0);
+  return { intake, tdee: targets.tdee, burn, totalBurn, balance: intake - totalBurn, hasIntakeData };
+}
+// 食事の履歴の各日に添える「摂取 / 消費 / 収支」の1行。
+function dayEnergyLineHtml_(dateStr) {
+  const s = dayEnergySummary_(dateStr);
+  if (!s) return "";
+  const burnText = s.burn > 0
+    ? `消費 ${s.totalBurn}kcal(TDEE ${s.tdee} + 運動 ${s.burn})`
+    : `消費 ${s.totalBurn}kcal(TDEE)`;
+  if (!s.hasIntakeData) {
+    return `<p class="muted mono" style="font-size:10.5px;margin:0 0 6px;line-height:1.5;">摂取 未入力 ／ ${burnText}</p>`;
+  }
+  const surplus = s.balance >= 0;
+  const color = surplus ? "var(--coral)" : "var(--teal)";
+  const label = surplus ? "黒字" : "赤字";
+  return `<p class="muted mono" style="font-size:10.5px;margin:0 0 6px;line-height:1.5;">摂取 ${s.intake}kcal ／ ${burnText} → <span style="color:${color};font-weight:700;">${label} ${Math.abs(s.balance)}kcal</span></p>`;
+}
 function mealHistoryHtml() {
   if (mealEntries.length === 0) return '<p class="muted" style="font-size:12px;margin:0;">まだ食事の記録がありません。</p>';
   const today = localDateStr();
@@ -1416,6 +1458,7 @@ function mealHistoryHtml() {
         <span class="mono" style="font-weight:700;font-size:14px;">${d}${d===today?" (今日)":""} <span class="muted" style="font-weight:400;">(${WEEKDAY[dd.getDay()]})</span></span>
         ${dayTotal ? `<span class="muted mono" style="font-size:11px;">計${dayTotal}kcal</span>` : ""}
       </div>
+      ${dayEnergyLineHtml_(d)}
       ${items}
     </div>`;
   }).join("");

@@ -19,6 +19,10 @@
 // 将来また廃止される可能性はあるので、同様のHTTP 404エラーが出た場合はここを最新のモデルIDに
 // 書き換えてください(https://ai.google.dev/gemini-api/docs/models で確認できます)。
 var GEMINI_MODEL = 'gemini-3.7-flash';
+// 本命モデルが混雑(503)・レート超過(429)・廃止(404)で使えないときに、順番に試す代替モデル。
+// 人気モデルほど混みやすいため、1つ前の世代を控えに置いておくと成功率が上がる。
+// いずれも無料枠の対象です(https://ai.google.dev/gemini-api/docs/pricing)。
+var GEMINI_FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-2.5-flash'];
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -169,9 +173,20 @@ function handleAdvice_(ctx) {
   return { status: 'ok', text: String(text).trim() };
 }
 
-function callGemini_(apiKey, prompt, maxTokens) {
+// 混雑(503)・レート超過(429)・サーバーエラー(5xx)は、時間をおけば直る一時的な状態。
+// 同じモデルへの再試行に意味がある。
+function isTransientCode_(code) {
+  return code === 429 || code === 503 || (code >= 500 && code < 600);
+}
+// 上記に加えて404(モデルが廃止された)も、「別のモデルなら通る」可能性がある。
+// 逆に400(リクエスト不正・APIキー不正)や403(権限なし)は、モデルを変えても直らないので即中断する。
+function shouldTryNextModel_(code) {
+  return isTransientCode_(code) || code === 404;
+}
+
+function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-            GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
+            model + ':generateContent?key=' + encodeURIComponent(apiKey);
   var options = {
     method: 'post',
     contentType: 'application/json',
@@ -185,31 +200,47 @@ function callGemini_(apiKey, prompt, maxTokens) {
       generationConfig: { temperature: 0.4, maxOutputTokens: maxTokens || 512, thinkingConfig: { thinkingBudget: 0 } },
     }),
   };
-
-  // 503(混雑)・429(レート超過)・500系は、Google側の一時的な状態であることが多い。
-  // 利用者に手動で押し直してもらう前に、間隔を空けて自動で数回リトライする。
-  // Apps Scriptのウェブアプリには実行時間の上限があるため、待ち時間は控えめにしている。
-  var RETRY_DELAYS_MS = [800, 2000, 4000];
-  var code, body;
+  // 同じモデルへの再試行。Apps Scriptのウェブアプリには実行時間の上限があるため控えめに。
+  var RETRY_DELAYS_MS = [800, 2000];
+  var code = 0, body = '';
   for (var attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     var res = UrlFetchApp.fetch(url, options);
     code = res.getResponseCode();
     body = res.getContentText();
     if (code === 200) break;
-    var retriable = (code === 429 || code === 503 || (code >= 500 && code < 600));
-    if (!retriable || attempt === RETRY_DELAYS_MS.length) break;
+    if (!isTransientCode_(code) || attempt === RETRY_DELAYS_MS.length) break;
+    // 待ち時間ぶんの余裕がもう無ければ、このモデルは諦めて次のモデルへ回す。
+    if (new Date().getTime() + RETRY_DELAYS_MS[attempt] > deadlineMs) break;
     Utilities.sleep(RETRY_DELAYS_MS[attempt]);
   }
+  return { code: code, body: body };
+}
 
-  if (code !== 200) throw new Error('Gemini APIエラー (HTTP ' + code + '): ' + body.slice(0, 300));
-  var data = JSON.parse(body);
-  var cand = data.candidates && data.candidates[0];
-  if (!cand || !cand.content || !cand.content.parts) {
-    // 空応答の原因調査用にfinishReason(MAX_TOKENS/SAFETYなど)を添えて返す。
-    var reason = cand && cand.finishReason ? cand.finishReason : '不明';
-    throw new Error('Geminiから本文が返りませんでした(finishReason: ' + reason + ')');
+// 本命モデル → 代替モデルの順に試す。人気モデルは混雑(503)しやすいので、
+// 同じモデルを叩き続けるのではなく、控えのモデルに切り替えたほうが成功しやすい。
+function callGemini_(apiKey, prompt, maxTokens) {
+  var models = [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS || []);
+  // Apps Scriptの実行時間上限に引っかかって「応答なし」になるのを避けるための全体の締め切り。
+  var deadlineMs = new Date().getTime() + 25000;
+  var lastCode = 0, lastBody = '';
+  for (var i = 0; i < models.length; i++) {
+    var r = callGeminiModel_(apiKey, models[i], prompt, maxTokens, deadlineMs);
+    if (r.code === 200) {
+      var data = JSON.parse(r.body);
+      var cand = data.candidates && data.candidates[0];
+      if (!cand || !cand.content || !cand.content.parts) {
+        // 空応答の原因調査用にfinishReason(MAX_TOKENS/SAFETYなど)を添えて返す。
+        var reason = cand && cand.finishReason ? cand.finishReason : '不明';
+        throw new Error('Geminiから本文が返りませんでした(finishReason: ' + reason + ' / モデル: ' + models[i] + ')');
+      }
+      return cand.content.parts.map(function (p) { return p.text || ''; }).join('');
+    }
+    lastCode = r.code;
+    lastBody = r.body;
+    if (!shouldTryNextModel_(r.code)) break;
+    if (new Date().getTime() > deadlineMs) break;
   }
-  return cand.content.parts.map(function (p) { return p.text || ''; }).join('');
+  throw new Error('Gemini APIエラー (HTTP ' + lastCode + '): ' + lastBody.slice(0, 300));
 }
 
 /* ====================== ユーティリティ ====================== */
