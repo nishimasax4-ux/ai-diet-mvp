@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v17";
+const APP_VERSION = "v19";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -430,12 +430,66 @@ function foodFieldIds_(target) {
     ? { name:"master-meal-name-input", cal:"master-meal-cal-input", protein:"master-meal-protein-input", fat:"master-meal-fat-input", carb:"master-meal-carb-input", status:"ai-lookup-master-status", saveMaster:null }
     : { name:"edit-text", cal:"edit-calories", protein:"edit-protein", fat:"edit-fat", carb:"edit-carb", status:"ai-lookup-edit-status", saveMaster:"edit-save-master" };
 }
+// ---- AI検索の結果キャッシュ(無料枠の節約用) ----
+// Gemini APIの無料枠には1日あたりの上限があるため、一度調べた食品はローカルに覚えておき、
+// 2回目以降は通信せずに再利用する。食品の栄養価は変わらないので、キャッシュしても問題ない。
+const AI_NUTRITION_CACHE_KEY = "training-log-nutrition-cache";
+let nutritionCache = {};
+function loadNutritionCache() {
+  try {
+    const raw = localStorage.getItem(AI_NUTRITION_CACHE_KEY);
+    if (raw) nutritionCache = JSON.parse(raw) || {};
+  } catch (e) { nutritionCache = {}; }
+}
+function saveNutritionCache() {
+  try { localStorage.setItem(AI_NUTRITION_CACHE_KEY, JSON.stringify(nutritionCache)); } catch (e) {}
+}
+// 入力欄に栄養価を反映する共通処理(内蔵辞書・キャッシュ・AI応答のどれでも同じ扱い)。
+function applyNutritionToForm_(target, n) {
+  const ids = foodFieldIds_(target);
+  const calEl = document.getElementById(ids.cal); if (calEl) calEl.value = n.kcal;
+  const pEl = document.getElementById(ids.protein); if (pEl) pEl.value = n.protein;
+  const fEl = document.getElementById(ids.fat); if (fEl) fEl.value = n.fat;
+  const cEl = document.getElementById(ids.carb); if (cEl) cEl.value = n.carb;
+  if (target === "edit" && editing) {
+    editing.draftCalories = n.kcal; editing.draftProtein = n.protein; editing.draftFat = n.fat; editing.draftCarb = n.carb;
+  }
+  if (target === "meal") openMealDetail();
+  renderSaveToMasterButton_(target);
+}
 async function aiLookupNutrition(target) {
   const ids = foodFieldIds_(target);
   const nameEl = document.getElementById(ids.name);
   const statusEl = document.getElementById(ids.status);
   const foodName = nameEl ? nameEl.value.trim() : "";
   if (!foodName) { if (statusEl) statusEl.textContent = "⚠️ 先に食品名を入力してください"; return; }
+
+  // --- 通信を避けられるケースを先に処理する(無料枠の節約) ---
+  // ① 登録済みの「よく食べるもの」に同じ名前があれば、それを使う
+  const master = mealMaster.find(m => m.name === foodName && m.calories != null);
+  if (master) {
+    applyNutritionToForm_(target, { kcal: master.calories, protein: master.protein || 0, fat: master.fat || 0, carb: master.carb || 0 });
+    if (statusEl) statusEl.textContent = `✅ 「よく食べるもの」に登録済みの値を使いました: ${master.calories}kcal(通信なし・無料枠を消費していません)`;
+    return;
+  }
+  // ② 内蔵の食品辞書に同じ名前(または別名)があれば、それを使う
+  const dictHit = estimateFoodMatches(foodName).find(f =>
+    normalizeFoodText(f.name) === normalizeFoodText(foodName) ||
+    (f.aliases || []).some(a => normalizeFoodText(a) === normalizeFoodText(foodName)));
+  if (dictHit) {
+    applyNutritionToForm_(target, { kcal: dictHit.kcal, protein: dictHit.protein || 0, fat: dictHit.fat || 0, carb: dictHit.carb || 0 });
+    if (statusEl) statusEl.textContent = `✅ 内蔵の食品辞書の値を使いました: ${dictHit.name} ${dictHit.kcal}kcal(通信なし・無料枠を消費していません)`;
+    return;
+  }
+  // ③ 前に同じ名前でAI検索していれば、その結果を再利用する
+  const cacheKey = normalizeFoodText(foodName);
+  if (nutritionCache[cacheKey]) {
+    const n = nutritionCache[cacheKey];
+    applyNutritionToForm_(target, n);
+    if (statusEl) statusEl.textContent = `✅ 前回のAI検索結果を再利用しました: ${n.kcal}kcal (P${n.protein} F${n.fat} C${n.carb})(通信なし・無料枠を消費していません)`;
+    return;
+  }
+
   if (!gasConfigured()) {
     if (statusEl) statusEl.textContent = "⚠️ AI栄養検索を使うには、まず設定タブで接続先URLとトークンの設定が必要です(README参照)";
     return;
@@ -448,18 +502,11 @@ async function aiLookupNutrition(target) {
       return;
     }
     const n = data.nutrition;
-    const calEl = document.getElementById(ids.cal); if (calEl) calEl.value = n.kcal;
-    const pEl = document.getElementById(ids.protein); if (pEl) pEl.value = n.protein;
-    const fEl = document.getElementById(ids.fat); if (fEl) fEl.value = n.fat;
-    const cEl = document.getElementById(ids.carb); if (cEl) cEl.value = n.carb;
-    if (target === "edit" && editing) {
-      editing.draftCalories = n.kcal; editing.draftProtein = n.protein; editing.draftFat = n.fat; editing.draftCarb = n.carb;
-    }
-    if (target === "meal") openMealDetail();
+    // 次回以降は通信せずに済むよう覚えておく。
+    nutritionCache[cacheKey] = n;
+    saveNutritionCache();
+    applyNutritionToForm_(target, n);
     if (statusEl) statusEl.textContent = `✅ AI概算: ${n.kcal}kcal (P${n.protein} F${n.fat} C${n.carb}) ※目安です。正確な値がわかる場合は上書きしてください`;
-    // AI検索は1回ごとに通信が発生するので、同じ食品を次回から検索し直さずに済むよう、
-    // その場で「よく食べるもの」に登録できるボタンを出す。
-    renderSaveToMasterButton_(target);
   } catch (err) {
     if (statusEl) statusEl.textContent = "⚠️ 通信エラーが発生しました: " + friendlySyncError_(err.message);
   }
@@ -713,23 +760,52 @@ function loadAiAdvice() {
   // 日付が変わったら前日のコメントは捨てる
   if (aiAdvice && aiAdvice.date !== localDateStr()) aiAdvice = null;
 }
-// 直近14日分だけを要約して送る。全履歴を送るとトークンも通信量も無駄になる。
+// 直近14日分を「日ごとの集計」にまとめてから送る。
+// 以前は1食ずつ・1セットずつの明細をそのまま送っていたため、2週間分だと数十行になり、
+// 入力トークン(=Gemini APIの無料枠)を大きく消費していた。アドバイスに必要なのは
+// 日ごとの傾向と、やっている種目の顔ぶれなので、集計しても内容はほとんど落ちない。
 function buildAdviceContext() {
   const since = localDateStr(new Date(Date.now() - 13 * 86400000));
   const targets = getTargets();
   const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+
+  const byDate = {};
+  const dayOf = (d) => byDate[d] || (byDate[d] = { 日付: d, 摂取kcal: 0, P: 0, F: 0, C: 0, 筋トレセット数: 0, 有酸素分: 0 });
+  mealEntries.filter(m => m.date >= since).forEach(m => {
+    const x = dayOf(m.date);
+    x.摂取kcal += m.calories || 0; x.P += m.protein || 0; x.F += m.fat || 0; x.C += m.carb || 0;
+  });
+  entries.filter(e => e.date >= since).forEach(e => {
+    const x = dayOf(e.date);
+    if (e.type === "strength") x.筋トレセット数 += 1;
+    else x.有酸素分 += (e.minutes || 0);
+  });
+  Object.keys(byDate).forEach(d => {
+    const x = byDate[d];
+    x.摂取kcal = Math.round(x.摂取kcal); x.P = Math.round(x.P); x.F = Math.round(x.F); x.C = Math.round(x.C);
+  });
+
+  // 種目名は「何をやっているか」に触れてもらうために必要なので、明細ではなく
+  // 「種目ごとの回数」に畳んで、多い順に上位だけ送る。
+  const exCount = {};
+  entries.filter(e => e.date >= since).forEach(e => {
+    const name = e.type === "strength" ? (e.exercise || e.part) : e.exercise;
+    if (name) exCount[name] = (exCount[name] || 0) + 1;
+  });
+  const よくやる種目 = Object.keys(exCount)
+    .sort((a,b) => exCount[b] - exCount[a]).slice(0, 8)
+    .map(n => `${n}×${exCount[n]}`);
+
   return {
-    today: localDateStr(),
-    mood: moodByDate[localDateStr()] || null,
-    profile: profile ? { age: profile.age, gender: profile.gender, height: profile.height, activity: profile.activity, timeAvail: profile.timeAvail } : null,
-    goals: { weight: goals.weight, weeklyFreq: goals.weeklyFreq },
-    currentWeight: latestWeight ? latestWeight.weight : null,
-    targets: targets ? { tdee: targets.tdee, targetCalories: targets.targetCalories, targetProtein: targets.targetProtein } : null,
-    weights: weightEntries.filter(w => w.date >= since).map(w => [w.date, w.weight]),
-    training: entries.filter(e => e.date >= since).map(e => e.type === "strength"
-      ? [e.date, "筋トレ", e.part, e.exercise || "", e.weight, e.reps]
-      : [e.date, "有酸素", e.exercise, e.minutes]),
-    meals: mealEntries.filter(m => m.date >= since).map(m => [m.date, m.mealType, m.text, m.calories || 0, m.protein || 0, m.fat || 0, m.carb || 0]),
+    今日: localDateStr(),
+    今日の調子: moodByDate[localDateStr()] || null,
+    プロフィール: profile ? { 年齢: profile.age, 性別: profile.gender, 身長cm: profile.height, 運動習慣: profile.activity, 使える時間: profile.timeAvail } : null,
+    目標: { 目標体重kg: goals.weight, 週の運動回数: goals.weeklyFreq },
+    現在体重kg: latestWeight ? latestWeight.weight : null,
+    目安: targets ? { TDEE: targets.tdee, 目標kcal: targets.targetCalories, 目標タンパク質g: targets.targetProtein } : null,
+    体重推移: weightEntries.filter(w => w.date >= since).map(w => [w.date, w.weight]),
+    日ごとの記録: Object.keys(byDate).sort().map(d => byDate[d]),
+    よくやる種目,
   };
 }
 async function fetchAiAdvice() {
@@ -1032,6 +1108,50 @@ function weeklyBarSvg(weeks, goal) {
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">
     <line x1="${pad}" y1="${goalY}" x2="${w-pad}" y2="${goalY}" stroke="var(--slate)" stroke-dasharray="4 4" stroke-width="1"/>
     ${bars}${labels}
+  </svg>`;
+}
+// 食事タブ用: 日ごとの「摂取カロリー(棒)」と「消費カロリー(TDEE+運動・折れ線)」を重ねたグラフ。
+// 棒が線より下なら赤字(消費が上回る)、上なら黒字。収支グラフ(balanceBarSvg)が差分だけを
+// 見せるのに対し、こちらは実際の数値そのものを見比べられるようにするためのもの。
+function intakeTdeeChartSvg(history) {
+  const w=300, h=130, padL=26, padR=8, padT=10, labelH=12;
+  const withData = history.filter(x => x.hasData);
+  if (withData.length === 0) return '<p class="muted" style="font-size:12px;margin:0;">食事のカロリーを記録すると、日ごとの摂取と消費のグラフが表示されます。</p>';
+  const plotH = h - padT - labelH;
+  const baseY = padT + plotH;
+  // 縦軸は0からで、摂取・消費のどちらの最大値も収まる高さにする(少し余白を足す)。
+  const maxVal = Math.max(...history.map(x => Math.max(x.hasData ? x.intake : 0, x.tdeeAdjusted)), 1);
+  const top = Math.ceil((maxVal * 1.1) / 500) * 500;
+  const yOf = (v) => baseY - (v / top) * plotH;
+  const slot = (w - padL - padR) / history.length;
+  const bw = Math.min(13, slot - 3);
+
+  // 目盛り線(0 / 中間 / 上端)。数値が読めないと、棒の高さだけでは何kcalか分からないため。
+  const ticks = [0, top/2, top].map(v =>
+    `<line x1="${padL}" y1="${yOf(v)}" x2="${w-padR}" y2="${yOf(v)}" stroke="var(--line)" stroke-width="0.5"/>
+     <text x="${padL-3}" y="${yOf(v)+2.5}" font-size="7" fill="var(--ink-faint)" text-anchor="end">${Math.round(v)}</text>`).join("");
+
+  const bars = history.map((x,i) => {
+    if (!x.hasData) return "";
+    const bx = padL + i*slot + slot/2 - bw/2;
+    const y = yOf(x.intake);
+    // 摂取が消費を上回った日(黒字)は色を変えて、ひと目で分かるようにする。
+    const over = x.intake > x.tdeeAdjusted;
+    return `<rect x="${bx}" y="${y}" width="${bw}" height="${Math.max(baseY - y, 1)}" rx="2" fill="${over ? "var(--coral)" : "var(--teal)"}"/>`;
+  }).join("");
+
+  // 消費(TDEE+運動)は日によって運動量が変わるので、折れ線で示す。
+  const linePts = history.map((x,i) => `${padL + i*slot + slot/2},${yOf(x.tdeeAdjusted)}`).join(" ");
+  const line = `<polyline points="${linePts}" fill="none" stroke="var(--slate)" stroke-width="1.5" stroke-linejoin="round"/>`;
+
+  const labelIdxs = [0, Math.floor((history.length-1)/2), history.length-1];
+  const labels = labelIdxs.map(i => {
+    const d = new Date(history[i].date + "T00:00:00");
+    return `<text x="${padL + i*slot + slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${d.getMonth()+1}/${d.getDate()}</text>`;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:140px;">
+    ${ticks}${bars}${line}${labels}
   </svg>`;
 }
 function balanceBarSvg(history) {
@@ -1346,6 +1466,9 @@ function mealsHtml() {
   const todayFat = todayMeals.reduce((s,m) => s + (m.fat||0), 0);
   const todayCarb = todayMeals.reduce((s,m) => s + (m.carb||0), 0);
   const targets = getEffectiveCalorieTarget(today);
+  // 摂取と消費のグラフ用。カロリー収支グラフとまったく同じ計算結果を使うので、
+  // 「今日の状況」「収支グラフ」「このグラフ」の3か所で数字が食い違うことはない。
+  const intakeHistory = computeCalorieBalanceHistory(14);
   const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
 
   return `
@@ -1390,6 +1513,17 @@ function mealsHtml() {
         </div>
       </div>
       <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
+    </div>
+
+    <div class="card">
+      <p class="section-title">📊 摂取カロリーと消費カロリー(直近14日)</p>
+      ${intakeHistory ? `
+        ${intakeTdeeChartSvg(intakeHistory)}
+        <p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.6;">
+          棒 = その日の摂取カロリー(🟦 消費より少ない日 ／ 🟧 消費を上回った日)。<br>
+          紫の線 = その日の消費カロリー(TDEE + 運動の消費)。棒が線より下なら赤字、上なら黒字です。
+        </p>
+      ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、摂取と消費のグラフが表示されます。</p>'}
     </div>
 
     <div class="card">
@@ -1573,25 +1707,43 @@ function trainingHtml() {
       <p class="section-title">📈 進捗</p>
       <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
       ${weeklyBarSvg(weekBuckets(8), goals.weeklyFreq)}
-      <p class="label" style="margin:14px 0 4px;">種目別 重量の推移</p>
       ${progressExerciseHtml()}
     </div>
 
     <div id="history-section"></div>`;
 }
+// 種目別の推移グラフ。以前は筋トレ(重量)の記録しか対象にしておらず、有酸素だけを
+// 記録しているユーザーには永遠に「記録するとグラフが表示されます」のままで、
+// どれだけ記録してもグラフが出てこない不具合があった。筋トレ(最大重量kg)と
+// 有酸素(運動時間分)の両方を対象に、選んだ種目に応じて指標を切り替えるようにする。
 function progressExerciseHtml() {
-  const keyOf = e => e.exercise ? e.exercise : `(${e.part})`;
-  const strengthEntries = entries.filter(e => e.type === "strength");
-  const keys = [...new Set(strengthEntries.slice().sort((a,b) => b.createdAt - a.createdAt).map(keyOf))];
+  const nameOf = e => e.type === "strength" ? (e.exercise ? e.exercise : `(${e.part})`) : e.exercise;
+  const keyOf = e => `${e.type}|${nameOf(e)}`;
+  const trackable = entries.filter(e => (e.type === "strength" || e.type === "cardio") && nameOf(e));
+  const seen = new Set();
+  const keys = [];
+  trackable.slice().sort((a,b) => b.createdAt - a.createdAt).forEach(e => {
+    const k = keyOf(e);
+    if (!seen.has(k)) { seen.add(k); keys.push(k); }
+  });
+  const labelFor = k => k.slice(k.indexOf("|") + 1);
   if (!progressExercise || !keys.includes(progressExercise)) progressExercise = keys[0] || null;
-  if (!progressExercise) return '<p class="muted" style="font-size:12px;">筋トレを記録するとグラフが表示されます。</p>';
+  if (!progressExercise) {
+    return '<p class="label" style="margin:14px 0 4px;">種目別の推移</p><p class="muted" style="font-size:12px;">運動を記録するとグラフが表示されます。</p>';
+  }
+  const matching = trackable.filter(e => keyOf(e) === progressExercise);
+  const isCardio = matching[0].type === "cardio";
   const byDate = {};
-  strengthEntries.filter(e => keyOf(e) === progressExercise).forEach(e => { byDate[e.date] = Math.max(byDate[e.date] || 0, e.weight); });
+  matching.forEach(e => {
+    const v = isCardio ? (e.minutes || 0) : (e.weight || 0);
+    byDate[e.date] = Math.max(byDate[e.date] || 0, v);
+  });
   const points = Object.keys(byDate).sort().map(d => ({ date: d, value: byDate[d] }));
   const select = `<select id="progress-exercise-select" class="mono" style="margin-bottom:8px;">
-    ${keys.map(k => `<option value="${esc(k)}" ${k===progressExercise?"selected":""}>${esc(k)}</option>`).join("")}
+    ${keys.map(k => `<option value="${esc(k)}" ${k===progressExercise?"selected":""}>${esc(labelFor(k))}</option>`).join("")}
   </select>`;
-  return select + lineChartSvg(points, "var(--coral)", null);
+  const label = `<p class="label" style="margin:14px 0 4px;">種目別 ${isCardio ? "運動時間(分)" : "重量(kg)"}の推移</p>`;
+  return label + select + lineChartSvg(points, "var(--coral)", null);
 }
 function trainingEntryRowHtml(e) {
   const isStrength = e.type === "strength";
@@ -2391,6 +2543,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     exerciseMaster = []; mealMaster = []; masterExercisePart = "胸";
     lastStrengthByExercise = {}; lastCardioMinutes = {}; mealDetailOpen = false;
     routineMaster = []; savingRoutine = false;
+    nutritionCache = {}; saveNutritionCache();
     seedExerciseMasterIfEmpty();
     onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
     saveState(); renderApp();
@@ -2452,6 +2605,7 @@ selectedCalDate = localDateStr();
 loadConfig();
 loadState();
 loadAiAdvice();
+loadNutritionCache();
 // 未送信の変更を残したままアプリを閉じないよう、離脱時にまとめて送る。
 window.addEventListener("pagehide", flushSync);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushSync(); });
