@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v28";
+const APP_VERSION = "v29";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -124,9 +124,12 @@ const EXERCISES_BY_PART = {
   "腕": ["アームカール","トライセップエクステンション","ハンマーカール"],
   "腹筋": ["クランチ","プランク","レッグレイズ"],
 };
-const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","その他"];
+const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","クロストレーナー","リカベントバイク","その他"];
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
-const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "その他":5 };
+// MET値の目安(Compendium of Physical Activities等を参考にした概算・ふつうの強度)。
+// クロストレーナー(エリプティカル)は中強度の有酸素運動として5.0。
+// リカベントバイクは背もたれ付きで負荷が軽めになりやすいため、通常のバイク(7.0)より低めの4.5。
+const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "クロストレーナー":5, "リカベントバイク":4.5, "その他":5 };
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
@@ -1645,10 +1648,13 @@ function mealsHtml() {
       <div class="wrap" style="margin-bottom:10px;" id="meal-type-buttons">
         ${mealBtns}
       </div>
-      ${mealMaster.length ? `
-      <p class="muted" style="margin:0 0 6px;">よく食べるもの(タップで入力)</p>
+      ${mealMaster.filter(m => !m.quickHidden).length ? `
+      <p class="muted" style="margin:0 0 6px;">よく食べるもの(タップで入力・✕でこの一覧から削除)</p>
       <div class="wrap" style="margin-bottom:10px;">
-        ${mealMaster.map(m => `<button class="chip" data-action="select-meal-preset" data-id="${m.id}">${esc(m.name)}</button>`).join("")}
+        ${mealMaster.filter(m => !m.quickHidden).map(m => `<span style="display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:999px;overflow:hidden;">
+          <button type="button" class="chip" style="border:none;border-radius:0;" data-action="select-meal-preset" data-id="${m.id}">${esc(m.name)}</button>
+          <button type="button" class="chip" style="border:none;border-left:1px solid var(--line);border-radius:0;padding:7px 10px;color:var(--ink-faint);" data-action="hide-meal-quick" data-id="${m.id}" title="よく食べるものの一覧から削除(マスタ登録には残ります)">✕</button>
+        </span>`).join("")}
       </div>` : ""}
       <input type="text" id="meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
       <div class="wrap" id="meal-name-suggestions" style="margin-bottom:8px;"></div>
@@ -2240,7 +2246,7 @@ function renderMasterMealList() {
   const el = document.getElementById("master-meal-list");
   if (!el) return;
   el.innerHTML = mealMaster.length
-    ? mealMaster.map(m => `<div class="entry-row"><div style="flex:1;">${esc(m.name)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}${(m.protein||m.fat||m.carb)?`<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>`:""}</div><button class="del-btn" data-action="del-meal-master" data-id="${m.id}">🗑️</button></div>`).join("")
+    ? mealMaster.map(m => `<div class="entry-row"><div style="flex:1;">${esc(m.name)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}${m.quickHidden?`<span class="muted" style="font-size:10.5px;">(食事タブの一覧では非表示)</span>`:""}${(m.protein||m.fat||m.carb)?`<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>`:""}</div>${m.quickHidden?`<button class="del-btn" data-action="show-meal-quick" data-id="${m.id}" title="食事タブの一覧に戻す">↩️</button>`:""}<button class="del-btn" data-action="del-meal-master" data-id="${m.id}">🗑️</button></div>`).join("")
     : '<p class="muted" style="font-size:11px;">まだ登録がありません。</p>';
 }
 
@@ -2584,6 +2590,16 @@ document.getElementById("app").addEventListener("click", (e) => {
     document.getElementById("meal-carb-input").value = m.carb || "";
     document.getElementById("meal-name-suggestions").innerHTML = "";
     openMealDetail();
+  }
+  else if (action === "hide-meal-quick") {
+    // 「よく食べるもの」の一覧(食事タブのタップ入力チップ)からだけ外す。マスタ登録
+    // (設定タブ→マスタ管理→食事マスタ)からは削除しない — そちらは del-meal-master が担当。
+    const m = mealMaster.find(x => x.id === t.dataset.id);
+    if (m) { m.quickHidden = true; saveState(); renderTabContent(); }
+  }
+  else if (action === "show-meal-quick") {
+    const m = mealMaster.find(x => x.id === t.dataset.id);
+    if (m) { delete m.quickHidden; saveState(); renderTabContent(); }
   }
   else if (action === "apply-food-suggestion") { applyFoodSuggestion(t.dataset.target, Number(t.dataset.idx)); }
   else if (action === "ai-lookup-nutrition") { aiLookupNutrition(t.dataset.target); }
