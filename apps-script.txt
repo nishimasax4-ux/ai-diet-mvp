@@ -173,15 +173,17 @@ function handleAdvice_(ctx) {
   return { status: 'ok', text: String(text).trim() };
 }
 
-// 混雑(503)・レート超過(429)・サーバーエラー(5xx)は、時間をおけば直る一時的な状態。
-// 同じモデルへの再試行に意味がある。
-function isTransientCode_(code) {
-  return code === 429 || code === 503 || (code >= 500 && code < 600);
+// 混雑(503)やサーバーエラー(5xx)は、数秒待てば直ることがあるので同じモデルに再試行する。
+// 429(レート超過・無料枠の上限)は【あえて再試行しない】。枠を使い切っている状態で叩き直しても
+// 成功しないうえ、リクエスト数をさらに消費してレート制限を悪化させるだけのため。
+function shouldRetrySameModel_(code) {
+  return code === 503 || (code >= 500 && code < 600);
 }
-// 上記に加えて404(モデルが廃止された)も、「別のモデルなら通る」可能性がある。
-// 逆に400(リクエスト不正・APIキー不正)や403(権限なし)は、モデルを変えても直らないので即中断する。
+// 別のモデルなら通る可能性があるケース。無料枠はモデルごとに別枠なので、429でも
+// モデルを変えれば通ることがある。404(モデル廃止)も同様に次のモデルを試す価値がある。
+// 逆に400(リクエスト不正・APIキー不正)や403(権限なし)は、モデルを変えても直らないので即中断。
 function shouldTryNextModel_(code) {
-  return isTransientCode_(code) || code === 404;
+  return code === 429 || code === 404 || shouldRetrySameModel_(code);
 }
 
 function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
@@ -208,7 +210,7 @@ function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
     code = res.getResponseCode();
     body = res.getContentText();
     if (code === 200) break;
-    if (!isTransientCode_(code) || attempt === RETRY_DELAYS_MS.length) break;
+    if (!shouldRetrySameModel_(code) || attempt === RETRY_DELAYS_MS.length) break;
     // 待ち時間ぶんの余裕がもう無ければ、このモデルは諦めて次のモデルへ回す。
     if (new Date().getTime() + RETRY_DELAYS_MS[attempt] > deadlineMs) break;
     Utilities.sleep(RETRY_DELAYS_MS[attempt]);

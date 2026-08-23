@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v19";
+const APP_VERSION = "v20";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -258,7 +258,6 @@ let masterExercisePart = "胸"; // which part's tab is active in the master-data
 let historyView = "list";
 let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedCalDate = null;
-let progressExercise = null;
 let editing = null;
 let confirmReset = false;
 let dataOpMessage = null;   // バックアップ/復元の結果メッセージ
@@ -916,17 +915,37 @@ function generateDailyAdvice() {
 
 // ---- カロリー収支(摂取 vs TDEE+運動消費)の推移・アドバイス ----
 // すべてルールベースの概算です。外部AI・外部APIには接続していません。
-function estimateExerciseBurnForDate(dateStr, weightKg) {
-  let kcal = 0;
+// その日の運動による概算消費カロリーを、筋トレ・有酸素に分けて返す。
+// 筋トレは1セットあたりの目安、有酸素はMETsと体重・時間からの簡易推定。
+function estimateExerciseBurnBreakdownForDate(dateStr, weightKg) {
+  let strength = 0, cardio = 0;
   entries.filter(e => e.date === dateStr).forEach(e => {
     if (e.type === "strength") {
-      kcal += STRENGTH_KCAL_PER_SET;
+      strength += STRENGTH_KCAL_PER_SET;
     } else {
       const met = CARDIO_MET[e.exercise] || CARDIO_MET["その他"];
-      kcal += (met * 3.5 * weightKg / 200) * (e.minutes || 0);
+      cardio += (met * 3.5 * weightKg / 200) * (e.minutes || 0);
     }
   });
-  return Math.round(kcal);
+  strength = Math.round(strength);
+  cardio = Math.round(cardio);
+  return { strength, cardio, total: strength + cardio };
+}
+function estimateExerciseBurnForDate(dateStr, weightKg) {
+  return estimateExerciseBurnBreakdownForDate(dateStr, weightKg).total;
+}
+// 運動タブの「進捗」用: 直近n日分の、筋トレ・有酸素それぞれの概算消費カロリー。
+// カロリー収支グラフと同じ推定式を使うので、両者で数字が食い違うことはない。
+function computeBurnHistory(days) {
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  const weightKg = latestWeight ? latestWeight.weight : 60; // 体重未記録でも目安は出せるようにする
+  const history = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const dateStr = localDateStr(d);
+    history.push({ date: dateStr, ...estimateExerciseBurnBreakdownForDate(dateStr, weightKg) });
+  }
+  return history;
 }
 // その日の「摂取カロリー目標(TDEE±体重目標での増減) + その日の運動で消費した分」を返す。
 // トレーニングした日ほど、表示上の目標カロリーがその分だけ上乗せされる(=たくさん動いた日は
@@ -974,8 +993,8 @@ function generateBalanceAdvice(history) {
   const direction = goalDiff > 0.3 ? "loss" : goalDiff < -0.3 ? "gain" : "maintain";
 
   if (direction === "loss") {
-    if (avg <= -750) return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり${avgR}kcalの赤字で、やや大きめのペースです。筋肉量の低下や体調不良につながることがあるので、食事量を少し増やすか運動強度を調整してみましょう。` };
-    if (avg <= -150) return { tone:"encourage", icon:"👍", text:`直近の平均収支は1日あたり${avgR}kcalの赤字です。目標体重に向けて順調なペースなので、この調子を続けましょう。` };
+    if (avg <= -750) return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり${Math.abs(avgR)}kcalの赤字で、やや大きめのペースです。筋肉量の低下や体調不良につながることがあるので、食事量を少し増やすか運動強度を調整してみましょう。` };
+    if (avg <= -150) return { tone:"encourage", icon:"👍", text:`直近の平均収支は1日あたり${Math.abs(avgR)}kcalの赤字です。目標体重に向けて順調なペースなので、この調子を続けましょう。` };
     if (avg < 150) return { tone:"caution", icon:"💡", text:`直近の平均収支はほぼ均衡(${avgR}kcal)です。減量を進めたい場合は、間食を少し減らすか有酸素運動を増やしてみましょう。` };
     return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり+${avgR}kcalの黒字(食べ過ぎ気味)です。目標体重から遠ざかる可能性があるので、次の食事から少し調整してみましょう。` };
   }
@@ -983,7 +1002,7 @@ function generateBalanceAdvice(history) {
     if (avg >= 750) return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり+${avgR}kcalとかなり大きめの黒字です。体脂肪の増え方が急すぎないか、体重の推移もあわせて確認しましょう。` };
     if (avg >= 150) return { tone:"encourage", icon:"👍", text:`直近の平均収支は1日あたり+${avgR}kcalの黒字です。増量目標に向けて順調なペースです。` };
     if (avg > -150) return { tone:"caution", icon:"💡", text:`直近の平均収支はほぼ均衡(${avgR}kcal)です。増量を進めたい場合は、間食やタンパク質を少し増やしてみましょう。` };
-    return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり${avgR}kcalの赤字です。増量目標から遠ざかっている可能性があるので、食事量を見直してみましょう。` };
+    return { tone:"caution", icon:"⚠️", text:`直近の平均収支は1日あたり${Math.abs(avgR)}kcalの赤字です。増量目標から遠ざかっている可能性があるので、食事量を見直してみましょう。` };
   }
   if (Math.abs(avg) <= 150) return { tone:"encourage", icon:"👍", text:`直近の平均収支は1日あたり${avgR}kcalとほぼ均衡していて、体重維持にはちょうど良いペースです。` };
   return { tone:"caution", icon:"💡", text:`直近の平均収支は1日あたり${avg>=0?"+":""}${avgR}kcalで、体重維持の目安から少しずれています。食事や運動量を見直してみましょう。` };
@@ -1110,6 +1129,43 @@ function weeklyBarSvg(weeks, goal) {
     ${bars}${labels}
   </svg>`;
 }
+// 運動タブの「進捗」用: 日ごとの運動による概算消費カロリーを、筋トレ+有酸素の
+// 積み上げ棒グラフで表示する。以前は「種目別の重量の推移」だったが、種目を選ばないと
+// 全体像が見えず、種目を切り替えないと今日どれだけ動いたのかが分からなかったため、
+// 「その日、運動でどれだけ消費したか」の合計が一目で分かる形にしている。
+function burnStackedBarSvg(history) {
+  const w=300, h=120, padL=30, padR=8, padT=10, labelH=12;
+  const maxVal = Math.max(...history.map(x => x.total), 1);
+  if (maxVal <= 0) return '<p class="muted" style="font-size:12px;">運動を記録すると、消費カロリーの推移が表示されます。</p>';
+  // 目盛りの上端は50kcal単位で切り上げ、必ず最大値より上に取る。
+  const top = Math.max(Math.ceil((maxVal * 1.15) / 50) * 50, 50);
+  const plotH = h - padT - labelH;
+  const baseY = padT + plotH;
+  const yOf = v => baseY - (v / top) * plotH;
+  const slot = (w - padL - padR) / history.length;
+  const bw = Math.min(14, slot - 3);
+  const ticks = [0, top/2, top].map(v =>
+    `<line x1="${padL}" y1="${yOf(v)}" x2="${w-padR}" y2="${yOf(v)}" stroke="var(--line)" stroke-width="0.5"/>
+     <text x="${padL-3}" y="${yOf(v)+2.5}" font-size="7" fill="var(--ink-faint)" text-anchor="end">${Math.round(v)}</text>`).join("");
+  const bars = history.map((x,i) => {
+    if (x.total <= 0) return "";
+    const bx = padL + i*slot + slot/2 - bw/2;
+    // 有酸素を下、筋トレを上に積む。
+    const cardioH = (x.cardio / top) * plotH;
+    const strengthH = (x.strength / top) * plotH;
+    const cardioY = baseY - cardioH;
+    const strengthY = cardioY - strengthH;
+    const c = x.cardio > 0 ? `<rect x="${bx}" y="${cardioY}" width="${bw}" height="${Math.max(cardioH,1)}" fill="var(--teal)"/>` : "";
+    const s = x.strength > 0 ? `<rect x="${bx}" y="${strengthY}" width="${bw}" height="${Math.max(strengthH,1)}" rx="2" fill="var(--coral)"/>` : "";
+    return c + s;
+  }).join("");
+  const labelIdxs = [0, Math.floor((history.length-1)/2), history.length-1];
+  const labels = labelIdxs.map(i => {
+    const d = new Date(history[i].date + "T00:00:00");
+    return `<text x="${padL + i*slot + slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${d.getMonth()+1}/${d.getDate()}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:130px;">${ticks}${bars}${labels}</svg>`;
+}
 // 食事タブ用: 日ごとの「摂取カロリー(棒)」と「消費カロリー(TDEE+運動・折れ線)」を重ねたグラフ。
 // 棒が線より下なら赤字(消費が上回る)、上なら黒字。収支グラフ(balanceBarSvg)が差分だけを
 // 見せるのに対し、こちらは実際の数値そのものを見比べられるようにするためのもの。
@@ -1155,20 +1211,37 @@ function intakeTdeeChartSvg(history) {
   </svg>`;
 }
 function balanceBarSvg(history) {
-  const w=300, h=110, pad=8, labelH=12;
+  const w=300, h=110, padL=32, padR=8, padT=10, labelH=12;
   const withData = history.filter(x => x.hasData);
-  if (withData.length === 0) return '<p class="muted" style="font-size:12px;">食事を記録すると、カロリー収支の推移が表示されます。</p>';
+  if (withData.length === 0) {
+    // 「食事を記録すると」ではなく、何が足りないのかを正しく伝える。食事名だけ記録して
+    // カロリーを入れていない場合、記録はあるのに収支は計算できないため。
+    const anyMeals = history.some(x => mealEntries.some(m => m.date === x.date));
+    return anyMeals
+      ? '<p class="muted" style="font-size:12px;">食事は記録されていますが、カロリーが入力されていないため収支を計算できません。食事にカロリーを入力すると(「🔍 AIで栄養を調べる」または手入力)、ここに推移が表示されます。</p>'
+      : '<p class="muted" style="font-size:12px;">食事を記録すると、カロリー収支の推移が表示されます。</p>';
+  }
   // 縦の目盛りは「記録がある日」だけで決める。全日を対象にすると、食事を記録して
   // いない日(摂取0kcal=TDEE分まるごとの赤字)が最大値になってしまい、実際に記録した
   // 日の棒が数ピクセルまで潰れて、食事を追加しても変化して見えなくなっていた。
-  const maxAbs = Math.max(...withData.map(x => Math.abs(x.balance)), 200);
-  const plotH = h - pad - labelH;
-  const zeroY = pad + plotH/2;
-  const slot = (w - pad*2) / history.length;
+  //
+  // さらに、ゼロ線を常に中央に置くと、減量中でずっと赤字の人は上半分がまるごと
+  // 空白になり、棒が下半分の中で潰れてしまう。実際のデータの範囲に合わせて
+  // ゼロ線の位置と上下の目盛りを決め、グラフの高さを無駄なく使う。
+  const rawMax = Math.max(...withData.map(x => x.balance), 0);
+  const rawMin = Math.min(...withData.map(x => x.balance), 0);
+  const roundUp = v => Math.max(Math.ceil(v / 100) * 100, 0);
+  let posMax = roundUp(rawMax);
+  let negMax = roundUp(-rawMin);
+  if (posMax === 0 && negMax === 0) { posMax = 100; negMax = 100; }
+  const span = posMax + negMax;
+  const plotH = h - padT - labelH;
+  const zeroY = padT + (posMax / span) * plotH;
+  const slot = (w - padL - padR) / history.length;
   const bw = Math.min(14, slot - 4);
-  const scale = (plotH/2) / maxAbs;
+  const scale = plotH / span;
   const bars = history.map((x,i) => {
-    const slotX = pad + i*slot, bx = slotX + slot/2 - bw/2;
+    const bx = padL + i*slot + slot/2 - bw/2;
     if (!x.hasData) return `<rect x="${bx}" y="${zeroY-1}" width="${bw}" height="2" rx="1" fill="var(--line)"/>`;
     const barH = Math.max(Math.abs(x.balance) * scale, 1.5);
     const y = x.balance >= 0 ? zeroY - barH : zeroY;
@@ -1177,16 +1250,21 @@ function balanceBarSvg(history) {
   }).join("");
   const labelIdxs = [0, Math.floor((history.length-1)/2), history.length-1];
   const labels = labelIdxs.map(i => {
-    const slotX = pad + i*slot;
     const d = new Date(history[i].date + "T00:00:00");
-    return `<text x="${slotX+slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${d.getMonth()+1}/${d.getDate()}</text>`;
+    return `<text x="${padL + i*slot + slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${d.getMonth()+1}/${d.getDate()}</text>`;
   }).join("");
-  // 目盛りの大きさを数値で添える。棒の高さは自動的に伸縮するため、これがないと
+  // 目盛りを数値で添える。棒の高さは自動的に伸縮するため、これがないと
   // 「棒が伸びた=何kcal変わったのか」が読み取れず、変化しているのか分かりにくい。
-  const scaleLabel = `<text x="${w-pad}" y="${pad+6}" font-size="7" fill="var(--ink-faint)" text-anchor="end">上端 ±${Math.round(maxAbs)}kcal</text>`;
+  const tickVals = [posMax, 0, -negMax].filter((v,i,a) => a.indexOf(v) === i);
+  const ticks = tickVals.map(v => {
+    const y = zeroY - v * scale;
+    const line = v === 0 ? "" : `<line x1="${padL}" y1="${y}" x2="${w-padR}" y2="${y}" stroke="var(--line)" stroke-width="0.5"/>`;
+    return `${line}<text x="${padL-3}" y="${y+2.5}" font-size="7" fill="var(--ink-faint)" text-anchor="end">${v > 0 ? "+" : ""}${v}</text>`;
+  }).join("");
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:120px;">
-    <line x1="${pad}" y1="${zeroY}" x2="${w-pad}" y2="${zeroY}" stroke="var(--ink-faint)" stroke-width="1"/>
-    ${bars}${labels}${scaleLabel}
+    ${ticks}
+    <line x1="${padL}" y1="${zeroY}" x2="${w-padR}" y2="${zeroY}" stroke="var(--ink-faint)" stroke-width="1"/>
+    ${bars}${labels}
   </svg>`;
 }
 function meterHtml(value, target, colorHex) {
@@ -1707,43 +1785,43 @@ function trainingHtml() {
       <p class="section-title">📈 進捗</p>
       <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
       ${weeklyBarSvg(weekBuckets(8), goals.weeklyFreq)}
-      ${progressExerciseHtml()}
+      ${progressBurnHtml()}
     </div>
 
     <div id="history-section"></div>`;
 }
-// 種目別の推移グラフ。以前は筋トレ(重量)の記録しか対象にしておらず、有酸素だけを
-// 記録しているユーザーには永遠に「記録するとグラフが表示されます」のままで、
-// どれだけ記録してもグラフが出てこない不具合があった。筋トレ(最大重量kg)と
-// 有酸素(運動時間分)の両方を対象に、選んだ種目に応じて指標を切り替えるようにする。
-function progressExerciseHtml() {
-  const nameOf = e => e.type === "strength" ? (e.exercise ? e.exercise : `(${e.part})`) : e.exercise;
-  const keyOf = e => `${e.type}|${nameOf(e)}`;
-  const trackable = entries.filter(e => (e.type === "strength" || e.type === "cardio") && nameOf(e));
-  const seen = new Set();
-  const keys = [];
-  trackable.slice().sort((a,b) => b.createdAt - a.createdAt).forEach(e => {
-    const k = keyOf(e);
-    if (!seen.has(k)) { seen.add(k); keys.push(k); }
-  });
-  const labelFor = k => k.slice(k.indexOf("|") + 1);
-  if (!progressExercise || !keys.includes(progressExercise)) progressExercise = keys[0] || null;
-  if (!progressExercise) {
-    return '<p class="label" style="margin:14px 0 4px;">種目別の推移</p><p class="muted" style="font-size:12px;">運動を記録するとグラフが表示されます。</p>';
+// 運動による概算消費カロリーの推移(筋トレ+有酸素の合計)。
+// 以前は「種目別の推移」で、種目を1つ選ばないと何も見えず、しかも筋トレの重量しか
+// 対象にしていなかったため、有酸素だけを記録している場合はいつまでも表示されなかった。
+// 種目を問わず「その日、運動で何kcal消費したか」の合計を出すようにしている。
+function progressBurnHtml() {
+  const history = computeBurnHistory(14);
+  const total14 = history.reduce((s,x) => s + x.total, 0);
+  const strength14 = history.reduce((s,x) => s + x.strength, 0);
+  const cardio14 = history.reduce((s,x) => s + x.cardio, 0);
+  const activeDays = history.filter(x => x.total > 0).length;
+  const week = history.slice(-7);
+  const week7 = week.reduce((s,x) => s + x.total, 0);
+  const label = '<p class="label" style="margin:14px 0 4px;">運動による消費カロリー(概算・直近14日)</p>';
+  if (total14 <= 0) {
+    return label + '<p class="muted" style="font-size:12px;">運動を記録すると、消費カロリーの推移が表示されます。</p>';
   }
-  const matching = trackable.filter(e => keyOf(e) === progressExercise);
-  const isCardio = matching[0].type === "cardio";
-  const byDate = {};
-  matching.forEach(e => {
-    const v = isCardio ? (e.minutes || 0) : (e.weight || 0);
-    byDate[e.date] = Math.max(byDate[e.date] || 0, v);
-  });
-  const points = Object.keys(byDate).sort().map(d => ({ date: d, value: byDate[d] }));
-  const select = `<select id="progress-exercise-select" class="mono" style="margin-bottom:8px;">
-    ${keys.map(k => `<option value="${esc(k)}" ${k===progressExercise?"selected":""}>${esc(labelFor(k))}</option>`).join("")}
-  </select>`;
-  const label = `<p class="label" style="margin:14px 0 4px;">種目別 ${isCardio ? "運動時間(分)" : "重量(kg)"}の推移</p>`;
-  return label + select + lineChartSvg(points, "var(--coral)", null);
+  const legend = `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">🟧 筋トレ ${strength14}kcal ／ 🟦 有酸素 ${cardio14}kcal(14日合計 ${total14}kcal)</p>`;
+  const summary = `<div class="between" style="background:var(--paper);border-radius:10px;padding:8px 12px;margin-top:8px;gap:8px;">
+      <div style="text-align:center;flex:1;">
+        <div class="muted" style="font-size:10px;">直近7日</div>
+        <div class="mono" style="font-size:14px;font-weight:600;">${week7}<span style="font-size:10px;">kcal</span></div>
+      </div>
+      <div style="text-align:center;flex:1;">
+        <div class="muted" style="font-size:10px;">運動した日</div>
+        <div class="mono" style="font-size:14px;font-weight:600;">${activeDays}<span style="font-size:10px;">/14日</span></div>
+      </div>
+      <div style="text-align:center;flex:1;">
+        <div class="muted" style="font-size:10px;">運動日の平均</div>
+        <div class="mono" style="font-size:14px;font-weight:600;">${activeDays ? Math.round(total14/activeDays) : 0}<span style="font-size:10px;">kcal</span></div>
+      </div>
+    </div>`;
+  return label + burnStackedBarSvg(history) + legend + summary;
 }
 function trainingEntryRowHtml(e) {
   const isStrength = e.type === "strength";
@@ -1864,7 +1942,6 @@ function renderHistory() {
 function bindTrainingFormWidgets() {
   if (activeTab !== "training") return;
   renderTrainingFormOptions();
-  renderProgressCardExerciseSelect();
   renderHistory();
 }
 function renderTrainingFormOptions() {
@@ -1915,11 +1992,6 @@ function renderTrainingFormOptions() {
   if (minutesInput && minutesInput.value === "" && lastCardioMinutes[selectedCardio]) {
     minutesInput.value = lastCardioMinutes[selectedCardio];
   }
-}
-function renderProgressCardExerciseSelect() {
-  // (select rebuilt as part of trainingHtml(); listener attached here)
-  const sel = document.getElementById("progress-exercise-select");
-  if (sel) sel.addEventListener("change", (e) => { progressExercise = e.target.value; renderTabContent(); });
 }
 
 // ============ SETTINGS TAB ============
