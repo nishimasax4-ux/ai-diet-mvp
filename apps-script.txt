@@ -5,6 +5,11 @@
  *   APP_TOKEN       … アプリの「設定」タブに入れる合言葉。適当な長い文字列でOK。
  *                     (例: openssl rand -hex 24 の出力)
  *   GEMINI_API_KEY  … Google AI Studio で発行したAPIキー。AI機能を使う場合のみ。
+ *   GROQ_API_KEY    … (任意・v23〜) console.groq.com で発行した無料APIキー。
+ *                     クレジットカード登録不要で、1日あたりの無料枠もGeminiより
+ *                     大幅に広い。Geminiのモデルをすべて試してもダメだったとき
+ *                     (無料枠切れ・混雑など)の最終手段として使われる。
+ *                     GEMINI_API_KEYを設定せずこちらだけ設定してもAI機能は動く。
  *   SHEET_ID        … 書き込み先スプレッドシートのID。省略時はこのスクリプトの
  *                     コンテナ(バインドされたシート)を使う。
  *
@@ -23,6 +28,23 @@ var GEMINI_MODEL = 'gemini-3.7-flash';
 // 人気モデルほど混みやすいため、1つ前の世代を控えに置いておくと成功率が上がる。
 // いずれも無料枠の対象です(https://ai.google.dev/gemini-api/docs/pricing)。
 var GEMINI_FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-2.5-flash'];
+// 「軽量(lite)」モデル。無料枠の1日あたりの上限が本家Flashより数倍広く取られている
+// (調査時点でFlash系は1日あたり数百件程度まで絞られていたのに対し、lite系は1,000件程度)。
+// 精度は本家Flashにやや劣るが、食品名→カロリー概算のような単純な構造化抽出や、
+// 短いコメント生成には十分実用的。無料枠をすぐ使い切ってしまう対策として、
+// 呼び出し頻度の高い「栄養価の概算」はこちらを優先し、本家Flash系の枠を温存する。
+var GEMINI_LITE_MODELS = ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite'];
+// 栄養価の概算(食事を記録するたびに呼ばれうる、頻度の高い機能)用のモデル順。
+// 軽量モデルを先に試し、枠が尽きていたら本家Flash系にも回す。
+var NUTRITION_MODELS = GEMINI_LITE_MODELS.concat([GEMINI_MODEL]).concat(GEMINI_FALLBACK_MODELS);
+// 「AIのひとこと」(1日に数回程度しか呼ばれない機能)用のモデル順。
+// 文章の質を優先して本家Flash系から試し、すべて枠切れのときだけ軽量モデルにも回す。
+var ADVICE_MODELS = [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS).concat(GEMINI_LITE_MODELS);
+// Groq(https://console.groq.com)の無料枠で使えるモデル。クレジットカード登録不要で、
+// 1日あたりの上限もGeminiよりかなり広い(執筆時点でモデルにより1日1,000〜数千件)。
+// 日本語の指示追従・簡単なJSON整形にも十分実用的なため、Geminiが全滅したときの
+// 最終手段としてちょうどよい。
+var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -120,8 +142,6 @@ function normalizeCell_(v) {
 
 function handleNutrition_(foodName) {
   if (!foodName) return { status: 'error', message: '食品名が空です' };
-  var key = prop_('GEMINI_API_KEY');
-  if (!key) return { status: 'error', message: 'GEMINI_API_KEYが未設定です' };
 
   var prompt =
     '次の食品の栄養価を、日本で一般的な1食あたりの目安量で概算してください。\n' +
@@ -130,7 +150,7 @@ function handleNutrition_(foodName) {
     '形式: {"kcal": 数値, "protein": 数値, "fat": 数値, "carb": 数値}\n' +
     'protein/fat/carb の単位はグラム、小数第1位まで。';
 
-  var text = callGemini_(key, prompt, 512);
+  var text = callAi_(prompt, 512, NUTRITION_MODELS);
   var n = parseJson_(text);
   if (!n || typeof n.kcal === 'undefined') {
     return { status: 'error', message: 'AIの応答を解釈できませんでした(応答: ' + String(text).slice(0, 200) + ')' };
@@ -152,8 +172,6 @@ function handleNutrition_(foodName) {
  * 本物のAIが文章を書く場所になる。
  */
 function handleAdvice_(ctx) {
-  var key = prop_('GEMINI_API_KEY');
-  if (!key) return { status: 'error', message: 'GEMINI_API_KEYが未設定です' };
   if (!ctx) return { status: 'error', message: 'contextがありません' };
 
   var prompt =
@@ -168,7 +186,7 @@ function handleAdvice_(ctx) {
     '### 記録\n' +
     JSON.stringify(ctx);
 
-  var text = callGemini_(key, prompt, 768);
+  var text = callAi_(prompt, 768, ADVICE_MODELS);
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
 }
@@ -218,10 +236,11 @@ function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
   return { code: code, body: body };
 }
 
-// 本命モデル → 代替モデルの順に試す。人気モデルは混雑(503)しやすいので、
-// 同じモデルを叩き続けるのではなく、控えのモデルに切り替えたほうが成功しやすい。
-function callGemini_(apiKey, prompt, maxTokens) {
-  var models = [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS || []);
+// モデルを順番に試す。人気モデルは混雑(503)しやすく、無料枠(429)もモデルごとに
+// 別枠なので、同じモデルを叩き続けるのではなく、リストの順に切り替えたほうが成功しやすい。
+// models を省略した場合は本家Flash系のみ(後方互換用)。
+function callGemini_(apiKey, prompt, maxTokens, models) {
+  models = models || [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS || []);
   // Apps Scriptの実行時間上限に引っかかって「応答なし」になるのを避けるための全体の締め切り。
   var deadlineMs = new Date().getTime() + 25000;
   var lastCode = 0, lastBody = '';
@@ -243,6 +262,64 @@ function callGemini_(apiKey, prompt, maxTokens) {
     if (new Date().getTime() > deadlineMs) break;
   }
   throw new Error('Gemini APIエラー (HTTP ' + lastCode + '): ' + lastBody.slice(0, 300));
+}
+
+// Groq(OpenAI互換のchat completions形式)を1回だけ呼ぶ。クレジットカード不要の
+// 無料枠を持つプロバイダで、Geminiが全滅したときの最終手段として使う。
+function callGroq_(apiKey, prompt, maxTokens) {
+  var url = 'https://api.groq.com/openai/v1/chat/completions';
+  var options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + apiKey },
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.4,
+      max_tokens: maxTokens || 512,
+    }),
+  };
+  var res = UrlFetchApp.fetch(url, options);
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code !== 200) {
+    throw new Error('Groq APIエラー (HTTP ' + code + '): ' + body.slice(0, 300));
+  }
+  var data = JSON.parse(body);
+  var choice = data.choices && data.choices[0];
+  var text = choice && choice.message && choice.message.content;
+  if (!text) throw new Error('Groqから本文が返りませんでした(応答: ' + body.slice(0, 200) + ')');
+  return text;
+}
+
+// AI呼び出しの入口。GEMINI_API_KEY・GROQ_API_KEYのうち設定されているものだけを使う
+// (どちらか一方だけでも動く)。両方設定されていれば、まずGemini(models で指定した
+// 優先順)を試し、すべてダメだった場合だけGroqを最終手段として試す。
+// 両方失敗した場合は、原因の分かりやすいGemini側のエラーを優先して返す
+// (Gemini未設定でGroqのみ失敗した場合はGroq側のエラーを返す)。
+function callAi_(prompt, maxTokens, geminiModels) {
+  var geminiKey = prop_('GEMINI_API_KEY');
+  var groqKey = prop_('GROQ_API_KEY');
+  if (!geminiKey && !groqKey) {
+    throw new Error('GEMINI_API_KEYもGROQ_API_KEYも設定されていません(どちらか一方の設定で動作します)');
+  }
+  var geminiError = null;
+  if (geminiKey) {
+    try {
+      return callGemini_(geminiKey, prompt, maxTokens, geminiModels);
+    } catch (e) {
+      geminiError = e;
+    }
+  }
+  if (groqKey) {
+    try {
+      return callGroq_(groqKey, prompt, maxTokens);
+    } catch (groqError) {
+      throw geminiError || groqError;
+    }
+  }
+  throw geminiError;
 }
 
 /* ====================== ユーティリティ ====================== */

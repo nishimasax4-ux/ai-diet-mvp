@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v21";
+const APP_VERSION = "v24";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -426,7 +426,9 @@ function applyFoodSuggestion(target, idx) {
 // Google Gemini APIに食品名を送り、カロリー・P・F・Cの概算を取得する。
 // 以下の条件がすべて揃っているときだけ動く:
 //  1) 設定タブで接続先URL・トークンが登録済み
-//  2) そのApps ScriptプロジェクトのスクリプトプロパティにGEMINI_API_KEYが設定済み(README参照)
+//  2) そのApps ScriptプロジェクトのスクリプトプロパティにGEMINI_API_KEYまたは
+//     GROQ_API_KEYの少なくとも一方が設定済み(README参照)。両方設定していれば、
+//     Geminiがダメだったときにクレジットカード不要の無料APIであるGroqへ自動的に回る。
 // 未設定の場合はエラーメッセージを表示するだけで、他の機能には一切影響しない。
 //
 // Apps Scriptから返ったエラーメッセージに、原因ごとの対処法を添える。
@@ -435,11 +437,17 @@ function applyFoodSuggestion(target, idx) {
 // 誤解を招く案内になっていた。原因に応じて出し分ける。
 function friendlyAiError_(rawMessage) {
   const msg = String(rawMessage || "不明なエラー");
+  if (/GEMINI_API_KEYもGROQ_API_KEYも設定されていません/.test(msg)) {
+    return msg + "(Apps Scriptの「プロジェクトの設定」→「スクリプト プロパティ」で、どちらか一方だけでも設定してください。GROQ_API_KEYはconsole.groq.comでクレジットカード登録なしで発行できます)";
+  }
   if (/HTTP 503|UNAVAILABLE|high demand|overloaded/i.test(msg)) {
     return "Google側が一時的に混雑しています。しばらく待ってからもう一度お試しください(設定に問題はありません)。";
   }
   if (/HTTP 429|RESOURCE_EXHAUSTED|quota/i.test(msg)) {
-    return "Gemini APIの無料枠の上限に達したようです。時間をおいてから再度お試しください。";
+    return "Gemini APIの無料枠の上限(1日あたりの回数制限)に達したようです。この上限は太平洋時間の深夜0時にリセットされるため、日本時間ではおおよそ午後4〜5時ごろに回復します。GROQ_API_KEYも設定していれば自動的にそちらへ回るはずなので、この案内が出る場合はGroq側の無料枠も尽きている可能性があります。時間をおいてから再度お試しください。";
+  }
+  if (/Groq API/i.test(msg)) {
+    return msg + "(GROQ_API_KEYが正しくない可能性があります。console.groq.comで発行したキーを再確認してください)";
   }
   if (/GEMINI_API_KEY/i.test(msg)) {
     return msg + "(Apps Scriptの「プロジェクトの設定」→「スクリプト プロパティ」をご確認ください)";
@@ -488,6 +496,10 @@ function applyNutritionToForm_(target, n) {
   if (target === "meal") openMealDetail();
   renderSaveToMasterButton_(target);
 }
+// 連打(二度押し)で同じ食品を2回同時に問い合わせてしまうのを防ぐガード。
+// キャッシュへの書き込みは通信が終わってから行われるため、1回目の応答が
+// 返る前に2回目を押すと、ガードがないと同じ内容で2回分の無料枠を消費してしまう。
+const aiLookupInFlight = new Set();
 async function aiLookupNutrition(target) {
   const ids = foodFieldIds_(target);
   const nameEl = document.getElementById(ids.name);
@@ -525,6 +537,11 @@ async function aiLookupNutrition(target) {
     if (statusEl) statusEl.textContent = "⚠️ AI栄養検索を使うには、まず設定タブで接続先URLとトークンの設定が必要です(README参照)";
     return;
   }
+  if (aiLookupInFlight.has(cacheKey)) {
+    if (statusEl) statusEl.textContent = "🔄 すでに問い合わせ中です。応答をお待ちください(連続で押すと無料枠を余分に消費します)";
+    return;
+  }
+  aiLookupInFlight.add(cacheKey);
   if (statusEl) statusEl.textContent = "🔄 AIに問い合わせ中...(ネット接続が必要です)";
   try {
     const data = await gasPost({ action: "estimateNutrition", foodName });
@@ -540,6 +557,8 @@ async function aiLookupNutrition(target) {
     if (statusEl) statusEl.textContent = `✅ AI概算: ${n.kcal}kcal (P${n.protein} F${n.fat} C${n.carb}) ※目安です。正確な値がわかる場合は上書きしてください`;
   } catch (err) {
     if (statusEl) statusEl.textContent = "⚠️ 通信エラーが発生しました: " + friendlySyncError_(err.message);
+  } finally {
+    aiLookupInFlight.delete(cacheKey);
   }
 }
 // 「よく食べるものに登録」ボタンの表示。AI検索が成功した直後にだけ出す。
@@ -583,7 +602,7 @@ function openMealDetail() {
   const detailEl = document.getElementById("meal-detail-fields");
   if (detailEl) detailEl.classList.remove("hidden");
   const toggleBtn = document.getElementById("meal-detail-toggle");
-  if (toggleBtn) toggleBtn.textContent = "▾ 詳細を入力(カロリー・栄養素・任意)";
+  if (toggleBtn) toggleBtn.textContent = "▾ 栄養素も入力(任意)";
 }
 function esc(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function dayOfYear(d) { const start = new Date(d.getFullYear(), 0, 0); return Math.floor((d - start) / 86400000); }
@@ -642,7 +661,7 @@ function buildPayload() {
     "筋トレ": { header: ["日付","部位","種目","重量kg","回数"], rows: strength },
     "有酸素": { header: ["日付","種目","時間分"], rows: cardio },
     "体重":   { header: ["日付","体重kg"], rows: weight },
-    "食事":   { header: ["日付","区分","メニュー","kcal","P","F","C"], rows: meals },
+    "食事":   { header: ["日付","区分","メニュー","kcal","たんぱく質g","脂質g","炭水化物g"], rows: meals },
   };
 }
 // シートから復元したデータ(buildPayloadと同じ形)をアプリの状態に戻す。
@@ -840,6 +859,7 @@ function buildAdviceContext() {
   };
 }
 async function fetchAiAdvice() {
+  if (aiAdviceStatus === "loading") return; // 連打による二重問い合わせを防ぐ(無料枠の節約)
   if (!gasConfigured()) {
     aiAdviceStatus = "error";
     aiAdviceError = "設定タブで接続先URLとトークンを登録すると、AIコメントを取得できます。";
@@ -1532,7 +1552,7 @@ function todayHtml() {
         <button class="chip active-b" data-action="quicklog-workout" style="flex:0 0 auto;">記録する</button>
       </div>
       <p class="muted" style="font-size:10.5px;margin:8px 0 0;">${aiAdvice
-        ? "※Gemini による生成コメントです(あくまで一般的な目安。体調に不安があるときは医療機関へ)"
+        ? "※AIによる生成コメントです(あくまで一般的な目安。体調に不安があるときは医療機関へ)"
         : "※ルールベースの簡易アドバイスです(外部AIには接続していません)"}</p>
     </div>
 
@@ -1616,12 +1636,13 @@ function mealsHtml() {
       <div class="row" style="margin-bottom:8px;">
         <input type="number" id="meal-cal-input" placeholder="kcal" class="mono">
       </div>
-      <button type="button" class="chip" data-action="toggle-meal-detail" id="meal-detail-toggle" style="margin-bottom:8px;">${mealDetailOpen ? "▾" : "▸"} 栄養素も入力(P・F・C・任意)</button>
+      <button type="button" class="chip" data-action="toggle-meal-detail" id="meal-detail-toggle" style="margin-bottom:8px;">${mealDetailOpen ? "▾" : "▸"} 栄養素も入力(任意)</button>
       <div id="meal-detail-fields" class="${mealDetailOpen ? "" : "hidden"}">
+        <p class="label" style="margin:0 0 4px;">たんぱく質・脂質・炭水化物(g)</p>
         <div class="row" style="margin-bottom:10px;">
-          <input type="number" id="meal-protein-input" placeholder="P(g・任意)" class="mono">
-          <input type="number" id="meal-fat-input" placeholder="F(g・任意)" class="mono">
-          <input type="number" id="meal-carb-input" placeholder="C(g・任意)" class="mono">
+          <input type="number" id="meal-protein-input" placeholder="たんぱく質" class="mono">
+          <input type="number" id="meal-fat-input" placeholder="脂質" class="mono">
+          <input type="number" id="meal-carb-input" placeholder="炭水化物" class="mono">
         </div>
       </div>
       <p class="muted" style="font-size:10.5px;margin:0 0 8px;">カロリーを入れておくと、「今日」タブのカロリー収支グラフに反映されます。分からないときは「🔍 AIで栄養を調べる」で自動入力できます。</p>
@@ -2124,10 +2145,11 @@ function settingsHtml() {
         <div class="row" style="margin-bottom:8px;">
           <input type="number" id="master-meal-cal-input" placeholder="kcal(任意)" class="mono">
         </div>
+        <p class="label" style="margin:0 0 4px;">たんぱく質・脂質・炭水化物(g・任意)</p>
         <div class="row" style="margin-bottom:10px;">
-          <input type="number" id="master-meal-protein-input" placeholder="P(g・任意)" class="mono">
-          <input type="number" id="master-meal-fat-input" placeholder="F(g・任意)" class="mono">
-          <input type="number" id="master-meal-carb-input" placeholder="C(g・任意)" class="mono">
+          <input type="number" id="master-meal-protein-input" placeholder="たんぱく質" class="mono">
+          <input type="number" id="master-meal-fat-input" placeholder="脂質" class="mono">
+          <input type="number" id="master-meal-carb-input" placeholder="炭水化物" class="mono">
         </div>
         <button class="chip" data-action="add-meal-master">＋ 食事を登録</button>
       </div>
@@ -2267,10 +2289,11 @@ function renderEditModal() {
       <p id="ai-lookup-edit-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
       <div class="wrap" id="edit-save-master" style="margin-bottom:8px;"></div>
       <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
+      <p class="label" style="margin:0 0 4px;">たんぱく質・脂質・炭水化物(g・任意)</p>
       <div class="row" style="margin-bottom:10px;">
-        <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="P(g)" class="mono">
-        <input type="number" id="edit-fat" value="${editing.draftFat||""}" placeholder="F(g)" class="mono">
-        <input type="number" id="edit-carb" value="${editing.draftCarb||""}" placeholder="C(g)" class="mono">
+        <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="たんぱく質" class="mono">
+        <input type="number" id="edit-fat" value="${editing.draftFat||""}" placeholder="脂質" class="mono">
+        <input type="number" id="edit-carb" value="${editing.draftCarb||""}" placeholder="炭水化物" class="mono">
       </div>
       <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
   }
@@ -2538,7 +2561,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     mealDetailOpen = !mealDetailOpen;
     const detailEl = document.getElementById("meal-detail-fields");
     if (detailEl) detailEl.classList.toggle("hidden", !mealDetailOpen);
-    t.textContent = (mealDetailOpen ? "▾" : "▸") + " 詳細を入力(カロリー・栄養素・任意)";
+    t.textContent = (mealDetailOpen ? "▾" : "▸") + " 栄養素も入力(任意)";
   }
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
