@@ -197,27 +197,47 @@ function handleAdvice_(ctx) {
 function shouldRetrySameModel_(code) {
   return code === 503 || (code >= 500 && code < 600);
 }
+// APIキー自体が無効な場合だけは、どのモデルに変えても・どう再試行しても直らないので即中断する。
+// 「モデルを変えても無駄な400」はこれだけ、という判定に絞るのが要点(下の shouldTryNextModel_ 参照)。
+function isFatalGeminiError_(code, body) {
+  return code === 400 && /API key not valid|API_KEY_INVALID/i.test(String(body || ''));
+}
 // 別のモデルなら通る可能性があるケース。無料枠はモデルごとに別枠なので、429でも
 // モデルを変えれば通ることがある。404(モデル廃止)も同様に次のモデルを試す価値がある。
-// 逆に400(リクエスト不正・APIキー不正)や403(権限なし)は、モデルを変えても直らないので即中断。
-function shouldTryNextModel_(code) {
+//
+// 400も「次のモデルを試す」対象に含める。以前は400を一律で即中断扱いにしていたが、
+// 実際には gemini-3.x系だけがリクエスト形式の違い(thinkingConfig)で400を返す、という
+// 【モデル固有の400】が起きた。即中断していたため、残りのモデルにもGroqにも回らないまま
+// 全滅していた。キー不正(isFatalGeminiError_)だけを即中断とし、それ以外の400は
+// 「そのモデル固有の問題かもしれない」と考えて次に回す。
+function shouldTryNextModel_(code, body) {
+  if (isFatalGeminiError_(code, body)) return false;
+  if (code === 400) return true;
   return code === 429 || code === 404 || shouldRetrySameModel_(code);
 }
 
-function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-            model + ':generateContent?key=' + encodeURIComponent(apiKey);
+// 「思考」を最小化/無効化して、短い構造化出力(JSON概算・短文コメント)でも
+// maxOutputTokensを思考側だけで使い切って本文が空になる事故を防ぐ
+// (「AIの応答を解釈できませんでした」エラーの原因だった)。
+// ただし制御フィールドはモデル世代で違う: gemini-2.5系は数値の thinkingBudget、
+// gemini-3.x系は新しい thinkingLevel(minimal/low/medium/high)を使う。
+// 世代違いのフィールドを送るとHTTP 400 (INVALID_ARGUMENT)で拒否されることがある。
+function thinkingConfigFor_(model) {
+  return /^gemini-3/.test(model) ? { thinkingLevel: 'minimal' } : { thinkingBudget: 0 };
+}
+
+// 1つのモデルに対する実際のHTTPリクエスト(同一モデルへの再試行を含む)。
+// thinkingConfig に null を渡すと、その項目自体を送らない。
+function callGeminiRaw_(url, prompt, maxTokens, thinkingConfig, deadlineMs) {
+  var generationConfig = { temperature: 0.4, maxOutputTokens: maxTokens || 512 };
+  if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
   var options = {
     method: 'post',
     contentType: 'application/json',
     muteHttpExceptions: true,
     payload: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      // thinkingBudget:0 で「思考」を無効化する。gemini-3.x系のFlashモデルは既定で
-      // 思考トークンを使うため、有効なままだと短い構造化出力(JSON概算・短文コメント)でも
-      // maxOutputTokensを思考側だけで使い切ってしまい、本文が空になることがあった
-      // (「AIの応答を解釈できませんでした」エラーの原因)。この用途では思考は不要なので無効化する。
-      generationConfig: { temperature: 0.4, maxOutputTokens: maxTokens || 512, thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig: generationConfig,
     }),
   };
   // 同じモデルへの再試行。Apps Scriptのウェブアプリには実行時間の上限があるため控えめに。
@@ -234,6 +254,23 @@ function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
     Utilities.sleep(RETRY_DELAYS_MS[attempt]);
   }
   return { code: code, body: body };
+}
+
+function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+            model + ':generateContent?key=' + encodeURIComponent(apiKey);
+  var r = callGeminiRaw_(url, prompt, maxTokens, thinkingConfigFor_(model), deadlineMs);
+  // 【保険】400が返り、かつキー不正ではない場合、thinkingConfig の指定方法がこのモデルに
+  // 受け入れられなかった可能性がある。Googleは世代ごとにこの指定方法を変えてきた実績があり
+  // (2.5系=thinkingBudget → 3.x系=thinkingLevel)、今後また変わっても自力で復帰できるよう、
+  // thinkingConfig を丸ごと外して1回だけ試し直す。思考ぶんのトークンを食われて本文が空に
+  // なるのを避けるため、この再試行だけ出力上限を広げる。
+  if (r.code === 400 && !isFatalGeminiError_(r.code, r.body) && new Date().getTime() < deadlineMs) {
+    var retry = callGeminiRaw_(url, prompt, (maxTokens || 512) * 2, null, deadlineMs);
+    // 再試行も失敗した場合は、元のエラーのほうが原因究明に役立つのでそちらを返す。
+    if (retry.code === 200) return retry;
+  }
+  return r;
 }
 
 // モデルを順番に試す。人気モデルは混雑(503)しやすく、無料枠(429)もモデルごとに
@@ -258,7 +295,7 @@ function callGemini_(apiKey, prompt, maxTokens, models) {
     }
     lastCode = r.code;
     lastBody = r.body;
-    if (!shouldTryNextModel_(r.code)) break;
+    if (!shouldTryNextModel_(r.code, r.body)) break;
     if (new Date().getTime() > deadlineMs) break;
   }
   throw new Error('Gemini APIエラー (HTTP ' + lastCode + '): ' + lastBody.slice(0, 300));
@@ -320,6 +357,54 @@ function callAi_(prompt, maxTokens, geminiModels) {
     }
   }
   throw geminiError;
+}
+
+/**
+ * 【診断用】AIまわりの設定と、各モデルが実際に使えるかどうかを1件ずつ確認する。
+ *
+ * 使い方: Apps Scriptエディタ上部の関数の一覧から「testAi」を選んで「実行」。
+ *         下に出る「実行ログ」に、モデルごとの結果(OK / HTTPエラーコード)が並びます。
+ *
+ * アプリを操作しなくても、どのモデルが通ってどれがダメなのかが一目で分かります。
+ * 失敗したときのエラー本文もそのまま出るので、原因の切り分けに使えます。
+ * ※1回の実行で各モデルに1リクエストずつ送るので、無料枠を少し消費します。
+ */
+function testAi() {
+  var geminiKey = prop_('GEMINI_API_KEY');
+  var groqKey = prop_('GROQ_API_KEY');
+  var lines = [];
+  lines.push('GEMINI_API_KEY: ' + (geminiKey ? '設定あり' : '未設定'));
+  lines.push('GROQ_API_KEY  : ' + (groqKey ? '設定あり' : '未設定'));
+  lines.push('----- モデルごとの結果 -----');
+
+  var prompt = '「1」とだけ返してください。';
+  if (geminiKey) {
+    var models = GEMINI_LITE_MODELS.concat([GEMINI_MODEL]).concat(GEMINI_FALLBACK_MODELS);
+    for (var i = 0; i < models.length; i++) {
+      try {
+        var text = callGemini_(geminiKey, prompt, 64, [models[i]]);
+        lines.push('OK   ' + models[i] + ' → ' + String(text).trim().slice(0, 40));
+      } catch (e) {
+        lines.push('NG   ' + models[i] + ' → ' + String(e.message).slice(0, 200));
+      }
+    }
+  } else {
+    lines.push('(Geminiはキー未設定のため未確認)');
+  }
+  if (groqKey) {
+    try {
+      var gt = callGroq_(groqKey, prompt, 64);
+      lines.push('OK   Groq(' + GROQ_MODEL + ') → ' + String(gt).trim().slice(0, 40));
+    } catch (e2) {
+      lines.push('NG   Groq(' + GROQ_MODEL + ') → ' + String(e2.message).slice(0, 200));
+    }
+  } else {
+    lines.push('(Groqはキー未設定のため未確認)');
+  }
+
+  var out = lines.join('\n');
+  console.log(out);
+  return out;
 }
 
 /* ====================== ユーティリティ ====================== */

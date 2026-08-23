@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v24";
+const APP_VERSION = "v26";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -455,8 +455,11 @@ function friendlyAiError_(rawMessage) {
   if (/HTTP 404|NOT_FOUND|no longer available/i.test(msg)) {
     return msg + "(Googleがこのモデルを廃止した可能性があります。apps-script.gsのGEMINI_MODELを最新のモデル名に更新してください)";
   }
-  if (/HTTP 400|API key not valid|INVALID_ARGUMENT/i.test(msg)) {
+  if (/API key not valid/i.test(msg)) {
     return msg + "(APIキーが正しくない可能性があります。Google AI Studioで発行したキーを再確認してください)";
+  }
+  if (/HTTP 400|INVALID_ARGUMENT/i.test(msg)) {
+    return msg + "(APIキーではなく、リクエスト内容自体が原因の可能性が高いエラーです。apps-script.gsを最新版に更新しても直らない場合は、しばらく待ってから再度お試しください)";
   }
   return msg;
 }
