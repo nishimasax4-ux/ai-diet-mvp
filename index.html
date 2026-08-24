@@ -144,7 +144,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v32";
+const APP_VERSION = "v33";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -725,19 +725,37 @@ function saveState() {
 // 行によって列の意味が変わり、集計にも分析にも使いづらかった。
 // カテゴリごとにシートを分け、数値は "20kg" ではなく 20 (数値)で送る。
 function num_(v) { const n = Number(v); return Number.isFinite(n) ? n : ""; }
+// スプレッドシートに書き出す消費カロリーは、記録した日の体重ではなく「今分かっている
+// 直近の体重」を使って概算する(体重が未記録の日でも計算できるようにするため)。これは
+// アプリ内の他の消費カロリー計算(カロリー収支グラフ・運動タブの進捗など)と同じ考え方。
+function latestKnownWeightKg_() {
+  const latest = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  return latest ? latest.weight : null;
+}
 function buildPayload() {
   const strength = [], cardio = [], weight = [], meals = [];
+  const weightKg = latestKnownWeightKg_();
   entries.forEach(e => {
-    if (e.type === "strength") strength.push([e.date, e.part, e.exercise || "", num_(e.weight), num_(e.reps)]);
-    else cardio.push([e.date, e.exercise, num_(e.minutes)]);
+    if (e.type === "strength") {
+      // 1セットあたり固定の目安(体重に依存しない概算)。STRENGTH_KCAL_PER_SETの値を
+      // あとで変更しても、過去にシートへ書き出した行の数値は遡って変わらない(シートは
+      // 書き込んだ時点の値のスナップショットのため)。
+      strength.push([e.date, e.part, e.exercise || "", num_(e.weight), num_(e.reps), STRENGTH_KCAL_PER_SET]);
+    } else {
+      const met = CARDIO_MET[e.exercise] || CARDIO_MET["その他"];
+      // 体重が一度も記録されていない場合は計算できないため空欄にする(0kcalと書くと
+      // 「消費していない」ように見えて誤解を招くため)。
+      const kcal = weightKg != null ? Math.round((met * 3.5 * weightKg / 200) * (e.minutes || 0)) : "";
+      cardio.push([e.date, e.exercise, num_(e.minutes), kcal]);
+    }
   });
   weightEntries.forEach(w => weight.push([w.date, num_(w.weight)]));
   mealEntries.forEach(m => meals.push([m.date, m.mealType, m.text, num_(m.calories), num_(m.protein), num_(m.fat), num_(m.carb)]));
   const byDate = (a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
   [strength, cardio, weight, meals].forEach(a => a.sort(byDate));
   return {
-    "筋トレ": { header: ["日付","部位","種目","重量kg","回数"], rows: strength },
-    "有酸素": { header: ["日付","種目","時間分"], rows: cardio },
+    "筋トレ": { header: ["日付","部位","種目","重量kg","回数","消費カロリーkcal"], rows: strength },
+    "有酸素": { header: ["日付","種目","時間分","消費カロリーkcal"], rows: cardio },
     "体重":   { header: ["日付","体重kg"], rows: weight },
     "食事":   { header: ["日付","区分","メニュー","kcal","たんぱく質g","脂質g","炭水化物g"], rows: meals },
   };
