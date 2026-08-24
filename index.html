@@ -144,7 +144,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v33";
+const APP_VERSION = "v34";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -358,6 +358,10 @@ let onboardListenerBound = false; // #appは毎回innerHTMLごと差し替わる
 let onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
 
 // ============ HELPERS ============
+// 小数を含む値(AIで調べた栄養価など)を足し合わせると、浮動小数点誤差で
+// 32.300000000000004 のような桁数の多い数値になり、表示が崩れることがある(v31)。
+// 小数点以下1桁に丸めてから使う(表示側は.toFixed(1)で常に1桁そろえる)。
+function round1_(n) { return Math.round(n * 10) / 10; }
 function localDateStr(d = new Date()) {
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
   return `${y}-${m}-${day}`;
@@ -1722,10 +1726,6 @@ function mealsHtml() {
   const today = localDateStr();
   const todayMeals = mealEntries.filter(m => m.date === today);
   const todayCal = todayMeals.reduce((s,m) => s + (m.calories||0), 0);
-  // 小数を含む値(AIで調べた栄養価など)を足し合わせると、浮動小数点誤差で
-  // 32.300000000000004 のような桁数の多い数値になり、表示が崩れることがあった。
-  // 小数点以下1桁に丸めてから使う(表示側は.toFixed(1)で常に1桁そろえる)。
-  const round1_ = (n) => Math.round(n * 10) / 10;
   const todayProtein = round1_(todayMeals.reduce((s,m) => s + (m.protein||0), 0));
   const todayFat = round1_(todayMeals.reduce((s,m) => s + (m.fat||0), 0));
   const todayCarb = round1_(todayMeals.reduce((s,m) => s + (m.carb||0), 0));
@@ -1837,6 +1837,30 @@ function dayEnergyLineHtml_(dateStr) {
   const label = surplus ? "黒字" : "赤字";
   return `<p class="muted mono" style="font-size:10.5px;margin:0 0 6px;line-height:1.5;">摂取 ${s.intake}kcal ／ ${burnText} → <span style="color:${color};font-weight:700;">${label} ${Math.abs(s.balance)}kcal</span></p>`;
 }
+// 食事の履歴の各日に添える、その日のP/F/C合計と目標に対する達成度(v34)。
+// 「今日の食事」カードのP/F/Cメーターとまったく同じ考え方を、過去の日にも展開したもの。
+// 過去の摂取状況が数字の羅列(各食事のP/F/Cメモ)だけでは分かりにくいという声を受けて追加。
+// カロリーが1件も入力されていない日は、そもそも合計に意味がないため表示しない
+// (dayEnergyLineHtml_の「摂取 未入力」判定と同じ考え方)。
+function dayPfcHtml_(dateStr) {
+  const targets = getTargets();
+  if (!targets) return "";
+  const dayMeals = mealEntries.filter(m => m.date === dateStr);
+  const hasIntakeData = dayMeals.some(m => (m.calories || 0) > 0);
+  if (!hasIntakeData) return "";
+  const protein = round1_(dayMeals.reduce((s,m) => s + (m.protein||0), 0));
+  const fat = round1_(dayMeals.reduce((s,m) => s + (m.fat||0), 0));
+  const carb = round1_(dayMeals.reduce((s,m) => s + (m.carb||0), 0));
+  const col = (label, value, target, colorHex) => `<div style="flex:1;">
+    <div class="between" style="margin-bottom:2px;"><span class="muted" style="font-size:9.5px;">${label}</span><span class="mono" style="font-size:9.5px;">${value.toFixed(1)}/${target}g</span></div>
+    ${meterHtml(value, target, colorHex)}
+  </div>`;
+  return `<div class="row" style="margin:0 0 8px;">
+    ${col("たんぱく質", protein, targets.targetProtein, "var(--coral)")}
+    ${col("脂質", fat, targets.targetFat, "var(--sand)")}
+    ${col("炭水化物", carb, targets.targetCarb, "var(--slate)")}
+  </div>`;
+}
 function mealHistoryHtml() {
   if (mealEntries.length === 0) return '<p class="muted" style="font-size:12px;margin:0;">まだ食事の記録がありません。</p>';
   const today = localDateStr();
@@ -1864,6 +1888,7 @@ function mealHistoryHtml() {
         ${dayTotal ? `<span class="muted mono" style="font-size:11px;">計${dayTotal}kcal</span>` : ""}
       </div>
       ${dayEnergyLineHtml_(d)}
+      ${dayPfcHtml_(d)}
       ${items}
     </div>`;
   }).join("");
