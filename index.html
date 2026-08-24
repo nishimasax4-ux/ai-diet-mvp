@@ -15,6 +15,12 @@
     --paper:#EFF6FD; --card:#FFFFFF; --ink:#1C2B3A; --ink-faint:#5B7186;
     --line:#D7E5F2; --teal:#2078C7; --teal-soft:#2078C722; --coral:#E8927C; --coral-soft:#E8927C22;
     --sand:#4CB8D9; --sand-soft:#4CB8D922; --slate:#3E63C4; --slate-soft:#3E63C422;
+    /* 「摂取カロリーと消費カロリー」グラフの消費ライン専用(v35)。この折れ線は元々
+       --slate(青系)を使っていたが、同じグラフの棒(--teal、これも青系)と色が
+       被って見分けにくいという指摘を受けて、はっきり区別できる赤にした。
+       --slateは他の場所(サブタブのボタン・体重グラフの線など)でも広く使われて
+       いるため、この一点だけのために値を変えず、専用の変数を別途用意している。 */
+    --burn-line:#D6455A;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
@@ -144,7 +150,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v34";
+const APP_VERSION = "v36";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -415,6 +421,50 @@ function exerciseNamesForPartByUsage(part) {
       (a.last < b.last ? 1 : a.last > b.last ? -1 : 0) ||
       (a.idx - b.idx))
     .map(x => x.name);
+}
+// 有酸素運動チップの並び順(v36)。考え方は種目チップ(exerciseNamesForPartByUsage)と同じで、
+// 「よく使う種目ほど上」に並べ替える。ただし「その他」は自由入力を呼び出すための特殊な
+// ボタンであり実際の運動メニューではないため、使用回数に関係なく常に末尾に固定する。
+function cardioOptionsByUsage() {
+  const stats = {};
+  entries.forEach(e => {
+    if (e.type !== "cardio" || !e.exercise) return;
+    const s = stats[e.exercise] || (stats[e.exercise] = { count: 0, last: "" });
+    s.count++;
+    if (e.date > s.last) s.last = e.date;
+  });
+  const fixed = CARDIO_OPTIONS.filter(c => c !== "その他");
+  const sorted = fixed
+    .map((name, idx) => ({ name, idx, count: (stats[name] || {}).count || 0, last: (stats[name] || {}).last || "" }))
+    .sort((a, b) =>
+      (b.count - a.count) ||
+      (a.last < b.last ? 1 : a.last > b.last ? -1 : 0) ||
+      (a.idx - b.idx))
+    .map(x => x.name);
+  return CARDIO_OPTIONS.includes("その他") ? [...sorted, "その他"] : sorted;
+}
+// 「よく食べるもの」チップの並び順(v36)。考え方は種目チップと同じで、
+// 実際に記録した回数が多いもの・直近に使ったものほど上に来るようにする。
+// 一度も記録に使っていない(マスタ登録しただけの)ものは、そのあと登録順のまま並べる。
+// mealEntries側は入力欄にそのまま入った文字列を text に保存しているため、
+// マスタの name と完全一致するものだけを「使用」としてカウントする
+// (AIで栄養を調べた結果などで表記ゆれがある場合はカウントされないが、実用上は
+//  ほとんどのケースでチップをタップして入力するため問題にならない)。
+function mealMasterByUsage() {
+  const stats = {};
+  mealEntries.forEach(m => {
+    if (!m.text) return;
+    const s = stats[m.text] || (stats[m.text] = { count: 0, last: "" });
+    s.count++;
+    if (m.date > s.last) s.last = m.date;
+  });
+  return mealMaster
+    .map((m, idx) => ({ m, idx, count: (stats[m.name] || {}).count || 0, last: (stats[m.name] || {}).last || "" }))
+    .sort((a, b) =>
+      (b.count - a.count) ||
+      (a.last < b.last ? 1 : a.last > b.last ? -1 : 0) ||
+      (a.idx - b.idx))
+    .map(x => x.m);
 }
 
 // ============ FOOD CALORIE LOOKUP (offline, built-in dictionary — no external API) ============
@@ -1383,7 +1433,7 @@ function intakeTdeeChartSvg(history) {
 
   // 消費(TDEE+運動)は日によって運動量が変わるので、折れ線で示す。
   const linePts = history.map((x,i) => `${padL + i*slot + slot/2},${yOf(x.tdeeAdjusted)}`).join(" ");
-  const line = `<polyline points="${linePts}" fill="none" stroke="var(--slate)" stroke-width="1.5" stroke-linejoin="round"/>`;
+  const line = `<polyline points="${linePts}" fill="none" stroke="var(--burn-line)" stroke-width="1.5" stroke-linejoin="round"/>`;
 
   const labelIdxs = [0, Math.floor((history.length-1)/2), history.length-1];
   const labels = labelIdxs.map(i => {
@@ -1757,7 +1807,7 @@ function mealsHtml() {
       ${mealMaster.filter(m => !m.quickHidden).length ? `
       <p class="muted" style="margin:0 0 6px;">よく食べるもの(タップで入力・✕でこの一覧から削除)</p>
       <div class="wrap" style="margin-bottom:10px;">
-        ${mealMaster.filter(m => !m.quickHidden).map(m => `<span style="display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:999px;overflow:hidden;">
+        ${mealMasterByUsage().filter(m => !m.quickHidden).map(m => `<span style="display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:999px;overflow:hidden;">
           <button type="button" class="chip" style="border:none;border-radius:0;" data-action="select-meal-preset" data-id="${m.id}">${esc(m.name)}</button>
           <button type="button" class="chip" style="border:none;border-left:1px solid var(--line);border-radius:0;padding:7px 10px;color:var(--ink-faint);" data-action="hide-meal-quick" data-id="${m.id}" title="よく食べるものの一覧から削除(マスタ登録には残ります)">✕</button>
         </span>`).join("")}
@@ -1792,7 +1842,7 @@ function mealsHtml() {
         ${intakeTdeeChartSvg(intakeHistory)}
         <p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.6;">
           棒 = その日の摂取カロリー(🟦 消費より少ない日 ／ 🟧 消費を上回った日)。<br>
-          紫の線 = その日の消費カロリー(基礎消費 + 運動の消費)。棒が線より下なら赤字、上なら黒字です。
+          🔴 赤い線 = その日の消費カロリー(基礎消費 + 運動の消費)。棒が線より下なら赤字、上なら黒字です。
         </p>
       ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、摂取と消費のグラフが表示されます。</p>'}
     </div>
@@ -2174,7 +2224,7 @@ function renderTrainingFormOptions() {
   document.getElementById("exercise-buttons").innerHTML = exOptions.length
     ? exOptions.map(ex => `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${esc(ex)}">${esc(ex)}</button>`).join("")
     : '<span class="muted" style="font-size:11px;">未登録(設定タブの「種目マスタ」から追加できます)</span>';
-  document.getElementById("cardio-buttons").innerHTML = CARDIO_OPTIONS.map(c =>
+  document.getElementById("cardio-buttons").innerHTML = cardioOptionsByUsage().map(c =>
     `<button class="chip ${selectedCardio===c?"active-b":""}" data-action="select-cardio" data-val="${c}">${c}</button>`).join("");
   document.getElementById("cardio-custom-input").classList.toggle("hidden", selectedCardio !== "その他");
 
