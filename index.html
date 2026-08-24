@@ -112,7 +112,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v29";
+const APP_VERSION = "v30";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -380,20 +380,41 @@ function exerciseNamesForPartByUsage(part) {
 
 // ============ FOOD CALORIE LOOKUP (offline, built-in dictionary — no external API) ============
 function normalizeFoodText(s) { return String(s ?? "").toLowerCase().replace(/[\s　]/g, ""); }
+function foodMatchScore_(nameNorm, aliasNorms, q) {
+  if (nameNorm === q || aliasNorms.includes(q)) return 100;
+  if (nameNorm.startsWith(q) || aliasNorms.some(a => a.startsWith(q))) return 80;
+  if (nameNorm.includes(q) || aliasNorms.some(a => a.includes(q))) return 60;
+  if (q.includes(nameNorm) && nameNorm.length >= 2) return 50;
+  if (aliasNorms.some(a => q.includes(a) && a.length >= 2)) return 45;
+  return 0;
+}
+// 入力しながらの食品候補検索。内蔵の食品辞書(FOOD_CALORIE_DB)だけでなく、
+// 自分で登録した「よく食べるもの」(mealMaster、設定タブのマスタ管理)も検索対象に含める。
+// 以前はmealMasterが検索対象に入っておらず、マスタ登録済みの食品を検索しても
+// 出てこない不具合があった(タップ入力の一覧からは選べても、文字入力での検索では
+// 見つからなかった)。
+// 「タップ入力の一覧からは非表示」(quickHidden、v29)の項目も検索では見つかるようにする —
+// quickHiddenはチップの一覧を減らすための表示上の設定であり、検索自体を止めるものではない。
+// 同じ名前がmealMasterと内蔵辞書の両方にある場合は、自分の登録値(実際に使っている値)を
+// 優先し、内蔵辞書側は表示しない。
 function estimateFoodMatches(query) {
   const q = normalizeFoodText(query);
   if (!q) return [];
-  const scored = FOOD_CALORIE_DB.map(f => {
-    const nameNorm = normalizeFoodText(f.name);
-    const aliasNorms = (f.aliases || []).map(normalizeFoodText);
-    let score = 0;
-    if (nameNorm === q || aliasNorms.includes(q)) score = 100;
-    else if (nameNorm.startsWith(q) || aliasNorms.some(a => a.startsWith(q))) score = 80;
-    else if (nameNorm.includes(q) || aliasNorms.some(a => a.includes(q))) score = 60;
-    else if (q.includes(nameNorm) && nameNorm.length >= 2) score = 50;
-    else if (aliasNorms.some(a => q.includes(a) && a.length >= 2)) score = 45;
-    return { f, score };
-  }).filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+  const masterScored = mealMaster.map(m => {
+    const score = foodMatchScore_(normalizeFoodText(m.name), [], q);
+    return { f: { name: m.name, kcal: m.calories, protein: m.protein, fat: m.fat, carb: m.carb, fromMaster: true }, score };
+  }).filter(x => x.score > 0);
+  const masterNames = new Set(mealMaster.map(m => normalizeFoodText(m.name)));
+  const dictScored = FOOD_CALORIE_DB
+    .filter(f => !masterNames.has(normalizeFoodText(f.name)))
+    .map(f => {
+      const aliasNorms = (f.aliases || []).map(normalizeFoodText);
+      const score = foodMatchScore_(normalizeFoodText(f.name), aliasNorms, q);
+      return { f, score };
+    }).filter(x => x.score > 0);
+  const scored = masterScored.map(x => ({ f: x.f, score: x.score + 1000 })) // 自分の登録を優先
+    .concat(dictScored)
+    .sort((a,b) => b.score - a.score);
   return scored.slice(0, 5).map(x => x.f);
 }
 let foodSuggestionCache = {}; // target key ("meal" | "master" | "edit") -> current candidate array, for click handling by index
@@ -403,8 +424,8 @@ function renderFoodSuggestions(containerId, query, target) {
   const matches = estimateFoodMatches(query);
   foodSuggestionCache[target] = matches;
   el.innerHTML = matches.length
-    ? `<span class="muted" style="width:100%;font-size:10.5px;margin-bottom:2px;">🔍 概算カロリー候補(タップで入力・目安です)</span>` +
-      matches.map((f, i) => `<button class="chip" data-action="apply-food-suggestion" data-target="${target}" data-idx="${i}">${esc(f.name)} <span class="mono">${f.kcal}kcal</span></button>`).join("")
+    ? `<span class="muted" style="width:100%;font-size:10.5px;margin-bottom:2px;">🔍 候補(タップで入力・${matches.some(f=>f.fromMaster)?"📌は登録済みの値・":""}目安です)</span>` +
+      matches.map((f, i) => `<button class="chip" data-action="apply-food-suggestion" data-target="${target}" data-idx="${i}">${f.fromMaster ? "📌 " : ""}${esc(f.name)} <span class="mono">${f.kcal != null ? f.kcal + "kcal" : "kcal未設定"}</span></button>`).join("")
     : "";
 }
 function applyFoodSuggestion(target, idx) {
@@ -419,7 +440,7 @@ function applyFoodSuggestion(target, idx) {
   const nameEl = document.getElementById(ids.name);
   if (nameEl) nameEl.value = f.name;
   const calEl = document.getElementById(ids.cal);
-  if (calEl) calEl.value = f.kcal;
+  if (calEl) calEl.value = f.kcal != null ? f.kcal : "";
   const pEl = document.getElementById(ids.protein);
   if (pEl) pEl.value = f.protein || "";
   const fEl = document.getElementById(ids.fat);
