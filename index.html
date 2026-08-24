@@ -150,7 +150,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v36";
+const APP_VERSION = "v37";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -1944,6 +1944,41 @@ function mealHistoryHtml() {
   }).join("");
 }
 
+// ============ X(旧Twitter)へのシェア(v37) ============
+// 「ダイエットの経過をXにポストしたい」というご相談に対応。XのAPIは2026年2月以降
+// 完全従量課金(投稿1件ごとに課金)になり、アプリから自動投稿するには開発者登録と
+// 支払い設定が必須になった。課金なしで使える方法として、Xが公式に提供している
+// Web Intent(https://x.com/intent/tweet?text=...)を使う。これはAPIキーや
+// アプリ登録が一切不要で、リンクを開くとログイン済みのXの投稿画面(iOSでXアプリが
+// 入っていればアプリ側)にテキストが入力された状態で遷移する。実際にポストするかどうかは
+// 最後まで本人の操作(確認してタップ)に委ねられる。
+// 投稿文は「開始体重→現在の体重とその差分・記録日数」を自動生成する。体重の記録が
+// 1件しかない(まだ経過と呼べるほどのデータがない)場合は、差分の代わりに現在値と
+// 目標値だけを出す。
+function buildXShareText() {
+  const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
+  if (sortedAsc.length === 0) return null;
+  const start = sortedAsc[0], latest = sortedAsc[sortedAsc.length - 1];
+  const lines = ["ダイエット経過 📉"];
+  if (sortedAsc.length >= 2 && start.date !== latest.date) {
+    const days = Math.round((new Date(latest.date) - new Date(start.date)) / 86400000) + 1;
+    const diff = round1_(latest.weight - start.weight);
+    const diffStr = (diff > 0 ? "+" : "") + diff.toFixed(1);
+    lines.push(`体重: ${start.weight}kg → ${latest.weight}kg (${diffStr}kg)`);
+    lines.push(`記録${days}日目`);
+  } else {
+    lines.push(`体重: ${latest.weight}kg`);
+    if (goals.weight) lines.push(`目標: ${goals.weight}kg`);
+  }
+  lines.push("#ダイエット記録");
+  return lines.join("\n");
+}
+function openXShare() {
+  const text = buildXShareText();
+  if (!text) return;
+  window.open("https://x.com/intent/tweet?text=" + encodeURIComponent(text), "_blank");
+}
+
 // ============ WEIGHT TAB ============
 function weightHtml() {
   const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
@@ -1951,6 +1986,7 @@ function weightHtml() {
   const latest = sortedDesc[0];
   const remaining = latest ? Math.round((latest.weight - goals.weight)*10)/10 : null;
   const points = sortedAsc.map(w => ({ date: w.date, value: w.weight }));
+  const xShareText = buildXShareText();
   const list = sortedDesc.slice(0,8).map(w => `
     <div class="entry-row">
       <span class="mono muted" style="flex:1;">${w.date}</span>
@@ -1966,6 +2002,19 @@ function weightHtml() {
         <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
       </div>
       ${lineChartSvg(points, "var(--slate)", goals.weight)}
+    </div>
+
+    <div class="card">
+      <p class="section-title">📤 Xに経過をポスト</p>
+      ${xShareText ? `
+      <textarea id="x-share-text" readonly rows="4" style="margin-bottom:8px;" onclick="this.select()">${esc(xShareText)}</textarea>
+      <div class="row">
+        <button type="button" class="chip" data-action="copy-x-share" style="flex:1;">📋 コピー</button>
+        <button type="button" class="btn-primary" data-action="open-x-share" style="flex:1;">🐦 Xの投稿画面を開く</button>
+      </div>
+      <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">タップするとXの投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
+      ` : `<p class="muted" style="font-size:11.5px;margin:0;">体重を記録すると、ここに経過をXへ投稿するための文章が自動で作られます。</p>`}
     </div>
 
     <div class="card">
@@ -2802,6 +2851,19 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
+  else if (action === "open-x-share") { openXShare(); }
+  else if (action === "copy-x-share") {
+    const text = buildXShareText();
+    const statusEl = document.getElementById("x-share-status");
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => { if (statusEl) statusEl.textContent = "✅ コピーしました"; })
+        .catch(() => { if (statusEl) statusEl.textContent = "コピーできませんでした。上のテキストを長押しして選択・コピーしてください。"; });
+    } else if (statusEl) {
+      statusEl.textContent = "このブラウザではコピー機能が使えません。上のテキストを長押しして選択・コピーしてください。";
+    }
+  }
   else if (action === "edit-training") { openEdit("training", t.dataset.id); }
   else if (action === "edit-weight") { openEdit("weight", t.dataset.date); }
   else if (action === "edit-meal") { openEdit("meal", t.dataset.id); }
