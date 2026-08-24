@@ -91,17 +91,49 @@
 <div id="modal-root" class="hidden"></div>
 
 <script>
+// ============================================================================
+// 目次(このファイルは単一HTMLファイルのまま運用する方針のため分割しません。
+// 代わりに、GitHubアプリの「このファイル内を検索」で下の見出し文字列
+// (例: "============ STATE") をそのまま検索すると、該当セクションへ
+// すぐジャンプできます。セクションはだいたい上から実行順・画面遷移順に
+// 並んでいます)
+//
+//  CONFIG                   … Apps Script接続設定(URL/トークン)の保存・読込
+//  STATE                    … アプリ全体のグローバル状態(entries/profile等)。
+//                              各変数の意味は定義箇所のコメント参照
+//  HELPERS                  … 日付処理・ID採番などの小さな共通関数
+//  FOOD CALORIE LOOKUP      … オフライン食品カロリー辞書(ネット接続不要)
+//  AIによる栄養価の概算       … Gemini/Groqへ食品名を投げてカロリー等を推定
+//  AI ADVICE HELPERS        … AIによる今日のアドバイスコメント生成
+//  BACKUP / RESTORE         … JSON書き出し/読み込み、シートからの復元
+//  CHART HELPERS            … SVGグラフ(体重推移・進捗など)の描画
+//  ONBOARDING               … 初回起動時の3ステップ入力フォーム
+//  MAIN APP SHELL           … タブバーを含む全体レイアウトの描画
+//  TODAY TAB                … 「今日」タブ(サマリー・目標に対する進捗)
+//  MEALS TAB                … 「食事」タブ(記録・よく食べるものクイック入力)
+//  WEIGHT TAB                … 「体重」タブ(体重記録・推移グラフ)
+//  TRAINING TAB              … 「運動」タブ(筋トレ・有酸素の記録・進捗・履歴)
+//  SETTINGS TAB              … 「設定」タブ(プロフィール・マスタ管理・同期・データ)
+//  EDIT MODAL                … 記録の編集用モーダル
+//  ACTIONS                   … 記録の追加・削除などの状態変更ロジック本体
+//  毎日の入力を楽にするための…  … 直近入力の再提案などのショートカット機能
+//  EVENTS                    … クリック等のイベント委譲(#app全体で1箇所に集約)
+//  INIT                      … 起動時の初期化(state読込→描画)
+// ============================================================================
+
 // ============ CONFIG ============
 // Apps ScriptのURLとアクセストークンは【ソースコードに書きません】。
 // このリポジトリは公開されているため、URLを直書きすると、それを見た第三者が誰でも
 // シートに書き込んだりGemini APIのクォータを消費できてしまいます。
 // そのため接続情報は端末ごとに「設定」タブから入力し、localStorageにだけ保存します。
 const CONFIG_KEY = "training-log-config";
-let gasConfig = { url: "", token: "" };
+// lastKnownWriteAt: 上書き事故防止(v32)用。この端末が最後に把握した、シート側の
+// 最終書き込み時刻(Apps Scriptから返る値をそのまま保持する)。詳しくはsyncToSheet参照。
+let gasConfig = { url: "", token: "", lastKnownWriteAt: null };
 function loadConfig() {
   try {
     const raw = localStorage.getItem(CONFIG_KEY);
-    if (raw) gasConfig = Object.assign({ url:"", token:"" }, JSON.parse(raw));
+    if (raw) gasConfig = Object.assign({ url:"", token:"", lastKnownWriteAt:null }, JSON.parse(raw));
   } catch (e) { console.error("config load error", e); }
 }
 function saveConfig() {
@@ -112,7 +144,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v30";
+const APP_VERSION = "v32";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -257,6 +289,9 @@ let moodByDate = {};
 let syncStatus = "idle";
 let lastSyncedAt = null;
 let lastSyncError = null; // 直近の同期エラーの詳細(設定タブの「同期」カードに表示。原因調査用)
+// 上書き事故防止(v32): 他の端末がこの端末の知らないうちに書き込んでいた場合の情報。
+// nullでなければ「今すぐ同期すると、他の端末の新しいデータを消してしまう可能性がある」状態。
+let syncConflict = null; // { lastWriteAt } | null
 let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
 let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
 let lastStrengthByExercise = {}; // "種目名"(または"(部位)") -> {reps, weight} の直近の入力値。次回そのままの値を提案する
@@ -791,7 +826,9 @@ function flushSync() {
   if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
   if (syncPending) syncToSheet();
 }
-async function syncToSheet() {
+// force: trueのときは、他の端末が新しく書き込んでいても構わず上書きする
+// (上書き事故防止の警告カードで、ユーザーが「上書きして同期する」を選んだ場合のみ渡される)。
+async function syncToSheet(force) {
   if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
   if (!gasConfigured()) { syncStatus = "idle"; renderSyncStatus(); return; }
   if (syncInFlight) { syncPending = true; return; } // 走っている分が終わってから追いかける
@@ -799,10 +836,28 @@ async function syncToSheet() {
   syncPending = false;
   syncStatus = "syncing"; renderSyncStatus();
   try {
-    const data = await gasPost({ action: "save", payload: buildPayload() });
+    const data = await gasPost({
+      action: "save",
+      payload: buildPayload(),
+      knownWriteAt: gasConfig.lastKnownWriteAt,
+      force: !!force,
+    });
     if (data && data.status === "ok") {
       syncStatus = "synced";
       lastSyncedAt = new Date();
+      lastSyncError = null;
+      syncConflict = null;
+      // 次回の同期時の食い違いチェック用に、サーバーが返した最新の書き込み時刻を覚えておく。
+      // (apps-script.gsが未更新でこのフィールドを返さない場合は従来通りnullのままで、
+      //  食い違いチェック自体が働かない=これまでと同じ動作になるだけで、壊れはしない)
+      gasConfig.lastKnownWriteAt = data.lastWriteAt || null;
+      saveConfig();
+    } else if (data && data.status === "conflict") {
+      // 他の端末がこの端末の知らないうちに書き込んでいた。データを失う可能性があるため、
+      // ユーザーが選ぶまでは自動では上書きしない。ローカルの変更はそのまま端末に残るので、
+      // ここで何も送らなくても記録自体が消えることはない。
+      syncStatus = "conflict";
+      syncConflict = { lastWriteAt: data.lastWriteAt || null };
       lastSyncError = null;
     } else {
       syncStatus = "error";
@@ -815,7 +870,8 @@ async function syncToSheet() {
   syncInFlight = false;
   renderSyncStatus();
   // 送信中にさらに変更があった場合は、その分をもう一度だけ送る。
-  if (syncPending && syncStatus !== "error") { syncPending = false; syncToSheet(); return; }
+  // ただしconflict中は、ユーザーが解決するまで自動では再送しない(同じ警告を繰り返すだけになるため)。
+  if (syncPending && syncStatus !== "error" && syncStatus !== "conflict") { syncPending = false; syncToSheet(); return; }
   // 設定タブを開いているときは、同期カードのエラー詳細表示も最新化する
   // (ヘッダーの☁️アイコンだけでなく、タップ後の結果がその場で見えるように)。
   if (activeTab === "settings") renderTabContent();
@@ -823,14 +879,15 @@ async function syncToSheet() {
 function renderSyncStatus() {
   const el = document.getElementById("sync-status");
   if (!el) return;
-  el.classList.toggle("error", syncStatus === "error");
-  const icon = { idle: "☁️", pending: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️" }[syncStatus];
+  el.classList.toggle("error", syncStatus === "error" || syncStatus === "conflict");
+  const icon = { idle: "☁️", pending: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️", conflict: "⚠️" }[syncStatus];
   const text = {
     idle: gasConfigured() ? "Google Sheets 未同期" : "Google Sheets 未設定",
     pending: "変更あり(まもなく同期)",
     syncing: "同期中...",
     synced: `同期済み${lastSyncedAt ? ` (${String(lastSyncedAt.getHours()).padStart(2,"0")}:${String(lastSyncedAt.getMinutes()).padStart(2,"0")})` : ""}`,
     error: "同期エラー(タップして再試行)",
+    conflict: "他の端末に新しいデータあり(タップして確認)",
   }[syncStatus];
   el.innerHTML = `${icon} <span>${text}</span>`;
 }
@@ -1179,6 +1236,12 @@ async function restoreFromSheet() {
     if (!data || data.status !== "ok" || !data.payload) throw new Error((data && data.message) || "読み込みに失敗しました");
     applyPayload(data.payload);
     saveState();
+    // シートの最新内容を取り込んだので、この端末は今のシートの状態を把握したことになる。
+    // 次に同期するときの食い違いチェックの基準を更新しておく(上書き事故防止、v32)。
+    gasConfig.lastKnownWriteAt = data.lastWriteAt || null;
+    saveConfig();
+    syncConflict = null;
+    if (syncStatus === "conflict") syncStatus = "idle";
     dataOpMessage = `シートから復元しました(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)`;
     dataOpError = false;
     renderApp();
@@ -1641,9 +1704,13 @@ function mealsHtml() {
   const today = localDateStr();
   const todayMeals = mealEntries.filter(m => m.date === today);
   const todayCal = todayMeals.reduce((s,m) => s + (m.calories||0), 0);
-  const todayProtein = todayMeals.reduce((s,m) => s + (m.protein||0), 0);
-  const todayFat = todayMeals.reduce((s,m) => s + (m.fat||0), 0);
-  const todayCarb = todayMeals.reduce((s,m) => s + (m.carb||0), 0);
+  // 小数を含む値(AIで調べた栄養価など)を足し合わせると、浮動小数点誤差で
+  // 32.300000000000004 のような桁数の多い数値になり、表示が崩れることがあった。
+  // 小数点以下1桁に丸めてから使う(表示側は.toFixed(1)で常に1桁そろえる)。
+  const round1_ = (n) => Math.round(n * 10) / 10;
+  const todayProtein = round1_(todayMeals.reduce((s,m) => s + (m.protein||0), 0));
+  const todayFat = round1_(todayMeals.reduce((s,m) => s + (m.fat||0), 0));
+  const todayCarb = round1_(todayMeals.reduce((s,m) => s + (m.carb||0), 0));
   const targets = getEffectiveCalorieTarget(today);
   // 摂取と消費のグラフ用。カロリー収支グラフとまったく同じ計算結果を使うので、
   // 「今日の状況」「収支グラフ」「このグラフ」の3か所で数字が食い違うことはない。
@@ -1658,9 +1725,9 @@ function mealsHtml() {
         ${meterHtml(todayCal, targets.effectiveTarget, "var(--teal)")}
         ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">基礎消費 ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
         <div class="row" style="margin-top:12px;">
-          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
-          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
-          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">炭水化物</p><p class="mono" style="margin:0;">${todayCarb}/${targets.targetCarb}g</p>${meterHtml(todayCarb, targets.targetCarb, "var(--slate)")}</div>
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein.toFixed(1)}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat.toFixed(1)}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">炭水化物</p><p class="mono" style="margin:0;">${todayCarb.toFixed(1)}/${targets.targetCarb}g</p>${meterHtml(todayCarb, targets.targetCarb, "var(--slate)")}</div>
         </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
     </div>
 
@@ -2113,6 +2180,15 @@ function settingsHtml() {
       <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
       <button class="chip" data-action="retry-sync">今すぐ同期を試す</button>
       ${syncStatus === "error" && lastSyncError ? `<p style="font-size:11px;margin:10px 0 0;color:var(--coral);line-height:1.5;">エラー内容: ${esc(lastSyncError)}</p>` : ""}
+      ${syncConflict ? `
+      <div style="background:#FDF1E7;border-radius:8px;padding:10px;margin-top:12px;">
+        <p style="font-size:12.5px;margin:0 0 8px;color:var(--coral);font-weight:600;">⚠️ 他の端末で、この端末が把握している内容より新しいデータが書き込まれています</p>
+        <p style="font-size:11.5px;margin:0 0 10px;line-height:1.6;">このまま同期すると、その新しいデータが消えてしまう可能性があります。まず「☁️ シートから復元」で今のシートの中身を確認することをおすすめします。それでもこの端末の内容で上書きしたい場合は、下のボタンを押してください。</p>
+        <div class="row">
+          <button class="chip" data-action="force-sync" style="color:var(--coral);">上書きして同期する</button>
+          <button class="chip" data-action="dismiss-sync-conflict">あとで判断する</button>
+        </div>
+      </div>` : ""}
       <div style="margin-top:12px;">
         <label class="label">Apps Script Webアプリ URL</label>
         <input type="url" id="gas-url-input" value="${esc(gasConfig.url)}" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:8px;font-size:12px;">
@@ -2661,14 +2737,27 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "set-lifestyle") { profile.lifestyle = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "retry-sync") { syncToSheet(); }
+  else if (action === "force-sync") { syncToSheet(true); }
+  else if (action === "dismiss-sync-conflict") {
+    // 警告を消すだけで、データの送信はしない。ローカルの記録はそのまま端末に残っているので、
+    // これによって何かが消えることはない。あとで「今すぐ同期を試す」や「シートから復元」で
+    // あらためて判断できる。
+    syncConflict = null;
+    syncStatus = "pending";
+    renderTabContent();
+  }
   else if (action === "fetch-ai-advice") { fetchAiAdvice(); }
   else if (action === "save-gas-config") {
     const urlEl = document.getElementById("gas-url-input");
     const tokenEl = document.getElementById("gas-token-input");
     const url = urlEl ? urlEl.value.trim() : "";
     const token = tokenEl ? tokenEl.value.trim() : "";
-    gasConfig = { url, token };
+    // 接続先(URL)が変わる場合は別のシートの可能性があるため、上書き事故防止用の
+    // 「最後に把握した書き込み時刻」もリセットする(古いシートの情報を新しいシートに
+    // 誤って適用しないため)。
+    gasConfig = { url, token, lastKnownWriteAt: null };
     saveConfig();
+    syncConflict = null;
     if (gasConfigured()) { syncStatus = "idle"; syncToSheet(); }
     else { syncStatus = "idle"; renderSyncStatus(); }
     renderTabContent();
@@ -2790,7 +2879,10 @@ document.getElementById("app").addEventListener("change", (e) => {
   }
 });
 document.getElementById("app").addEventListener("click", (e) => {
-  if (e.target.closest("#sync-status") && syncStatus === "error") syncToSheet();
+  if (!e.target.closest("#sync-status")) return;
+  if (syncStatus === "error") syncToSheet();
+  // conflict中はいきなり再送(=上書き)せず、詳しい説明とボタンがある設定タブへ誘導する。
+  else if (syncStatus === "conflict") { activeTab = "settings"; renderApp(); }
 });
 document.getElementById("modal-root").addEventListener("click", (e) => {
   if (e.target.id === "modal-overlay") { editing = null; renderEditModal(); return; }

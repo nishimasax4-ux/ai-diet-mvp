@@ -17,6 +17,11 @@
  *   「ウェブアプリ」/ 実行するユーザー: 自分 / アクセスできるユーザー: 全員
  *   ※「全員」でないと動きませんが、APP_TOKEN が無いリクエストは弾くので、
  *     URLを知られただけでは書き込まれません。
+ *
+ * 【自動で使うスクリプトプロパティ(手動設定は不要)】
+ *   LAST_WRITE_AT   … (v32〜) 複数端末での上書き事故に気づけるよう、書き込みの
+ *                     たびに自動更新される最終書き込み時刻。ユーザーが手で設定
+ *                     する必要はない。詳細はhandleSave_のコメントを参照。
  */
 
 // 2026年8月時点でGoogleがgemini-2.0-flashを廃止したため更新(HTTP 404で通知されました)。
@@ -62,7 +67,7 @@ function doPost(e) {
     }
 
     var action = body.action || 'save';
-    if (action === 'save')              return json_(handleSave_(body.payload));
+    if (action === 'save')              return json_(handleSave_(body.payload, body.knownWriteAt, body.force));
     if (action === 'load')              return json_(handleLoad_());
     if (action === 'estimateNutrition') return json_(handleNutrition_(body.foodName));
     if (action === 'advice')            return json_(handleAdvice_(body.context));
@@ -79,13 +84,33 @@ function doPost(e) {
  * payload は { シート名: {header:[...], rows:[[...],...]}, ... } の形。
  * 以前は全カテゴリを同じ6列に詰め込んでいたため、行によって列の意味が変わって
  * 集計に使えなかった。カテゴリごとにシートを分け、数値は数値のまま書き込む。
+ *
+ * 【上書き事故防止(v32)】この同期は毎回全件を丸ごと上書きする設計になっており
+ * (差分マージはしていない)、複数端末で使うと「あとから同期した端末が勝つ」——
+ * つまり、他の端末が書き込んだ内容が黙って消えるリスクがある。真の解決(レコード
+ * 単位のマージ)はシート列構成の変更を伴う大掛かりな話になるため、まずは
+ * 「事故が起きる前に気づける」軽量な安全策として、書き込みのたびに
+ * スクリプトプロパティ LAST_WRITE_AT を更新し、次の書き込み時にこの端末が
+ * 最後に把握していた時刻(knownWriteAt)と食い違っていないか確認する。
+ * 食い違っていれば「他の端末が新しく書き込んでいる」ということなので、
+ * force(強制上書き)が指定されていない限り書き込みを止め、conflictを返す。
+ * knownWriteAtが未送信(index.htmlがこの機能に対応する前のバージョンなど)の
+ * 場合はチェックをスキップし、これまで通り動く(後方互換)。
  */
-function handleSave_(payload) {
+function handleSave_(payload, knownWriteAt, force) {
   if (!payload || typeof payload !== 'object') return { status: 'error', message: 'payloadがありません' };
   var ss = spreadsheet_();
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) return { status: 'error', message: '他の同期処理と競合しました。少し待って再試行してください。' };
   try {
+    var lastWriteAt = prop_('LAST_WRITE_AT') || null;
+    if (!force && knownWriteAt && lastWriteAt && knownWriteAt !== lastWriteAt) {
+      return {
+        status: 'conflict',
+        lastWriteAt: lastWriteAt,
+        message: '他の端末で、この端末が把握している内容より新しいデータが書き込まれています。',
+      };
+    }
     var written = 0;
     Object.keys(payload).forEach(function (name) {
       var t = payload[name] || {};
@@ -109,7 +134,9 @@ function handleSave_(payload) {
       }
       sh.autoResizeColumns(1, Math.max(1, header.length));
     });
-    return { status: 'ok', written: written, at: new Date().toISOString() };
+    var now = new Date().toISOString();
+    PropertiesService.getScriptProperties().setProperty('LAST_WRITE_AT', now);
+    return { status: 'ok', written: written, at: now, lastWriteAt: now };
   } finally {
     lock.releaseLock();
   }
@@ -129,7 +156,10 @@ function handleLoad_() {
       .map(function (r) { return r.map(normalizeCell_); });
     payload[name] = { header: header, rows: rows };
   });
-  return { status: 'ok', payload: payload };
+  // 上書き事故防止(v32): このタイミングでのサーバー側の最終書き込み時刻を返す。
+  // 復元(シートから読み込み)した端末は、この時刻を「自分が把握している最新」として
+  // 覚えておき、次に自分がシートへ書き込むときの食い違いチェックに使う。
+  return { status: 'ok', payload: payload, lastWriteAt: prop_('LAST_WRITE_AT') || null };
 }
 
 /** Sheetsが日付型で返してきたセルを YYYY-MM-DD の文字列に揃える。 */
