@@ -150,7 +150,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v37";
+const APP_VERSION = "v38";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -298,6 +298,9 @@ let lastSyncError = null; // 直近の同期エラーの詳細(設定タブの�
 // 上書き事故防止(v32): 他の端末がこの端末の知らないうちに書き込んでいた場合の情報。
 // nullでなければ「今すぐ同期すると、他の端末の新しいデータを消してしまう可能性がある」状態。
 let syncConflict = null; // { lastWriteAt } | null
+// 対になっていないapps-script.gs(差分同期版など)が接続先に貼られている状態か。
+// trueなら設定タブに警告を出す。
+let backendMismatch = false;
 let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
 let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
 let lastStrengthByExercise = {}; // "種目名"(または"(部位)") -> {reps, weight} の直近の入力値。次回そのままの値を提案する
@@ -442,6 +445,14 @@ function cardioOptionsByUsage() {
       (a.idx - b.idx))
     .map(x => x.name);
   return CARDIO_OPTIONS.includes("その他") ? [...sorted, "その他"] : sorted;
+}
+// 有酸素フォームを開いたときに、あらかじめ選ばれている種目(v38)。以前は常に
+// 「ランニング」で固定だったため、実際にはバイクしかやらない人でも毎回選び直す必要が
+// あった。cardioOptionsByUsage()の先頭 = いちばん記録している種目になる(有酸素の記録が
+// まだ無い場合は、従来どおりCARDIO_OPTIONSの先頭=ランニング)。
+// 「その他」は常に末尾に固定されているので、ここに来ることはない。
+function defaultCardio() {
+  return cardioOptionsByUsage()[0] || "ランニング";
 }
 // 「よく食べるもの」チップの並び順(v36)。考え方は種目チップと同じで、
 // 実際に記録した回数が多いもの・直近に使ったものほど上に来るようにする。
@@ -673,7 +684,7 @@ async function aiLookupNutrition(target) {
   aiLookupInFlight.add(cacheKey);
   if (statusEl) statusEl.textContent = "🔄 AIに問い合わせ中...(ネット接続が必要です)";
   try {
-    const data = await gasPost({ action: "estimateNutrition", foodName });
+    const data = await gasPost({ action: "estimateNutrition", foodName }, GAS_AI_TIMEOUT_MS);
     if (data.status !== "ok" || !data.nutrition) {
       if (statusEl) statusEl.textContent = "⚠️ 取得できませんでした: " + friendlyAiError_(data.message);
       return;
@@ -837,6 +848,7 @@ function applyPayload(payload) {
   entries = nextEntries.sort((a,b) => a.date < b.date ? 1 : -1);
   weightEntries = nextWeights;
   mealEntries = nextMeals.sort((a,b) => a.date < b.date ? 1 : -1);
+  selectedCardio = defaultCardio(); // 取り込んだ記録に合わせて初期選択を更新する(v38)
 }
 
 // iOS Safari(特にホーム画面に追加したPWA)では、アプリがバックグラウンドから
@@ -857,26 +869,57 @@ async function fetchWithRetry_(url, options, retries = 1, delayMs = 400) {
   try {
     return await fetch(url, options);
   } catch (err) {
+    // タイムアウトによる中断は、再試行しても待ち時間が倍になるだけなので即座に諦める。
+    if (err && err.name === "AbortError") throw err;
     if (retries <= 0) throw err;
     await sleep_(delayMs);
     return fetchWithRetry_(url, options, retries - 1, delayMs);
   }
 }
 
+// Apps Scriptの応答が返らないまま待ち続けると、iOS Safariが自前で接続を切って
+// 「Load failed」という原因の分からないエラーになる(v38以前、「🤖 AIのひとこと」で
+// 実際に発生していた)。こちらから明示的に時間を区切り、何が起きたのか分かる文言で止める。
+const GAS_TIMEOUT_MS = 30000;      // 同期など、通常の処理用
+const GAS_AI_TIMEOUT_MS = 45000;   // AI呼び出し用(外部APIを挟むぶん長めに取る)
+
 // Apps Scriptへの共通POST。トークンを必ず添えて、レスポンスのJSON化まで面倒を見る。
-async function gasPost(payload) {
-  const res = await fetchWithRetry_(gasConfig.url, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(Object.assign({ token: gasConfig.token }, payload)),
-  });
+async function gasPost(payload, timeoutMs) {
+  const ms = timeoutMs || GAS_TIMEOUT_MS;
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), ms) : null;
+  let res;
   try {
-    return await res.json();
+    res = await fetchWithRetry_(gasConfig.url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(Object.assign({ token: gasConfig.token }, payload)),
+      signal: controller ? controller.signal : undefined,
+    });
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      throw new Error(`${Math.round(ms / 1000)}秒待っても応答がありませんでした。Apps Script側の処理が終わらなかった可能性があります(混雑している時間帯は、少し待ってから再試行すると通ることがあります)。`);
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  let data;
+  try {
+    data = await res.json();
   } catch (parseErr) {
     // Apps Scriptがエラー時にHTML(ログイン画面など)を返すとここに来る。
     // 典型的な原因は「デプロイ時のアクセス権限が「全員」になっていない」。
     throw new Error(`応答がJSONではありません(HTTP ${res.status})。Apps Scriptのデプロイ設定(アクセスできるユーザー:全員)をご確認ください。`);
   }
+  // このアプリ用ではない別系統のapps-script.gs(差分同期版など)を貼ってしまうと、
+  // save/loadが「不明なaction」で弾かれ、「同期できない」という形でだけ症状が出る。
+  // 原因が分からなくなりやすいので、ここで検知して何をすればよいかまで案内する。
+  if (data && data.status === "error" && /不明なaction/.test(String(data.message || ""))) {
+    backendMismatch = true;
+    throw new Error("Apps Script側のコードが、このアプリと対になっていません。配布物のapps-script.gsを貼り直し、「デプロイ」→「デプロイを管理」→ 鉛筆マーク → バージョン「新バージョン」→「デプロイ」で再デプロイしてください。");
+  }
+  return data;
 }
 
 // 記録するたびに全件を送っていたので、連続入力すると同じ処理が何本も並走し、
@@ -1040,7 +1083,7 @@ async function fetchAiAdvice() {
   }
   aiAdviceStatus = "loading"; aiAdviceError = null; renderTabContent();
   try {
-    const data = await gasPost({ action: "advice", context: buildAdviceContext() });
+    const data = await gasPost({ action: "advice", context: buildAdviceContext() }, GAS_AI_TIMEOUT_MS);
     if (data && data.status === "ok" && data.text) {
       aiAdvice = { date: localDateStr(), text: String(data.text) };
       try { localStorage.setItem(AI_ADVICE_KEY, JSON.stringify(aiAdvice)); } catch (e) {}
@@ -1185,6 +1228,81 @@ function getEffectiveCalorieTarget(dateStr) {
   const effectiveTarget = Math.round(targets.targetCalories + exerciseBurn);
   return { ...targets, exerciseBurn, effectiveTarget };
 }
+// 記録開始からの累計(摂取・消費・その差)(v38)。集計の対象は「カロリーを1kcal以上
+// 入力した日」だけに限る。カロリーを入れていない日まで摂取0kcalとして数えると、実際には
+// 食べているのに基礎消費ぶん(1日あたり2000kcal前後)がまるごと赤字として積み上がり、
+// 累計が実態から大きく外れてしまうため(収支グラフ・平均アドバイスと同じ考え方)。
+// 何日ぶんを集計したかも返し、画面に併記して誤解が生じないようにする。
+function computeCalorieTotals() {
+  const targets = getTargets();
+  if (!targets) return null;
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  if (!latestWeight) return null;
+  const weightKg = latestWeight.weight;
+
+  const intakeByDate = {};
+  mealEntries.forEach(m => {
+    const c = m.calories || 0;
+    if (c <= 0) return;
+    intakeByDate[m.date] = (intakeByDate[m.date] || 0) + c;
+  });
+  const dayList = Object.keys(intakeByDate).sort();
+  if (!dayList.length) return null;
+
+  let intake = 0, exerciseBurn = 0, burn = 0;
+  dayList.forEach(dateStr => {
+    intake += intakeByDate[dateStr];
+    const eb = estimateExerciseBurnForDate(dateStr, weightKg);
+    exerciseBurn += eb;
+    burn += targets.tdee + eb; // 総消費 = 基礎消費(基礎代謝×生活活動) + その日の運動
+  });
+  return {
+    days: dayList.length,
+    firstDate: dayList[0],
+    lastDate: dayList[dayList.length - 1],
+    intake: Math.round(intake),
+    exerciseBurn: Math.round(exerciseBurn),
+    burn: Math.round(burn),
+    balance: Math.round(intake - burn), // マイナス=累計で赤字(減量方向)
+  };
+}
+// 上の累計を表示するカード。今日タブとXのポスト文面の両方から同じ数値を使うので、
+// 画面とポストで数字が食い違うことはない。
+function calorieTotalsCardHtml() {
+  const t = computeCalorieTotals();
+  if (!t) {
+    return `<div class="card">
+      <p class="section-title">🧮 カロリーの累計</p>
+      <p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力し、食事にカロリーを入力すると、記録開始からの累計が表示されます。</p>
+    </div>`;
+  }
+  const deficit = t.balance < 0;
+  const absBalance = Math.abs(t.balance);
+  // 体脂肪1kg ≒ 7200kcal という一般的な目安。あくまで概算である旨を明記する。
+  const fatKg = round1_(absBalance / 7200);
+  return `<div class="card">
+    <div class="between" style="margin-bottom:10px;">
+      <p class="section-title" style="margin:0;">🧮 カロリーの累計</p>
+      <span class="muted">${t.days}日分</span>
+    </div>
+    <div class="between" style="margin-bottom:6px;">
+      <span style="font-size:12.5px;">摂取の累計</span>
+      <span class="mono" style="font-size:14px;font-weight:700;">${t.intake.toLocaleString()}<span class="muted" style="font-size:11px;font-weight:400;"> kcal</span></span>
+    </div>
+    <div class="between" style="margin-bottom:6px;">
+      <span style="font-size:12.5px;">消費の累計</span>
+      <span class="mono" style="font-size:14px;font-weight:700;">${t.burn.toLocaleString()}<span class="muted" style="font-size:11px;font-weight:400;"> kcal</span></span>
+    </div>
+    <div class="between" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;">
+      <span style="font-size:12.5px;font-weight:700;">差(累計収支)</span>
+      <span class="mono" style="font-size:16px;font-weight:700;color:${deficit ? "var(--teal)" : "var(--coral)"};">${deficit ? "−" : "+"}${absBalance.toLocaleString()}<span class="muted" style="font-size:11px;font-weight:400;"> kcal</span></span>
+    </div>
+    <p style="font-size:11.5px;margin:8px 0 0;line-height:1.7;">${deficit
+      ? `消費が摂取を <b>${absBalance.toLocaleString()}kcal</b> 上回っています(体脂肪およそ ${fatKg}kg 相当の目安)。`
+      : `摂取が消費を <b>${absBalance.toLocaleString()}kcal</b> 上回っています(体脂肪およそ ${fatKg}kg 相当の目安)。`}</p>
+    <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.6;">${t.firstDate} 〜 ${t.lastDate} のうち、カロリーを入力した ${t.days}日ぶんを集計しています(未入力の日は、実際に食べた量が分からないため除外)。消費には基礎消費と運動ぶん(累計 ${t.exerciseBurn.toLocaleString()}kcal)を含みます。いずれもルールベースの概算です。</p>
+  </div>`;
+}
 function computeCalorieBalanceHistory(days) {
   const targets = getTargets();
   if (!targets) return null;
@@ -1282,6 +1400,7 @@ function importJsonFile(file) {
       lastCardioMinutes = data.lastCardioMinutes || {};
       routineMaster = data.routineMaster || [];
       seedExerciseMasterIfEmpty();
+      selectedCardio = defaultCardio(); // 取り込んだ記録に合わせて初期選択を更新する(v38)
       saveState();
       dataOpMessage = `復元しました(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)`;
       dataOpError = false;
@@ -1768,7 +1887,9 @@ function todayHtml() {
         </div>
         <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの概算です(外部AIには接続していません)。運動の消費カロリーは種目・時間からの簡易推定です。</p>
       ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、カロリー収支の推移とアドバイスが表示されます。</p>'}
-    </div>`;
+    </div>
+
+    ${calorieTotalsCardHtml()}`;
 }
 
 // ============ MEALS TAB ============
@@ -1970,8 +2091,34 @@ function buildXShareText() {
     lines.push(`体重: ${latest.weight}kg`);
     if (goals.weight) lines.push(`目標: ${goals.weight}kg`);
   }
+
+  // カロリーの内訳(v38)。その日の摂取・消費とその差に加えて、記録開始からの
+  // 累計収支も添える。プロフィール未入力などで消費カロリーを計算できない場合は、
+  // この2行だけを省いて従来どおりの文面になる。
+  const today = localDateStr();
+  const todayIntake = mealEntries
+    .filter(m => m.date === today)
+    .reduce((s,m) => s + (m.calories||0), 0);
+  const targets = getTargets();
+  const weightKg = latest ? latest.weight : null;
+  if (targets && weightKg && todayIntake > 0) {
+    const todayBurn = Math.round(targets.tdee + estimateExerciseBurnForDate(today, weightKg));
+    const todayDiff = Math.round(todayIntake - todayBurn);
+    lines.push(`今日: 摂取${Math.round(todayIntake).toLocaleString()} / 消費${todayBurn.toLocaleString()}kcal (${todayDiff >= 0 ? "+" : "−"}${Math.abs(todayDiff).toLocaleString()})`);
+  }
+  const totals = computeCalorieTotals();
+  if (totals) {
+    lines.push(`累計収支: ${totals.balance >= 0 ? "+" : "−"}${Math.abs(totals.balance).toLocaleString()}kcal (${totals.days}日)`);
+  }
+
   lines.push("#ダイエット記録");
-  return lines.join("\n");
+  const text = lines.join("\n");
+  // Xの1投稿の上限(280文字相当)に収まらなくなった場合に備え、長くなりすぎたら
+  // カロリー関連の行を落として、体重の経過だけの従来の文面に戻す。
+  if (text.length > 260) {
+    return lines.filter(l => !/^今日: |^累計収支: /.test(l)).join("\n");
+  }
+  return text;
 }
 function openXShare() {
   const text = buildXShareText();
@@ -2319,6 +2466,11 @@ function settingsHtml() {
   return `
     <div class="card">
       <p class="section-title">同期</p>
+      ${backendMismatch ? `
+      <div style="background:#FDE9E9;border-radius:8px;padding:11px;margin:0 0 12px;">
+        <p style="font-size:12.5px;margin:0 0 8px;color:var(--coral);font-weight:700;">⚠️ Apps Script側のコードが、このアプリと対になっていません</p>
+        <p style="font-size:11.5px;margin:0;line-height:1.7;">接続先のApps Scriptが、このアプリ用ではないコード(差分同期版など)になっているため、同期が失敗します。配布物の <span class="mono">apps-script.gs</span> の中身を貼り直したうえで、<b>「デプロイ」→「デプロイを管理」→ 鉛筆マーク → バージョン「新バージョン」→「デプロイ」</b>まで行ってください(コードを保存しただけでは反映されません)。</p>
+      </div>` : ""}
       <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
       <button class="chip" data-action="retry-sync">今すぐ同期を試す</button>
       ${syncStatus === "error" && lastSyncError ? `<p style="font-size:11px;margin:10px 0 0;color:var(--coral);line-height:1.5;">エラー内容: ${esc(lastSyncError)}</p>` : ""}
@@ -2661,7 +2813,8 @@ function handleAddTraining() {
     // 次回同じ種目を選んだときに、今回の時間を提案できるよう覚えておく。
     lastCardioMinutes[selectedCardio === "その他" ? customVal : selectedCardio] = Number(minutes);
   }
-  selectedCardio = "ランニング";
+  // 記録し終わったら、次に記録しそうな種目(=いちばん使っている種目)に戻しておく。
+  selectedCardio = defaultCardio();
   saveState(); renderTabContent(); scheduleSync();
 }
 function handleAddWeight() {
@@ -3062,6 +3215,9 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 selectedCalDate = localDateStr();
 loadConfig();
 loadState();
+// 記録を読み込んだあとで、有酸素の初期選択を「いちばん使っている種目」に合わせる
+// (loadStateより前に決めると、まだ記録が無い状態で判定してしまうためこの位置)。
+selectedCardio = defaultCardio();
 loadAiAdvice();
 loadNutritionCache();
 // 未送信の変更を残したままアプリを閉じないよう、離脱時にまとめて送る。

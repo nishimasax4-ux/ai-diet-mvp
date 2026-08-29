@@ -1,5 +1,10 @@
 /**
- * Training Log + AI — Apps Script バックエンド (v8)
+ * Training Log + AI — Apps Script バックエンド (v38)
+ *
+ * ★重要★ このファイルは、これまでどおりの「全件上書き同期」版のアプリ
+ * (index.html の APP_VERSION が v38 など)と対になっています。
+ * 別系統の「差分同期版(v2系)」のapps-script.gsを貼ると、save/loadが
+ * 『不明なaction』で弾かれて同期できなくなるのでご注意ください。
  *
  * 【スクリプトプロパティに設定するもの】
  *   APP_TOKEN       … アプリの「設定」タブに入れる合言葉。適当な長い文字列でOK。
@@ -51,6 +56,10 @@ var ADVICE_MODELS = [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS).concat(GEMINI_
 // 最終手段としてちょうどよい。
 var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
+// このファイルの版数(v38〜)。アプリ側は、対になっていないapps-script.gs
+// (差分同期版など)が貼られている状態を『不明なaction』の応答から検知して案内する。
+var BACKEND_VERSION = 'v38';
+
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
 }
@@ -67,6 +76,7 @@ function doPost(e) {
     }
 
     var action = body.action || 'save';
+    if (action === 'ping')              return json_({ status: 'ok', backendVersion: BACKEND_VERSION });
     if (action === 'save')              return json_(handleSave_(body.payload, body.knownWriteAt, body.force));
     if (action === 'load')              return json_(handleLoad_());
     if (action === 'estimateNutrition') return json_(handleNutrition_(body.foodName));
@@ -308,8 +318,10 @@ function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
 // models を省略した場合は本家Flash系のみ(後方互換用)。
 function callGemini_(apiKey, prompt, maxTokens, models) {
   models = models || [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS || []);
-  // Apps Scriptの実行時間上限に引っかかって「応答なし」になるのを避けるための全体の締め切り。
-  var deadlineMs = new Date().getTime() + 25000;
+  // 全体の締め切り。Geminiが混雑(503)しているとモデルごとに再試行の待ち時間が積み上がり、
+  // 応答が返るまでにブラウザ側(特にiOS Safari)が先に諦めて「Load failed」になっていた。
+  // Groqを先に試す運用(callAi_参照)に変えたうえで、この上限も25秒→15秒に短縮している(v38)。
+  var deadlineMs = new Date().getTime() + 15000;
   var lastCode = 0, lastBody = '';
   for (var i = 0; i < models.length; i++) {
     var r = callGeminiModel_(apiKey, models[i], prompt, maxTokens, deadlineMs);
@@ -347,9 +359,17 @@ function callGroq_(apiKey, prompt, maxTokens) {
       max_tokens: maxTokens || 512,
     }),
   };
+  // 一時的な混雑(5xx)だけ、1回だけ短い間隔を空けて再試行する。429(枠切れ)は叩き直しても
+  // 成功しないので再試行しない(Gemini側と同じ考え方)。
   var res = UrlFetchApp.fetch(url, options);
   var code = res.getResponseCode();
   var body = res.getContentText();
+  if (code >= 500 && code < 600) {
+    Utilities.sleep(800);
+    res = UrlFetchApp.fetch(url, options);
+    code = res.getResponseCode();
+    body = res.getContentText();
+  }
   if (code !== 200) {
     throw new Error('Groq APIエラー (HTTP ' + code + '): ' + body.slice(0, 300));
   }
@@ -361,17 +381,31 @@ function callGroq_(apiKey, prompt, maxTokens) {
 }
 
 // AI呼び出しの入口。GEMINI_API_KEY・GROQ_API_KEYのうち設定されているものだけを使う
-// (どちらか一方だけでも動く)。両方設定されていれば、まずGemini(models で指定した
-// 優先順)を試し、すべてダメだった場合だけGroqを最終手段として試す。
-// 両方失敗した場合は、原因の分かりやすいGemini側のエラーを優先して返す
-// (Gemini未設定でGroqのみ失敗した場合はGroq側のエラーを返す)。
+// (どちらか一方だけでも動く)。
+//
+// 【v38で呼び出し順を変更】以前はGeminiを先に総当たりし、全滅したときだけGroqへ
+// 回していた。しかしGeminiが混雑・枠切れだと、モデル5種類ぶんの試行と再試行の待ち時間が
+// 積み上がって応答までに数十秒かかり、iPhoneのSafariが先に接続を諦めて「Load failed」に
+// なっていた(「🤖 AIのひとこと」が使えない主因)。Groqは応答が速く1日あたりの無料枠も
+// 広いため、設定されていればGroqを最優先で1回だけ呼ぶ。Geminiは、Groq未設定または
+// Groq失敗時の控えとして使う。
+//
+// 両方失敗した場合は、原因の切り分けに使える情報が多いGemini側のエラーを優先して返す
+// (Gemini未設定なら当然Groq側のエラーを返す)。
 function callAi_(prompt, maxTokens, geminiModels) {
   var geminiKey = prop_('GEMINI_API_KEY');
   var groqKey = prop_('GROQ_API_KEY');
   if (!geminiKey && !groqKey) {
     throw new Error('GEMINI_API_KEYもGROQ_API_KEYも設定されていません(どちらか一方の設定で動作します)');
   }
-  var geminiError = null;
+  var groqError = null, geminiError = null;
+  if (groqKey) {
+    try {
+      return callGroq_(groqKey, prompt, maxTokens);
+    } catch (e) {
+      groqError = e;
+    }
+  }
   if (geminiKey) {
     try {
       return callGemini_(geminiKey, prompt, maxTokens, geminiModels);
@@ -379,14 +413,7 @@ function callAi_(prompt, maxTokens, geminiModels) {
       geminiError = e;
     }
   }
-  if (groqKey) {
-    try {
-      return callGroq_(groqKey, prompt, maxTokens);
-    } catch (groqError) {
-      throw geminiError || groqError;
-    }
-  }
-  throw geminiError;
+  throw geminiError || groqError;
 }
 
 /**
