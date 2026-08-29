@@ -150,7 +150,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v38";
+const APP_VERSION = "v39.1";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -301,6 +301,11 @@ let syncConflict = null; // { lastWriteAt } | null
 // 対になっていないapps-script.gs(差分同期版など)が接続先に貼られている状態か。
 // trueなら設定タブに警告を出す。
 let backendMismatch = false;
+// pingで取得した接続先の情報(v39.1)。AIキーは「設定されているか」の真偽値だけで、
+// 値そのものはこの端末に来ない。Groq未設定を可視化して案内するために使う。
+let backendVersion = null;
+let backendAiKeys = null;   // { gemini: bool, groq: bool } | null
+let backendChecked = false;
 let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
 let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
 let lastStrengthByExercise = {}; // "種目名"(または"(部位)") -> {reps, weight} の直近の入力値。次回そのままの値を提案する
@@ -898,7 +903,10 @@ async function gasPost(payload, timeoutMs) {
     });
   } catch (err) {
     if (err && err.name === "AbortError") {
-      throw new Error(`${Math.round(ms / 1000)}秒待っても応答がありませんでした。Apps Script側の処理が終わらなかった可能性があります(混雑している時間帯は、少し待ってから再試行すると通ることがあります)。`);
+      const groqHint = (backendAiKeys && !backendAiKeys.groq)
+        ? "AI機能がGeminiだけに頼っている状態です(Groq未設定)。Geminiは混雑・無料枠切れのときに応答が非常に遅くなります。設定タブの案内にしたがってGROQ_API_KEYを登録すると、数秒で返るようになります。"
+        : "混雑している時間帯は、少し待ってから再試行すると通ることがあります。";
+      throw new Error(`${Math.round(ms / 1000)}秒待っても応答がありませんでした。Apps Script側の処理が終わらなかった可能性があります(${groqHint})`);
     }
     throw err;
   } finally {
@@ -925,6 +933,25 @@ async function gasPost(payload, timeoutMs) {
 // 記録するたびに全件を送っていたので、連続入力すると同じ処理が何本も並走し、
 // あとから始まったリクエストが先に終わって古いデータで上書きする可能性があった。
 // (1)一定時間まとめてから送る (2)同時に1本しか走らせない、の2点で直す。
+// 接続先のApps Scriptの版数とAIキーの設定状況を確認する。旧版はpingを知らないため
+// 「不明なaction」を返し、gasPost側でbackendMismatchが立つ。
+async function checkBackendVersion_() {
+  backendChecked = true;
+  if (!gasConfigured()) return;
+  try {
+    const data = await gasPost({ action: "ping" }, 15000);
+    if (data && data.status === "ok") {
+      backendMismatch = false;
+      backendVersion = data.backendVersion || null;
+      backendAiKeys = data.ai || null;
+    }
+  } catch (e) {
+    // 古い場合はgasPost内でbackendMismatchが立つ。通信エラーはここでは何もしない
+    // (同期やAI呼び出し側で、それぞれの文脈に合ったエラーとして表示される)。
+  }
+  if (activeTab === "settings") renderTabContent();
+}
+
 const SYNC_DEBOUNCE_MS = 2500;
 let syncTimer = null;
 let syncInFlight = false;
@@ -1098,6 +1125,46 @@ async function fetchAiAdvice() {
   }
   renderTabContent();
 }
+
+// 「おすすめの食事」のAI版(v39)。ルールベースの提案は常に表示したうえで、
+// 接続設定がある場合だけ、この関数でより具体的な献立を相談できる。
+// アドバイスと同じく、取得できたコメントはその日ぶんだけ端末に残す。
+const AI_MEALPLAN_KEY = "training-log-ai-mealplan";
+let aiMealPlan = null;          // {date, text}
+let aiMealPlanStatus = "idle";  // idle | loading | error
+let aiMealPlanError = null;
+function loadAiMealPlan() {
+  try {
+    const raw = localStorage.getItem(AI_MEALPLAN_KEY);
+    if (raw) aiMealPlan = JSON.parse(raw);
+  } catch (e) { aiMealPlan = null; }
+  if (aiMealPlan && aiMealPlan.date !== localDateStr()) aiMealPlan = null;
+}
+async function fetchAiMealPlan() {
+  if (aiMealPlanStatus === "loading") return; // 連打による二重問い合わせを防ぐ(無料枠の節約)
+  if (!gasConfigured()) {
+    aiMealPlanStatus = "error";
+    aiMealPlanError = "設定タブで接続先URLとトークンを登録すると、AIに献立を相談できます。";
+    renderTabContent();
+    return;
+  }
+  aiMealPlanStatus = "loading"; aiMealPlanError = null; renderTabContent();
+  try {
+    const data = await gasPost({ action: "mealPlan", context: buildMealPlanContext() }, GAS_AI_TIMEOUT_MS);
+    if (data && data.status === "ok" && data.text) {
+      aiMealPlan = { date: localDateStr(), text: String(data.text) };
+      try { localStorage.setItem(AI_MEALPLAN_KEY, JSON.stringify(aiMealPlan)); } catch (e) {}
+      aiMealPlanStatus = "idle";
+    } else {
+      aiMealPlanStatus = "error";
+      aiMealPlanError = friendlyAiError_(data && data.message);
+    }
+  } catch (e) {
+    aiMealPlanStatus = "error";
+    aiMealPlanError = friendlySyncError_(e && e.message ? e.message : String(e));
+  }
+  renderTabContent();
+}
 function computeTargets(p, weight, goalWeight) {
   const age = Number(p.age), height = Number(p.height);
   if (!age || !height || !weight) return null;
@@ -1159,6 +1226,244 @@ function pickWorkout(mood) {
   const pool = WORKOUTS[level];
   const w = pool[dayOfYear(new Date()) % pool.length];
   return resolveWorkoutSuggestion(w);
+}
+// ============ おすすめの食事(v39) ============
+// 「今日の体の状態・食事・運動の状況から、朝食と夕食を提案してほしい」というご要望への対応。
+// 外部AIに接続していなくても動くよう、まずはルールベースで組み立てる(Apps Scriptを
+// 設定している場合は、この結果を土台にAIへ相談するボタンも出す)。
+//
+// 1日の目安カロリーを食事区分ごとに割り振る比率。一般的な配分(朝を軽め、夕方をやや多め)で、
+// 合計が1.0になるようにしてある。間食を記録していない人でも辻褄が合うよう、
+// 実際の配分は「まだ食べていない区分」だけで按分し直す(mealBudgetsForToday_参照)。
+const MEAL_SHARE = { "朝食": 0.25, "昼食": 0.30, "夕食": 0.35, "間食": 0.10 };
+
+// 今日の各区分について「目安カロリー」と「すでに食べた量」を出す。
+// 目安の総量は getEffectiveCalorieTarget の effectiveTarget(=目標+その日の運動ぶん)。
+function mealBudgetsForToday_() {
+  const today = localDateStr();
+  const t = getEffectiveCalorieTarget(today);
+  if (!t) return null;
+  const eaten = {};
+  MEAL_TYPES.forEach(mt => { eaten[mt] = 0; });
+  let eatenTotal = 0;
+  mealEntries.filter(m => m.date === today).forEach(m => {
+    const c = m.calories || 0;
+    if (eaten[m.mealType] === undefined) eaten[m.mealType] = 0;
+    eaten[m.mealType] += c;
+    eatenTotal += c;
+  });
+  // まだ何も食べていない区分だけで、残りのカロリーを比率どおりに分け直す。
+  // (朝食をすでに済ませているなら、その分は差し引いて夕食側に回る)
+  const pending = MEAL_TYPES.filter(mt => eaten[mt] === 0);
+  const pendingShare = pending.reduce((s, mt) => s + MEAL_SHARE[mt], 0);
+  const remaining = Math.max(0, t.effectiveTarget - eatenTotal);
+  const budget = {};
+  MEAL_TYPES.forEach(mt => {
+    budget[mt] = (pending.indexOf(mt) === -1 || pendingShare <= 0)
+      ? 0
+      : Math.round(remaining * (MEAL_SHARE[mt] / pendingShare));
+  });
+  return { targets: t, eaten, eatenTotal, remaining, budget, pending };
+}
+
+// 今日すでに摂ったPFCと目標との差。マイナスが大きい栄養素ほど「まだ足りない」。
+function macroGapsForToday_() {
+  const today = localDateStr();
+  const t = getTargets();
+  if (!t) return null;
+  const todays = mealEntries.filter(m => m.date === today);
+  const sum = k => todays.reduce((s, m) => s + (m[k] || 0), 0);
+  return {
+    protein: round1_(t.targetProtein - sum("protein")),
+    fat: round1_(t.targetFat - sum("fat")),
+    carb: round1_(t.targetCarb - sum("carb")),
+  };
+}
+
+// 提案の候補になる食品を集める。利用者自身が登録した「よく食べるもの」を優先し、
+// 足りなければ内蔵の食品辞書から補う。カロリーが分からないものは、目安の計算に
+// 使えないので候補から外す。
+function mealCandidatePool_() {
+  const pool = [];
+  const seen = {};
+  mealMaster.forEach(m => {
+    if (!m.name || m.calories == null || m.calories <= 0) return;
+    if (seen[m.name]) return;
+    seen[m.name] = true;
+    pool.push({ name: m.name, kcal: m.calories, protein: m.protein || 0, fat: m.fat || 0, carb: m.carb || 0, own: true });
+  });
+  FOOD_CALORIE_DB.forEach(f => {
+    if (seen[f.name]) return;
+    seen[f.name] = true;
+    pool.push({ name: f.name, kcal: f.kcal, protein: f.protein || 0, fat: f.fat || 0, carb: f.carb || 0, own: false });
+  });
+  return pool;
+}
+
+// 「その食品を、どの区分で何回食べたか」の実績。朝食に何を食べる人なのかは
+// 人によって違うので、決め打ちのタグではなく実際の記録から学習する。
+function mealTypeUsageStats_() {
+  const stats = {};
+  mealEntries.forEach(m => {
+    if (!m.text) return;
+    const s = stats[m.text] || (stats[m.text] = { total: 0, byType: {} });
+    s.total++;
+    s.byType[m.mealType] = (s.byType[m.mealType] || 0) + 1;
+  });
+  return stats;
+}
+
+// ある区分(朝食/夕食)向けに、候補を点数付けして上位を返す。
+// ・その区分で実際に食べている食品ほど高得点(いちばん効く)
+// ・目安カロリーに近いほど高得点(大きく超えるものは強めに減点)
+// ・まだ足りていない栄養素、特にたんぱく質を多く含むものを加点
+function suggestForMealType_(mealType, budgetKcal, gaps, limit) {
+  if (!budgetKcal || budgetKcal <= 0) return [];
+  const stats = mealTypeUsageStats_();
+  const proteinShort = gaps && gaps.protein > 0;
+  const scored = mealCandidatePool_().map(f => {
+    let score = 0;
+    const st = stats[f.name];
+    if (st) {
+      const here = st.byType[mealType] || 0;
+      score += here * 12;                       // その区分での実績(最重視)
+      score += Math.min(st.total, 10) * 2;      // よく食べているものは全体に少し優遇
+    }
+    if (f.own) score += 6;                      // 自分で登録した食品を優先する
+    // 目安カロリーとの近さ。超過は「食べ過ぎ」に直結するので、不足より重く減点する。
+    const ratio = f.kcal / budgetKcal;
+    score -= (ratio > 1 ? (ratio - 1) * 26 : (1 - ratio) * 12);
+    // 不足している栄養素の補充。たんぱく質は不足しがちなので、100kcalあたりの量で評価する。
+    if (proteinShort) score += Math.min(12, (f.protein / Math.max(1, f.kcal)) * 100 * 4);
+    if (gaps && gaps.fat < 0) score -= Math.min(8, (f.fat / Math.max(1, f.kcal)) * 100 * 2);   // 脂質が超過気味なら控える
+    if (gaps && gaps.carb < 0) score -= Math.min(8, (f.carb / Math.max(1, f.kcal)) * 100 * 1); // 炭水化物が超過気味なら控える
+    return { ...f, score };
+  });
+  return scored
+    .sort((a, b) => (b.score - a.score) || (a.name < b.name ? -1 : 1))
+    .slice(0, limit || 3);
+}
+
+// カード表示用にまとめる。プロフィール・体重が未入力で目安が出せない場合はnull。
+function buildMealSuggestions() {
+  const b = mealBudgetsForToday_();
+  if (!b) return null;
+  const gaps = macroGapsForToday_();
+  const result = { budgets: b, gaps, meals: [] };
+  ["朝食", "夕食"].forEach(mt => {
+    result.meals.push({
+      mealType: mt,
+      alreadyEaten: b.eaten[mt] > 0,
+      eaten: b.eaten[mt],
+      budget: b.budget[mt],
+      items: suggestForMealType_(mt, b.budget[mt], gaps, 3),
+    });
+  });
+  return result;
+}
+// AI(Apps Script経由)へ渡す要約。生の記録ではなく、判断に必要な数値だけを送る。
+function buildMealPlanContext() {
+  const b = mealBudgetsForToday_();
+  const gaps = macroGapsForToday_();
+  const t = getTargets();
+  const latestWeight = [...weightEntries].sort((a,b2) => a.date < b2.date ? 1 : -1)[0];
+  const today = localDateStr();
+  const recentBurn = computeBurnHistory(7).reduce((s,d) => s + d.total, 0);
+  const stats = mealTypeUsageStats_();
+  const favByType = {};
+  ["朝食","夕食"].forEach(mt => {
+    favByType[mt] = Object.keys(stats)
+      .map(name => ({ name, n: stats[name].byType[mt] || 0 }))
+      .filter(x => x.n > 0)
+      .sort((a,b2) => b2.n - a.n)
+      .slice(0, 6)
+      .map(x => x.name);
+  });
+  return {
+    体重kg: latestWeight ? latestWeight.weight : null,
+    目標体重kg: goals.weight,
+    年齢: profile ? Number(profile.age) : null,
+    性別: profile ? profile.gender : null,
+    身長cm: profile ? Number(profile.height) : null,
+    今日の目安カロリー: b ? b.targets.effectiveTarget : null,
+    今日すでに摂取したkcal: b ? b.eatenTotal : 0,
+    残りkcal: b ? b.remaining : null,
+    区分ごとの目安kcal: b ? b.budget : null,
+    今日まだ不足しているPFCg: gaps,
+    一日の目標PFCg: t ? { protein: t.targetProtein, fat: t.targetFat, carb: t.targetCarb } : null,
+    直近7日の運動による消費kcal合計: recentBurn,
+    今日の運動による消費kcal: b ? b.targets.exerciseBurn : 0,
+    よく食べている朝食: favByType["朝食"],
+    よく食べている夕食: favByType["夕食"],
+    登録済みのよく食べるもの: mealMaster.slice(0, 20).map(m => m.name),
+  };
+}
+// 「今日のおすすめ食事」カード。ルールベースの提案を常に表示し、Apps Scriptを
+// 設定している場合だけAIへの相談ボタンも出す。
+function mealSuggestionCardHtml() {
+  const s = buildMealSuggestions();
+  if (!s) {
+    return `<div class="card">
+      <p class="section-title">🍳 今日のおすすめ食事</p>
+      <p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィール(年齢・身長など)を入力し、体重を記録すると、目標カロリーに合わせた朝食・夕食のおすすめが表示されます。</p>
+    </div>`;
+  }
+  const g = s.gaps;
+  const gapLine = g
+    ? `<p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">今日の残り <span class="mono">${s.budgets.remaining}</span>kcal ／ あと たんぱく質 <span class="mono">${g.protein > 0 ? g.protein.toFixed(1) : 0}</span>g・脂質 <span class="mono">${g.fat > 0 ? g.fat.toFixed(1) : 0}</span>g・炭水化物 <span class="mono">${g.carb > 0 ? g.carb.toFixed(1) : 0}</span>g${g.protein > 0 ? "(たんぱく質が多めのものを優先して選んでいます)" : ""}</p>`
+    : "";
+
+  const blocks = s.meals.map(m => {
+    if (m.alreadyEaten) {
+      return `<div style="margin-bottom:14px;">
+        <div class="between" style="margin-bottom:4px;">
+          <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
+          <span class="muted" style="font-size:11px;">記録済み(${m.eaten}kcal)</span>
+        </div>
+        <p class="muted" style="font-size:11px;margin:0;">今日の${m.mealType}はすでに記録されています。</p>
+      </div>`;
+    }
+    if (!m.items.length) {
+      return `<div style="margin-bottom:14px;">
+        <div class="between" style="margin-bottom:4px;">
+          <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
+          <span class="muted mono" style="font-size:11px;">目安 ${m.budget}kcal</span>
+        </div>
+        <p class="muted" style="font-size:11px;margin:0;">${m.budget > 0 ? "候補を出せませんでした。設定タブの「よく食べるもの」に、普段の食事を登録すると提案の精度が上がります。" : "今日の目安カロリーはすでに使い切っています。無理に食べる必要はありません。"}</p>
+      </div>`;
+    }
+    const items = m.items.map(f => `
+      <button type="button" class="entry-row" style="width:100%;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:8px;margin-bottom:6px;padding:8px 10px;"
+              data-action="use-meal-suggestion" data-name="${esc(f.name)}" data-kcal="${f.kcal}" data-protein="${f.protein}" data-fat="${f.fat}" data-carb="${f.carb}" data-mealtype="${m.mealType}">
+        <div style="flex:1;">
+          <div style="font-size:12.5px;">${esc(f.name)}${f.own ? ' <span class="muted" style="font-size:10px;">📌登録済み</span>' : ""}</div>
+          <div class="muted mono" style="font-size:10.5px;">${f.kcal}kcal ／ P${round1_(f.protein)} F${round1_(f.fat)} C${round1_(f.carb)}</div>
+        </div>
+        <span class="muted" style="font-size:11px;">記録する ›</span>
+      </button>`).join("");
+    return `<div style="margin-bottom:14px;">
+      <div class="between" style="margin-bottom:6px;">
+        <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
+        <span class="muted mono" style="font-size:11px;">目安 ${m.budget}kcal</span>
+      </div>
+      ${items}
+    </div>`;
+  }).join("");
+
+  const aiBlock = gasConfigured() ? `
+    <div style="border-top:1px solid var(--line);padding-top:10px;margin-top:2px;">
+      ${aiMealPlan ? `<p style="font-size:12.5px;line-height:1.8;margin:0 0 8px;white-space:pre-wrap;">${esc(aiMealPlan.text)}</p>` : ""}
+      ${aiMealPlanStatus === "error" && aiMealPlanError ? `<p style="font-size:11px;margin:0 0 8px;color:var(--coral);line-height:1.6;">${esc(aiMealPlanError)}</p>` : ""}
+      <button type="button" class="chip" data-action="fetch-ai-mealplan" ${aiMealPlanStatus === "loading" ? "disabled" : ""}>${aiMealPlanStatus === "loading" ? "相談中…" : (aiMealPlan ? "🤖 もう一度AIに相談する" : "🤖 AIに献立を相談する")}</button>
+    </div>` : "";
+
+  return `<div class="card">
+    <p class="section-title">🍳 今日のおすすめ食事</p>
+    ${gapLine}
+    ${blocks}
+    ${aiBlock}
+    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">目標カロリーと、これまでにその区分で記録した内容をもとにした提案です(カロリー・栄養素はいずれも目安)。体調や持病に関わる食事制限がある場合は、医師・管理栄養士の指示を優先してください。</p>
+  </div>`;
 }
 function generateDailyAdvice() {
   const today = localDateStr();
@@ -1764,6 +2069,7 @@ function autoSelectMealTypeByTime() {
   else selectedMealType = "夕食";
 }
 function switchTab(tab) {
+  if (tab === "settings" && !backendChecked) checkBackendVersion_();
   activeTab = tab;
   if (tab === "meals") autoSelectMealTypeByTime();
   renderTabContent();
@@ -1888,6 +2194,8 @@ function todayHtml() {
         <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの概算です(外部AIには接続していません)。運動の消費カロリーは種目・時間からの簡易推定です。</p>
       ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、カロリー収支の推移とアドバイスが表示されます。</p>'}
     </div>
+
+    ${mealSuggestionCardHtml()}
 
     ${calorieTotalsCardHtml()}`;
 }
@@ -2473,6 +2781,15 @@ function settingsHtml() {
       </div>` : ""}
       <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
       <button class="chip" data-action="retry-sync">今すぐ同期を試す</button>
+      ${backendAiKeys ? `
+      <div style="background:${backendAiKeys.groq ? "var(--paper)" : "#FDF1E7"};border-radius:8px;padding:10px;margin-top:12px;">
+        <p style="font-size:11.5px;margin:0 0 6px;font-weight:700;">AI接続の状態${backendVersion ? ` <span class="muted mono" style="font-weight:400;">(Apps Script ${esc(backendVersion)})</span>` : ""}</p>
+        <p class="muted" style="font-size:11px;margin:0 0 ${backendAiKeys.groq ? "0" : "8px"};line-height:1.7;">
+          Groq: <b style="color:${backendAiKeys.groq ? "var(--teal)" : "var(--coral)"};">${backendAiKeys.groq ? "設定済み ✅" : "未設定"}</b> ／
+          Gemini: <b style="color:${backendAiKeys.gemini ? "var(--teal)" : "var(--ink-faint)"};">${backendAiKeys.gemini ? "設定済み ✅" : "未設定"}</b>
+        </p>
+        ${!backendAiKeys.groq ? `<p style="font-size:11px;margin:0;line-height:1.7;">Groqが未設定のため、AI機能はGeminiだけに頼っています。Geminiは混雑・無料枠切れのときに応答が非常に遅くなり、「45秒待っても応答がありませんでした」という時間切れの原因になります。<b>console.groq.com</b> で無料のキーを発行し(クレジットカード登録不要)、Apps Scriptの「プロジェクトの設定」→「スクリプト プロパティ」に <span class="mono">GROQ_API_KEY</span> として登録すると、そちらが優先して使われ、数秒で返るようになります。</p>` : ""}
+      </div>` : ""}
       ${syncStatus === "error" && lastSyncError ? `<p style="font-size:11px;margin:10px 0 0;color:var(--coral);line-height:1.5;">エラー内容: ${esc(lastSyncError)}</p>` : ""}
       ${syncConflict ? `
       <div style="background:#FDF1E7;border-radius:8px;padding:10px;margin-top:12px;">
@@ -3055,6 +3372,25 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTabContent();
   }
   else if (action === "fetch-ai-advice") { fetchAiAdvice(); }
+  else if (action === "fetch-ai-mealplan") { fetchAiMealPlan(); }
+  // おすすめ食事の候補をタップ: 食事タブへ移動し、その内容を入力欄に入れておく
+  // (記録そのものは、本人が内容を確認して「＋ 記録する」を押したときだけ行う)。
+  else if (action === "use-meal-suggestion") {
+    const d = t.dataset;
+    selectedMealType = d.mealtype || selectedMealType;
+    switchTab("meals");
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    set("meal-name-input", d.name);
+    set("meal-cal-input", d.kcal);
+    set("meal-protein-input", d.protein);
+    set("meal-fat-input", d.fat);
+    set("meal-carb-input", d.carb);
+    const sug = document.getElementById("meal-name-suggestions");
+    if (sug) sug.innerHTML = "";
+    openMealDetail();
+    const nameEl = document.getElementById("meal-name-input");
+    if (nameEl) nameEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
   else if (action === "save-gas-config") {
     const urlEl = document.getElementById("gas-url-input");
     const tokenEl = document.getElementById("gas-token-input");
@@ -3066,7 +3402,8 @@ document.getElementById("app").addEventListener("click", (e) => {
     gasConfig = { url, token, lastKnownWriteAt: null };
     saveConfig();
     syncConflict = null;
-    if (gasConfigured()) { syncStatus = "idle"; syncToSheet(); }
+    backendVersion = null; backendAiKeys = null; backendChecked = false;
+    if (gasConfigured()) { syncStatus = "idle"; syncToSheet(); checkBackendVersion_(); }
     else { syncStatus = "idle"; renderSyncStatus(); }
     renderTabContent();
   }
@@ -3219,6 +3556,7 @@ loadState();
 // (loadStateより前に決めると、まだ記録が無い状態で判定してしまうためこの位置)。
 selectedCardio = defaultCardio();
 loadAiAdvice();
+loadAiMealPlan();
 loadNutritionCache();
 // 未送信の変更を残したままアプリを閉じないよう、離脱時にまとめて送る。
 window.addEventListener("pagehide", flushSync);

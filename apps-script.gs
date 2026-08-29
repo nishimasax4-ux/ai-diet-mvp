@@ -49,7 +49,9 @@ var GEMINI_LITE_MODELS = ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite'];
 var NUTRITION_MODELS = GEMINI_LITE_MODELS.concat([GEMINI_MODEL]).concat(GEMINI_FALLBACK_MODELS);
 // 「AIのひとこと」(1日に数回程度しか呼ばれない機能)用のモデル順。
 // 文章の質を優先して本家Flash系から試し、すべて枠切れのときだけ軽量モデルにも回す。
-var ADVICE_MODELS = [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS).concat(GEMINI_LITE_MODELS);
+// 文章生成は1回あたりの所要時間が長いので、総当たりせず先頭3つまでに絞る。
+// 5モデルすべてを順に試すと、混雑時に合計で45秒(ブラウザ側の制限時間)を超えてしまう。
+var ADVICE_MODELS = [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS).concat(GEMINI_LITE_MODELS).slice(0, 3);
 // Groq(https://console.groq.com)の無料枠で使えるモデル。クレジットカード登録不要で、
 // 1日あたりの上限もGeminiよりかなり広い(執筆時点でモデルにより1日1,000〜数千件)。
 // 日本語の指示追従・簡単なJSON整形にも十分実用的なため、Geminiが全滅したときの
@@ -58,7 +60,7 @@ var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 // このファイルの版数(v38〜)。アプリ側は、対になっていないapps-script.gs
 // (差分同期版など)が貼られている状態を『不明なaction』の応答から検知して案内する。
-var BACKEND_VERSION = 'v38';
+var BACKEND_VERSION = 'v39.1';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -76,11 +78,12 @@ function doPost(e) {
     }
 
     var action = body.action || 'save';
-    if (action === 'ping')              return json_({ status: 'ok', backendVersion: BACKEND_VERSION });
+    if (action === 'ping')              return json_(handlePing_());
     if (action === 'save')              return json_(handleSave_(body.payload, body.knownWriteAt, body.force));
     if (action === 'load')              return json_(handleLoad_());
     if (action === 'estimateNutrition') return json_(handleNutrition_(body.foodName));
     if (action === 'advice')            return json_(handleAdvice_(body.context));
+    if (action === 'mealPlan')          return json_(handleMealPlan_(body.context));
     return json_({ status: 'error', message: '不明なaction: ' + action });
 
   } catch (err) {
@@ -231,6 +234,36 @@ function handleAdvice_(ctx) {
   return { status: 'ok', text: String(text).trim() };
 }
 
+/**
+ * 今日の残りカロリー・不足している栄養素・運動量・よく食べているものを渡して、
+ * 具体的な朝食・夕食の献立を提案させる(v39)。
+ * アプリ側はルールベースの提案を常に表示しており、これはその上乗せなので、
+ * 取得に失敗しても機能そのものが使えなくなることはない。
+ */
+function handleMealPlan_(ctx) {
+  if (!ctx) return { status: 'error', message: 'contextがありません' };
+
+  var prompt =
+    'あなたは日本の家庭料理に詳しい、親しみやすい管理栄養士です。\n' +
+    '以下は利用者の「今日の状況」です(JSON)。これをもとに、今日の朝食と夕食の献立を日本語で提案してください。\n\n' +
+    '### 守ること\n' +
+    '- 朝食と夕食について、それぞれ具体的な献立を1案ずつ挙げる(主食・主菜・副菜がわかる程度に)\n' +
+    '- それぞれ、おおよそのカロリーを添える。「区分ごとの目安kcal」に収まるようにする\n' +
+    '- 「よく食べている朝食」「よく食べている夕食」「登録済みのよく食べるもの」に挙がっている食品を、可能な範囲で活かす\n' +
+    '- 「今日まだ不足しているPFCg」で不足している栄養素(特にたんぱく質)を補える内容にする\n' +
+    '- 日本のスーパーやコンビニで手に入る、平日でも用意できる現実的なものにする\n' +
+    '- 全体で250文字程度。見出しや箇条書きは使わず、「朝食は〜。夕食は〜。」という地の文で書く\n' +
+    '- 断定的な医学的助言・診断はしない。極端な食事制限や、特定の食品を絶対に食べるなという言い方はしない\n' +
+    '- カロリーや栄養素はあくまで目安である、という前提を崩さない\n' +
+    '- 記録が少ないことや、食べ過ぎたことを責めない。前向きで落ち着いた口調で\n\n' +
+    '### 今日の状況\n' +
+    JSON.stringify(ctx);
+
+  var text = callAi_(prompt, 900, ADVICE_MODELS);
+  if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
+  return { status: 'ok', text: String(text).trim() };
+}
+
 // 混雑(503)やサーバーエラー(5xx)は、数秒待てば直ることがあるので同じモデルに再試行する。
 // 429(レート超過・無料枠の上限)は【あえて再試行しない】。枠を使い切っている状態で叩き直しても
 // 成功しないうえ、リクエスト数をさらに消費してレート制限を悪化させるだけのため。
@@ -262,8 +295,33 @@ function shouldTryNextModel_(code, body) {
 // ただし制御フィールドはモデル世代で違う: gemini-2.5系は数値の thinkingBudget、
 // gemini-3.x系は新しい thinkingLevel(minimal/low/medium/high)を使う。
 // 世代違いのフィールドを送るとHTTP 400 (INVALID_ARGUMENT)で拒否されることがある。
+// 【v38.1で方針変更】以前は gemini-3.x系に thinkingLevel:'minimal' を送っていたが、
+// 同じ3.x系でもモデルによってこの値を受け付けず、
+//   「Thinking level MINIMAL is not supported for this model.」(HTTP 400)
+// で失敗することが分かった(gemini-3.5-flash-lite など。googleapis/js-genai の
+// issue #1581 でも、3系のflash-liteがminimalを拒否する事例が報告されている)。
+//
+// どの世代のどのモデルがどの値を受け付けるかは、Googleの都合で今後も変わり続ける。
+// そこを当て続けるのは現実的でないので、「送らない」という常に有効な選択に倒す:
+//   ・gemini-2.5系 … thinkingBudget:0 は実績があるのでそのまま使う
+//   ・それ以外(3.x系・将来の世代) … thinkingConfig自体を送らない(nullを返す)
+// 「思考」を止められないぶん、出力上限を広めに取ることで
+// 「思考だけで上限を使い切って本文が空になる」事故を防ぐ(callGeminiModel_参照)。
 function thinkingConfigFor_(model) {
-  return /^gemini-3/.test(model) ? { thinkingLevel: 'minimal' } : { thinkingBudget: 0 };
+  // gemini-2.5系 … 数値の thinkingBudget:0(実績あり)
+  // gemini-3.x系 … thinkingLevel。'minimal' は一部モデル(flash-lite系)が非対応で
+  //   HTTP 400になるため使わない。'low' はそれらのモデルでも受け付けられる
+  //   (googleapis/js-genai issue #1581 では、非対応なのは minimal と medium と報告されている)。
+  //   ここで「思考」を抑えないと、モデルが長時間考え込んで応答が数十秒かかり、
+  //   ブラウザ側が45秒で time out する(v38.1で実際に発生)。
+  // 万一 'low' も拒否された場合は、callGeminiModel_ が指定を外して自動で試し直す。
+  return /^gemini-2\.5/.test(model) ? { thinkingBudget: 0 } : { thinkingLevel: 'low' };
+}
+// thinkingConfigを送らないときの出力上限。思考ぶんに食われても本文が残るよう余裕を持たせる。
+// thinkingConfigを外して試し直すときの出力上限。思考ぶんに食われても本文が残る程度に
+// 広げるが、広げすぎるとモデルがそのぶん長く考えて応答が遅くなるため、控えめにする。
+function roomyMaxTokens_(maxTokens) {
+  return Math.max(1536, (maxTokens || 512) * 2);
 }
 
 // 1つのモデルに対する実際のHTTPリクエスト(同一モデルへの再試行を含む)。
@@ -299,14 +357,17 @@ function callGeminiRaw_(url, prompt, maxTokens, thinkingConfig, deadlineMs) {
 function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
             model + ':generateContent?key=' + encodeURIComponent(apiKey);
-  var r = callGeminiRaw_(url, prompt, maxTokens, thinkingConfigFor_(model), deadlineMs);
-  // 【保険】400が返り、かつキー不正ではない場合、thinkingConfig の指定方法がこのモデルに
-  // 受け入れられなかった可能性がある。Googleは世代ごとにこの指定方法を変えてきた実績があり
-  // (2.5系=thinkingBudget → 3.x系=thinkingLevel)、今後また変わっても自力で復帰できるよう、
-  // thinkingConfig を丸ごと外して1回だけ試し直す。思考ぶんのトークンを食われて本文が空に
-  // なるのを避けるため、この再試行だけ出力上限を広げる。
-  if (r.code === 400 && !isFatalGeminiError_(r.code, r.body) && new Date().getTime() < deadlineMs) {
-    var retry = callGeminiRaw_(url, prompt, (maxTokens || 512) * 2, null, deadlineMs);
+  var thinking = thinkingConfigFor_(model);
+  // 「思考」を止める指定を送らないモデルでは、思考ぶんで出力上限を使い切って本文が
+  // 空になるのを防ぐため、最初から出力上限を広めに取る。
+  var tokens = thinking ? (maxTokens || 512) : roomyMaxTokens_(maxTokens);
+  var r = callGeminiRaw_(url, prompt, tokens, thinking, deadlineMs);
+  // 【保険】thinkingConfigを送ったうえで400(かつキー不正ではない)が返った場合、
+  // その指定方法をこのモデルが受け付けなかった可能性がある。指定を丸ごと外して
+  // 1回だけ試し直す(締め切りが迫っていても、この1回は必ず試す。ここを飛ばすと
+  // 「対応していない指定を送り続けて全モデル失敗」から自力で復帰できないため)。
+  if (thinking && r.code === 400 && !isFatalGeminiError_(r.code, r.body)) {
+    var retry = callGeminiRaw_(url, prompt, roomyMaxTokens_(maxTokens), null, deadlineMs);
     // 再試行も失敗した場合は、元のエラーのほうが原因究明に役立つのでそちらを返す。
     if (retry.code === 200) return retry;
   }
@@ -316,14 +377,17 @@ function callGeminiModel_(apiKey, model, prompt, maxTokens, deadlineMs) {
 // モデルを順番に試す。人気モデルは混雑(503)しやすく、無料枠(429)もモデルごとに
 // 別枠なので、同じモデルを叩き続けるのではなく、リストの順に切り替えたほうが成功しやすい。
 // models を省略した場合は本家Flash系のみ(後方互換用)。
-function callGemini_(apiKey, prompt, maxTokens, models) {
+function callGemini_(apiKey, prompt, maxTokens, models, budgetMs) {
   models = models || [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS || []);
   // 全体の締め切り。Geminiが混雑(503)しているとモデルごとに再試行の待ち時間が積み上がり、
   // 応答が返るまでにブラウザ側(特にiOS Safari)が先に諦めて「Load failed」になっていた。
-  // Groqを先に試す運用(callAi_参照)に変えたうえで、この上限も25秒→15秒に短縮している(v38)。
-  var deadlineMs = new Date().getTime() + 15000;
+  // 予算は呼び出し元(callAi_)が決める: Groqが控えにいるなら短く、Geminiしか無いなら長く。
+  var deadlineMs = new Date().getTime() + (budgetMs || 20000);
   var lastCode = 0, lastBody = '';
   for (var i = 0; i < models.length; i++) {
+    // 次のモデルを「試し始める」前に締め切りを確認する。1回の呼び出し自体は途中で
+    // 打ち切れないので、ここで止めないと予算を大きく超えて応答が返らなくなる。
+    if (i > 0 && new Date().getTime() > deadlineMs) break;
     var r = callGeminiModel_(apiKey, models[i], prompt, maxTokens, deadlineMs);
     if (r.code === 200) {
       var data = JSON.parse(r.body);
@@ -408,10 +472,21 @@ function callAi_(prompt, maxTokens, geminiModels) {
   }
   if (geminiKey) {
     try {
-      return callGemini_(geminiKey, prompt, maxTokens, geminiModels);
+      // Groqが控えにいる場合は短めに切り上げる。Geminiしか無い場合は、諦めるのが
+      // 早すぎて『どのモデルも試し切れずに失敗』とならないよう、長めの予算を与える。
+      return callGemini_(geminiKey, prompt, maxTokens, geminiModels, groqKey ? 10000 : 22000);
     } catch (e) {
       geminiError = e;
     }
+  }
+  // Geminiだけを設定していて、そのGeminiが不調(混雑・無料枠切れ・モデル側の仕様変更)の
+  // ときは、Groqを設定すれば回避できる。エラー文にその案内を添える。
+  if (geminiError && !groqKey) {
+    throw new Error(String(geminiError.message || geminiError) +
+      ' ／ 現在GROQ_API_KEYが未設定のため、Geminiが不調だとAI機能が使えません。' +
+      'console.groq.com で無料のキーを発行し(クレジットカード登録不要)、Apps Scriptの' +
+      '「プロジェクトの設定」→「スクリプト プロパティ」に GROQ_API_KEY として登録すると、' +
+      'Groq側が優先して使われるためこの種のエラーを回避できます。');
   }
   throw geminiError || groqError;
 }
@@ -465,6 +540,19 @@ function testAi() {
 }
 
 /* ====================== ユーティリティ ====================== */
+
+/**
+ * 接続確認(v39.1)。版数に加えて、AIキーが設定されているかどうかを真偽値だけで返す。
+ * キーの値そのものは返さない——「設定されているか」が分かれば、アプリ側で
+ * 「Groq未設定なのでGeminiの不調をそのまま受けている」状態を案内できる。
+ */
+function handlePing_() {
+  return {
+    status: 'ok',
+    backendVersion: BACKEND_VERSION,
+    ai: { gemini: !!prop_('GEMINI_API_KEY'), groq: !!prop_('GROQ_API_KEY') },
+  };
+}
 
 function prop_(name) {
   return PropertiesService.getScriptProperties().getProperty(name);
