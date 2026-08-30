@@ -38,12 +38,25 @@
   .between { display: flex; align-items: center; justify-content: space-between; }
   .row { display: flex; align-items: center; gap: 8px; }
   .wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+  /* 入力欄を横に並べる行(v40.1)。flexの子は既定で min-width:auto のため、
+     <input type="date"> のように「これ以上縮められない幅」を持つ要素が
+     隣の入力欄を押し潰したり、はみ出して重なって見えたりする
+     (体重タブで日付欄が体重欄に重なる不具合の原因)。
+     min-width:0 で縮めるようにし、幅が足りないときは折り返して縦に並べる。
+     日付は数字が多く必要な幅が広いので、基準幅と伸び率を少し大きめにしている。 */
+  .field-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .field-row > * { min-width: 0; }
+  .field-row > .f-date { flex: 1.35 1 150px; }
+  .field-row > .f-val  { flex: 1 1 110px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
   .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 10px; text-transform: uppercase; }
   .label { font-size: 11px; font-weight: 600; color: var(--ink-faint); display: block; margin-bottom: 4px; }
   input, select, textarea {
     background: #FFFFFF; border: 1px solid var(--line); color: var(--ink);
     border-radius: 8px; padding: 9px 10px; font-size: 14px; width: 100%; font-family: inherit;
+    /* iOSのSafariでは <input type="date"> が内部の表示に合わせた幅を取り、
+       width:100% を無視して枠からはみ出すことがある。念のため上限を明示する。 */
+    max-width: 100%; min-width: 0;
   }
   button { cursor: pointer; font-family: inherit; border: none; }
   .chip { padding: 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
@@ -150,7 +163,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v40";
+const APP_VERSION = "v41";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -819,14 +832,14 @@ function buildPayload() {
       cardio.push([e.date, e.exercise, num_(e.minutes), kcal]);
     }
   });
-  weightEntries.forEach(w => weight.push([w.date, num_(w.weight)]));
+  weightEntries.forEach(w => weight.push([w.date, num_(w.weight), w.bodyFat != null ? num_(w.bodyFat) : ""]));
   mealEntries.forEach(m => meals.push([m.date, m.mealType, m.text, num_(m.calories), num_(m.protein), num_(m.fat), num_(m.carb)]));
   const byDate = (a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
   [strength, cardio, weight, meals].forEach(a => a.sort(byDate));
   return {
     "筋トレ": { header: ["日付","部位","種目","重量kg","回数","消費カロリーkcal"], rows: strength },
     "有酸素": { header: ["日付","種目","時間分","消費カロリーkcal"], rows: cardio },
-    "体重":   { header: ["日付","体重kg"], rows: weight },
+    "体重":   { header: ["日付","体重kg","体脂肪率%"], rows: weight },
     "食事":   { header: ["日付","区分","メニュー","kcal","たんぱく質g","脂質g","炭水化物g"], rows: meals },
   };
 }
@@ -844,7 +857,12 @@ function applyPayload(payload) {
   });
   (payload["体重"] && payload["体重"].rows || []).forEach(r => {
     if (!r[0]) return;
-    nextWeights.push({ date: String(r[0]).slice(0,10), weight: Number(r[1]) || 0 });
+    // 体脂肪率は任意。列が無い古いシートから復元した場合はundefinedのままにする
+    // (0を入れてしまうと「体脂肪率0%」として計算に使われてしまうため)。
+    const bf = (r[2] === "" || r[2] == null) ? undefined : Number(r[2]);
+    const rec = { date: String(r[0]).slice(0,10), weight: Number(r[1]) || 0 };
+    if (bf != null && Number.isFinite(bf) && bf > 0) rec.bodyFat = bf;
+    nextWeights.push(rec);
   });
   (payload["食事"] && payload["食事"].rows || []).forEach(r => {
     if (!r[0]) return;
@@ -1165,6 +1183,26 @@ async function fetchAiMealPlan() {
   }
   renderTabContent();
 }
+// 体脂肪率として受け付ける範囲。家庭用の体組成計で現実的にありうる値の外側は、
+// 入力ミス(29を2.9と打つ、%と小数を取り違える等)とみなして無視する。
+// 誤った値をそのまま基礎代謝の計算に使うと、目標カロリーが大きく狂うため。
+const BODYFAT_MIN = 3, BODYFAT_MAX = 60;
+// 目標カロリーの計算に使う体脂肪率。1回の測定値をそのまま使わず、直近の平均で均す。
+// 家庭用の体組成計(BIA方式)は体内の水分量に強く影響され、時間帯・食事・入浴の前後で
+// 数%動くため、単発の値を使うと目標カロリーが日ごとに数十kcal揺れて使いにくくなる。
+const BODYFAT_AVG_COUNT = 3;   // 平均に使う件数
+const BODYFAT_AVG_DAYS = 60;   // これより古い記録は、いまの体組成を表さないので使わない
+function recentBodyFat_() {
+  const cutoff = localDateStr(new Date(Date.now() - BODYFAT_AVG_DAYS * 86400000));
+  const vals = weightEntries
+    .filter(w => w.bodyFat != null && w.bodyFat >= BODYFAT_MIN && w.bodyFat <= BODYFAT_MAX && w.date >= cutoff)
+    .sort((a, b) => a.date < b.date ? 1 : -1)
+    .slice(0, BODYFAT_AVG_COUNT)
+    .map(w => w.bodyFat);
+  if (!vals.length) return null;
+  return Math.round(vals.reduce((s, v) => s + v, 0) / vals.length * 10) / 10;
+}
+
 // 体脂肪1kgあたりのおおよそのエネルギー量。減量ペースから必要な赤字を出すのに使う。
 const FAT_KCAL_PER_KG = 7200;
 // 減量ペースの選択肢(kg/週)。増量方向は、体脂肪をつけすぎないよう0.25kg/週で固定する。
@@ -1209,9 +1247,18 @@ function currentPace() {
 function computeTargets(p, weight, goalWeight) {
   const age = Number(p.age), height = Number(p.height);
   if (!age || !height || !weight) return null;
-  const bmr = p.gender === "男性"
+  // 体脂肪率が分かっていない場合の推定式(Mifflin-St Jeor)。身長・体重・年齢・性別だけを
+  // 使うため、同じ体格なら体脂肪率が何%でも同じ値になる。
+  const bmrMifflin = p.gender === "男性"
     ? 10*weight + 6.25*height - 5*age + 5
     : 10*weight + 6.25*height - 5*age - 161;
+  // 体脂肪率を記録している場合は、除脂肪体重から求めるKatch-McArdle式を使う(v41)。
+  // 体組成が平均から離れているほど、こちらのほうが実態に近い値になる。
+  const bodyFat = recentBodyFat_();
+  const leanMass = bodyFat != null ? weight * (1 - bodyFat / 100) : null;
+  const bmrKatch = leanMass != null ? 370 + 21.6 * leanMass : null;
+  const bmr = bmrKatch != null ? bmrKatch : bmrMifflin;
+  const bmrMethod = bmrKatch != null ? "katch" : "mifflin";
   // 運動ぶんを含まない土台(基礎代謝 × 日常生活の活動量)。運動の消費は記録から
   // 実測ぶんだけを別途上乗せする(LIFESTYLE_FACTOR の説明を参照)。
   const tdee = bmr * (LIFESTYLE_FACTOR[p.lifestyle] || LIFESTYLE_FACTOR[DEFAULT_LIFESTYLE]);
@@ -1243,7 +1290,11 @@ function computeTargets(p, weight, goalWeight) {
   if (gapByExercise < 30) gapByExercise = 0;
 
   // --- PFC ---
-  let targetProtein = Math.round(goal * 1.6);
+  // たんぱく質。体脂肪率が分かっていれば除脂肪体重×2.0g、分からなければ従来どおり
+  // 目標体重×1.6g。脂肪組織はたんぱく質をほとんど必要としないので、体組成が分かる
+  // なら除脂肪体重を基準にするほうが理にかなっている(体脂肪率が平均的な人では
+  // どちらもほぼ同じ値になる)。
+  let targetProtein = leanMass != null ? Math.round(leanMass * 2.0) : Math.round(goal * 1.6);
   // 脂質は目安カロリーの25%を基本に、ホルモン等のため目標体重×0.8gを下限とする。
   // ただし上限は30%(食事摂取基準の目標量の上限)に収める——総カロリーが低いと
   // 下限側だけを見て30%を超えてしまうため。上限が0.6g/kgを割る場合はそちらを優先する。
@@ -1268,7 +1319,67 @@ function computeTargets(p, weight, goalWeight) {
     // 画面で「なぜこの数字なのか」を説明するための内訳
     pace, direction, needDeficit, actualDeficit, gapByExercise, floored,
     floor: Math.round(floor), goalWeight: goal,
+    // 体組成まわり(画面で「どの式で計算したか」を示すために使う)
+    bmrMethod, bodyFat,
+    leanMass: leanMass != null ? Math.round(leanMass * 10) / 10 : null,
+    fatMass: leanMass != null ? Math.round((weight - leanMass) * 10) / 10 : null,
+    bmrMifflin: Math.round(bmrMifflin),
   };
+}
+// 体組成カード(v41)。体重だけでは「減った分が脂肪なのか筋肉なのか」が分からないため、
+// 体脂肪率を記録している場合に、体脂肪量と除脂肪体重の内訳・その変化を表示する。
+function bodyCompositionCardHtml() {
+  const withBf = weightEntries
+    .filter(w => w.bodyFat != null && w.weight > 0)
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!withBf.length) {
+    return `<div class="card">
+      <p class="section-title">🧬 体組成</p>
+      <p class="muted" style="font-size:11.5px;margin:0;line-height:1.7;">体脂肪率を記録すると、体脂肪量と除脂肪体重(筋肉や骨など)の内訳が表示されます。体重が減ったとき、それが脂肪なのか、筋肉も一緒に落ちているのかは体重だけでは分かりません。</p>
+    </div>`;
+  }
+  const comp = w => ({ date: w.date, weight: w.weight, bf: w.bodyFat,
+    fat: Math.round(w.weight * w.bodyFat / 100 * 10) / 10,
+    lean: Math.round(w.weight * (1 - w.bodyFat / 100) * 10) / 10 });
+  const first = comp(withBf[0]), last = comp(withBf[withBf.length - 1]);
+  const row = (label, v, unit) => `
+    <div class="between" style="margin-bottom:5px;">
+      <span style="font-size:12px;">${label}</span>
+      <span class="mono" style="font-size:13px;">${v}${unit}</span>
+    </div>`;
+  const signed = v => (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v).toFixed(1);
+
+  let changeBlock = "";
+  if (withBf.length >= 2 && first.date !== last.date) {
+    const dW = Math.round((last.weight - first.weight) * 10) / 10;
+    const dF = Math.round((last.fat - first.fat) * 10) / 10;
+    const dL = Math.round((last.lean - first.lean) * 10) / 10;
+    // 体重が減っているとき、その内訳のうち脂肪が占める割合。筋肉を守れているかの目安。
+    const fatShare = (dW < 0 && dF < 0) ? Math.round(Math.min(1, dF / dW) * 100) : null;
+    changeBlock = `
+      <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px;">
+        <p class="muted" style="font-size:10.5px;margin:0 0 8px;">${first.date} からの変化</p>
+        ${row("体重", signed(dW), "kg")}
+        ${row("体脂肪量", signed(dF), "kg")}
+        ${row("除脂肪体重", signed(dL), "kg")}
+        ${fatShare != null ? `<p style="font-size:11.5px;margin:8px 0 0;line-height:1.7;">減った ${Math.abs(dW).toFixed(1)}kg のうち <b>${fatShare}%が体脂肪</b>です。${
+          fatShare >= 75 ? "脂肪を中心に減らせています。" :
+          fatShare >= 50 ? "半分以上は脂肪ですが、除脂肪体重も減っています。たんぱく質と筋トレの量を見直す余地があります。" :
+          "除脂肪体重の減りが大きめです。減量ペースをゆっくりにする、たんぱく質を確保する、筋トレを増やす、といった調整を検討してみてください。"}</p>` : ""}
+      </div>`;
+  }
+  return `<div class="card">
+    <div class="between" style="margin-bottom:10px;">
+      <p class="section-title" style="margin:0;">🧬 体組成</p>
+      <span class="muted">${last.date} 時点</span>
+    </div>
+    ${row("体重", last.weight.toFixed(1), "kg")}
+    ${row("体脂肪率", last.bf.toFixed(1), "%")}
+    ${row("体脂肪量", last.fat.toFixed(1), "kg")}
+    ${row("除脂肪体重", last.lean.toFixed(1), "kg")}
+    ${changeBlock}
+    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">家庭用の体組成計は体内の水分量で数%変わります。1回の値ではなく推移で見てください(目標カロリーの計算にも、直近${BODYFAT_AVG_COUNT}件までの平均を使っています)。</p>
+  </div>`;
 }
 // 「なぜこの目標カロリーなのか」を隠さずに見せるカード(v40)。
 // 以前は目標値だけが出ていたため、下限で頭打ちになっていることに気づけなかった。
@@ -1290,7 +1401,13 @@ function calorieTargetBreakdownHtml(t) {
 
   return `<div class="card">
     <p class="section-title">🧮 目安カロリーの内訳</p>
-    ${line("基礎代謝", `${t.bmr} kcal`, "(Mifflin-St Jeor式)")}
+    ${line("基礎代謝", `${t.bmr} kcal`, t.bmrMethod === "katch"
+        ? `(Katch-McArdle式 / 体脂肪率${t.bodyFat}%・除脂肪体重${t.leanMass}kgから)`
+        : "(Mifflin-St Jeor式 / 体脂肪率は未記録)")}
+    ${t.bmrMethod === "katch" && t.bmr !== t.bmrMifflin
+        ? `<p class="muted" style="font-size:10.5px;margin:-2px 0 8px;line-height:1.6;">体脂肪率を使わない場合は${t.bmrMifflin}kcal(差 ${t.bmr - t.bmrMifflin > 0 ? "+" : ""}${t.bmr - t.bmrMifflin}kcal)。直近${BODYFAT_AVG_COUNT}件までの平均で計算しているため、1回の測定のブレで目標が揺れないようにしています。</p>`
+        : (t.bmrMethod === "mifflin"
+        ? `<p class="muted" style="font-size:10.5px;margin:-2px 0 8px;line-height:1.6;">体重タブで体脂肪率も記録すると、体組成から計算する式に切り替わります。</p>` : "")}
     ${line("基礎消費", `${t.tdee} kcal`, "(基礎代謝 × 日常生活の活動量)")}
     ${t.needDeficit !== 0 ? line(
         t.direction === "loss" ? "目標ペースに必要な赤字" : "目標ペースに必要な黒字",
@@ -1307,7 +1424,8 @@ function calorieTargetBreakdownHtml(t) {
     <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.6;">食事だけで目標ペースに必要な${t.direction === "gain" ? "黒字" : "赤字"}(${Math.abs(t.actualDeficit)}kcal/日)を作れる計算です。運動した日は、その消費ぶんが目標カロリーに上乗せされます。</p>`}
 
     <p class="section-title" style="margin:16px 0 8px;">栄養素の目標</p>
-    ${line("たんぱく質", `${t.targetProtein} g`, `(目標体重${t.goalWeight}kg × 1.6g)`)}
+    ${line("たんぱく質", `${t.targetProtein} g`, t.leanMass != null
+        ? `(除脂肪体重${t.leanMass}kg × 2.0g)` : `(目標体重${t.goalWeight}kg × 1.6g)`)}
     ${line("脂質", `${t.targetFat} g`, "(目安カロリーの25%・下限あり)")}
     ${line("炭水化物", `${t.targetCarb} g`, "(残り)")}
     ${mp ? `
@@ -2586,7 +2704,7 @@ function weightHtml() {
   const list = sortedDesc.slice(0,8).map(w => `
     <div class="entry-row">
       <span class="mono muted" style="flex:1;">${w.date}</span>
-      <span class="mono">${w.weight}kg</span>
+      <span class="mono">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}</span>
       <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
       <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
     </div>`).join("");
@@ -2613,18 +2731,25 @@ function weightHtml() {
       ` : `<p class="muted" style="font-size:11.5px;margin:0;">体重を記録すると、ここに経過をXへ投稿するための文章が自動で作られます。</p>`}
     </div>
 
+    ${bodyCompositionCardHtml()}
+
     <div class="card">
       <p class="section-title">体重を記録</p>
-      <div class="row" style="margin-bottom:10px;">
-        <div style="flex:1;">
+      <div class="field-row" style="margin-bottom:10px;">
+        <div class="f-date">
           <label class="label">日付</label>
           <input type="date" id="weight-date-input" data-entry-date="weight" value="${entryDate("weight")}">
         </div>
-        <div style="flex:1;">
+        <div class="f-val">
           <label class="label">体重 (kg)</label>
           <input type="number" step="0.1" id="weight-value-input" placeholder="例: 65.0" class="mono" value="${latest ? latest.weight : ""}">
         </div>
+        <div class="f-val">
+          <label class="label">体脂肪率 (%・任意)</label>
+          <input type="number" step="0.1" id="weight-bodyfat-input" placeholder="例: 29.0" class="mono" value="${latest && latest.bodyFat != null ? latest.bodyFat : ""}">
+        </div>
       </div>
+      <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">体脂肪率は任意です。記録すると、基礎代謝を体組成から計算する式(Katch-McArdle)に自動で切り替わり、目標カロリーとたんぱく質の目安がより実態に近づきます。</p>
       ${entryDateNoticeHtml("weight")}
       <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
       ${list}
@@ -3119,7 +3244,7 @@ function openEdit(kind, key) {
   } else if (kind === "weight") {
     const w = weightEntries.find(x => x.date === key);
     if (!w) return;
-    editing = { kind, date: key, draftWeight: w.weight, draftDate: w.date };
+    editing = { kind, date: key, draftWeight: w.weight, draftBodyFat: w.bodyFat, draftDate: w.date };
   } else if (kind === "meal") {
     const m = mealEntries.find(x => x.id === key);
     if (!m) return;
@@ -3173,7 +3298,8 @@ function renderEditModal() {
   } else if (editing.kind === "weight") {
     body = `
       <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:10px;">
-      <label class="label">体重(kg)</label><input type="number" step="0.1" id="edit-weight" value="${editing.draftWeight}" class="mono" style="margin-bottom:14px;">`;
+      <label class="label">体重(kg)</label><input type="number" step="0.1" id="edit-weight" value="${editing.draftWeight}" class="mono" style="margin-bottom:10px;">
+      <label class="label">体脂肪率(%・任意)</label><input type="number" step="0.1" id="edit-bodyfat" value="${editing.draftBodyFat != null ? editing.draftBodyFat : ""}" placeholder="例: 29.0" class="mono" style="margin-bottom:14px;">`;
   } else if (editing.kind === "meal") {
     body = `
       <label class="label">区分</label>
@@ -3227,8 +3353,12 @@ function handleEditSave() {
     const newDate = document.getElementById("edit-date").value || w.date;
     const newVal = parseFloat(document.getElementById("edit-weight").value);
     if (newVal > 0) {
+      const bfEl = document.getElementById("edit-bodyfat");
+      const bfRaw = bfEl ? parseFloat(bfEl.value) : NaN;
       weightEntries = weightEntries.filter(x => x.date !== editing.date && x.date !== newDate);
-      weightEntries.unshift({ date: newDate, weight: newVal });
+      const rec = { date: newDate, weight: newVal };
+      if (Number.isFinite(bfRaw) && bfRaw >= BODYFAT_MIN && bfRaw <= BODYFAT_MAX) rec.bodyFat = Math.round(bfRaw * 10) / 10;
+      weightEntries.unshift(rec);
     }
   } else if (editing.kind === "meal") {
     const m = mealEntries.find(x => x.id === editing.id);
@@ -3288,8 +3418,14 @@ function handleAddWeight() {
   const date = document.getElementById("weight-date-input").value || localDateStr();
   const val = parseFloat(document.getElementById("weight-value-input").value);
   if (!val || val <= 0) return;
+  const bfEl = document.getElementById("weight-bodyfat-input");
+  const bfRaw = bfEl ? parseFloat(bfEl.value) : NaN;
   weightEntries = weightEntries.filter(w => w.date !== date);
-  weightEntries.unshift({ date, weight: val });
+  const rec = { date, weight: val };
+  // 体脂肪率は任意。入力ミス(2.9%や290%など)がそのまま目標カロリーを狂わせないよう、
+  // 妥当な範囲に収まっている場合だけ採用する。
+  if (Number.isFinite(bfRaw) && bfRaw >= BODYFAT_MIN && bfRaw <= BODYFAT_MAX) rec.bodyFat = Math.round(bfRaw * 10) / 10;
+  weightEntries.unshift(rec);
   saveState(); renderTabContent(); scheduleSync();
 }
 function handleAddMeal() {
