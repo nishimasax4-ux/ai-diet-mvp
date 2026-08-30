@@ -150,7 +150,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v39.1";
+const APP_VERSION = "v40";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -289,7 +289,7 @@ const WORKOUTS = {
 let entries = [];
 let weightEntries = [];
 let mealEntries = [];
-let goals = { weight: 65, weeklyFreq: 3 };
+let goals = { weight: 65, weeklyFreq: 3, paceKgPerWeek: 0.5 };
 let profile = null; // null until onboarding completes: {age, gender, height, activity, timeAvail}
 let moodByDate = {};
 let syncStatus = "idle";
@@ -1165,6 +1165,47 @@ async function fetchAiMealPlan() {
   }
   renderTabContent();
 }
+// 体脂肪1kgあたりのおおよそのエネルギー量。減量ペースから必要な赤字を出すのに使う。
+const FAT_KCAL_PER_KG = 7200;
+// 減量ペースの選択肢(kg/週)。増量方向は、体脂肪をつけすぎないよう0.25kg/週で固定する。
+const PACE_OPTIONS = [
+  { value: 0.25, label: "ゆっくり (0.25kg/週)" },
+  { value: 0.5,  label: "標準 (0.5kg/週)" },
+];
+const DEFAULT_PACE = 0.5;
+const GAIN_PACE = 0.25;
+function currentPace() {
+  const p = Number(goals.paceKgPerWeek);
+  return PACE_OPTIONS.some(o => o.value === p) ? p : DEFAULT_PACE;
+}
+
+/**
+ * 1日の目安カロリーとPFCを計算する。
+ *
+ * 【v40で計算方法を変更】以前は目標体重との差に応じて -300 / -500 kcal と段階的に
+ * 決めていたが、最後の
+ *     targetCalories = Math.max(targetCalories, floor, bmr*1.05)
+ * によって、その赤字が黙って打ち消されていた。日常生活の活動量が「デスクワーク中心」
+ * (係数1.2)の場合、基礎消費は基礎代謝の1.2倍しかないため、そこから500を引くと
+ * ほぼ必ず bmr*1.05 を下回り、下限側が採用されていた——たとえば
+ * 40歳男性170cm 80kg(目標70kg)なら、500kcalの赤字のはずが実際は251kcalだった。
+ *
+ * v40では次のようにする。
+ *   1. 減量ペース(kg/週)から、必要な赤字を計算する(体脂肪1kg≒7200kcal)
+ *   2. 目安カロリー = 基礎消費 − 必要な赤字
+ *   3. 安全のため基礎代謝(と最低ライン)を下限とする。下限に当たった場合は
+ *      それを隠さず、「食事だけでは足りない分」を gapByExercise として返し、
+ *      画面には「運動で補う分」として表示する
+ *
+ * PFCは「減量中に筋肉を落としにくくする」ことを優先し、たんぱく質を体重比で決める。
+ *   ・たんぱく質 = 目標体重 × 1.6 g
+ *   ・脂質       = 目安カロリーの25%。ただし 目標体重 × 0.8 g を下限とする
+ *   ・炭水化物   = 残り
+ * 総カロリーが低いと、たんぱく質は「日本人の食事摂取基準(2025年版)」の目標量
+ * (13〜20%エネルギー)を超えるが、これは基準が一般的な生活習慣病予防を想定した
+ * 比率であるのに対し、こちらは減量中の筋肉維持を優先しているため。画面では
+ * %エネルギーも併記して、どの位置にいるか分かるようにしている。
+ */
 function computeTargets(p, weight, goalWeight) {
   const age = Number(p.age), height = Number(p.height);
   if (!age || !height || !weight) return null;
@@ -1174,18 +1215,118 @@ function computeTargets(p, weight, goalWeight) {
   // 運動ぶんを含まない土台(基礎代謝 × 日常生活の活動量)。運動の消費は記録から
   // 実測ぶんだけを別途上乗せする(LIFESTYLE_FACTOR の説明を参照)。
   const tdee = bmr * (LIFESTYLE_FACTOR[p.lifestyle] || LIFESTYLE_FACTOR[DEFAULT_LIFESTYLE]);
-  const diff = weight - (goalWeight != null ? goalWeight : weight);
-  let targetCalories;
-  if (diff > 0.5) targetCalories = tdee - (diff > 5 ? 500 : 300);
-  else if (diff < -0.5) targetCalories = tdee + 300;
-  else targetCalories = tdee;
-  const floor = p.gender === "男性" ? 1500 : 1200;
-  targetCalories = Math.max(targetCalories, floor, bmr*1.05);
-  targetCalories = Math.round(targetCalories/10)*10;
-  const targetProtein = Math.round(weight * 1.8);
-  const targetFat = Math.round((targetCalories*0.25)/9);
-  const targetCarb = Math.max(0, Math.round((targetCalories - targetProtein*4 - targetFat*9)/4));
-  return { bmr: Math.round(bmr), tdee: Math.round(tdee), targetCalories, targetProtein, targetFat, targetCarb };
+  const goal = (goalWeight != null && goalWeight > 0) ? goalWeight : weight;
+  const diff = weight - goal;
+
+  const pace = currentPace();
+  const direction = diff > 0.5 ? "loss" : diff < -0.5 ? "gain" : "keep";
+  // 目標に向けて1日あたり必要なエネルギーの過不足(プラス=減らしたい量)
+  const needDeficit = direction === "loss" ? Math.round(pace * FAT_KCAL_PER_KG / 7)
+                    : direction === "gain" ? -Math.round(GAIN_PACE * FAT_KCAL_PER_KG / 7)
+                    : 0;
+
+  // 安全のための下限。基礎代謝を下回る食事量を目標として提示しない。
+  const hardFloor = p.gender === "男性" ? 1500 : 1200;
+  const floor = Math.max(bmr, hardFloor);
+  const raw = tdee - needDeficit;
+  const floored = raw < floor;
+  const targetCalories = Math.round(Math.max(raw, floor) / 10) * 10;
+
+  // 実際に食事で作れている赤字と、目標ペースに届かない分(=運動で補う分)。
+  // 「足りない分」が生じるのは下限で頭打ちになったときだけ。下限に当たっていない場合の
+  // 数kcalのズレは10kcal単位に丸めた残りでしかないので、0として扱う(画面に
+  // 「運動で補う分 3kcal」のような無意味な数字を出さないため)。
+  const actualDeficit = Math.round(tdee - targetCalories);
+  let gapByExercise = floored ? Math.max(0, needDeficit - actualDeficit) : 0;
+  // 30kcal未満の差は、下限ぎりぎりで10kcal単位に丸めた結果でしかない。
+  // 「運動で補う分 5kcal」のような、行動に結びつかない数字は出さない。
+  if (gapByExercise < 30) gapByExercise = 0;
+
+  // --- PFC ---
+  let targetProtein = Math.round(goal * 1.6);
+  // 脂質は目安カロリーの25%を基本に、ホルモン等のため目標体重×0.8gを下限とする。
+  // ただし上限は30%(食事摂取基準の目標量の上限)に収める——総カロリーが低いと
+  // 下限側だけを見て30%を超えてしまうため。上限が0.6g/kgを割る場合はそちらを優先する。
+  const fatMin = Math.round(goal * 0.8);
+  const fatMax = Math.max(Math.round(targetCalories * 0.30 / 9), Math.round(goal * 0.6));
+  let targetFat = Math.min(Math.max(Math.round(targetCalories * 0.25 / 9), fatMin), fatMax);
+  // たんぱく質と脂質だけで目安カロリーを超えてしまう極端な場合は、
+  // 炭水化物が0にならないよう脂質→たんぱく質の順に削って辻褄を合わせる。
+  const carbFloorKcal = targetCalories * 0.1;
+  if (targetProtein * 4 + targetFat * 9 > targetCalories - carbFloorKcal) {
+    targetFat = Math.max(Math.round(goal * 0.6),
+      Math.floor((targetCalories - carbFloorKcal - targetProtein * 4) / 9));
+    if (targetProtein * 4 + targetFat * 9 > targetCalories - carbFloorKcal) {
+      targetProtein = Math.max(0, Math.floor((targetCalories - carbFloorKcal - targetFat * 9) / 4));
+    }
+  }
+  const targetCarb = Math.max(0, Math.round((targetCalories - targetProtein*4 - targetFat*9) / 4));
+
+  return {
+    bmr: Math.round(bmr), tdee: Math.round(tdee), targetCalories,
+    targetProtein, targetFat, targetCarb,
+    // 画面で「なぜこの数字なのか」を説明するための内訳
+    pace, direction, needDeficit, actualDeficit, gapByExercise, floored,
+    floor: Math.round(floor), goalWeight: goal,
+  };
+}
+// 「なぜこの目標カロリーなのか」を隠さずに見せるカード(v40)。
+// 以前は目標値だけが出ていたため、下限で頭打ちになっていることに気づけなかった。
+function calorieTargetBreakdownHtml(t) {
+  const mp = macroPercents(t);
+  const dirLabel = t.direction === "loss" ? "減量" : t.direction === "gain" ? "増量" : "維持";
+  const line = (label, value, note) => `
+    <div class="between" style="margin-bottom:5px;">
+      <span style="font-size:12px;">${label}${note ? ` <span class="muted" style="font-size:10.5px;">${note}</span>` : ""}</span>
+      <span class="mono" style="font-size:13px;">${value}</span>
+    </div>`;
+  // 厚労省「日本人の食事摂取基準(2025年版)」18〜64歳の目標量。65歳以上はたんぱく質の下限が15%。
+  const age = profile ? Number(profile.age) : 0;
+  const pLow = age >= 65 ? 15 : 13;
+  const inRange = (v, lo, hi) => v >= lo && v <= hi;
+  const badge = ok => ok
+    ? `<span class="muted" style="font-size:10px;">範囲内</span>`
+    : `<span style="font-size:10px;color:var(--coral);">範囲外</span>`;
+
+  return `<div class="card">
+    <p class="section-title">🧮 目安カロリーの内訳</p>
+    ${line("基礎代謝", `${t.bmr} kcal`, "(Mifflin-St Jeor式)")}
+    ${line("基礎消費", `${t.tdee} kcal`, "(基礎代謝 × 日常生活の活動量)")}
+    ${t.needDeficit !== 0 ? line(
+        t.direction === "loss" ? "目標ペースに必要な赤字" : "目標ペースに必要な黒字",
+        `${Math.abs(t.needDeficit)} kcal/日`,
+        `(${dirLabel} ${t.direction === "loss" ? t.pace : GAIN_PACE}kg/週)`) : ""}
+    <div class="between" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;">
+      <span style="font-size:12.5px;font-weight:700;">1日の目安カロリー</span>
+      <span class="mono" style="font-size:16px;font-weight:700;">${t.targetCalories} kcal</span>
+    </div>
+    ${t.gapByExercise > 0 ? `
+    <div style="background:#FDF1E7;border-radius:8px;padding:10px;margin-top:10px;">
+      <p style="font-size:11.5px;margin:0;line-height:1.7;">⚠️ 安全のため、目安カロリーが<b>基礎代謝(${t.bmr}kcal)を下回らないところで止めています。</b>そのため食事だけで作れる赤字は <span class="mono">${t.actualDeficit}</span>kcal/日で、目標ペースには <b><span class="mono">${t.gapByExercise}</span>kcal/日ぶん足りません</b>。この分は運動で補う想定です(運動した日は、その消費ぶんが目標カロリーに自動で上乗せされます)。ペースを「ゆっくり」に変えると、食事だけでも届くようになります。</p>
+    </div>` : `
+    <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.6;">食事だけで目標ペースに必要な${t.direction === "gain" ? "黒字" : "赤字"}(${Math.abs(t.actualDeficit)}kcal/日)を作れる計算です。運動した日は、その消費ぶんが目標カロリーに上乗せされます。</p>`}
+
+    <p class="section-title" style="margin:16px 0 8px;">栄養素の目標</p>
+    ${line("たんぱく質", `${t.targetProtein} g`, `(目標体重${t.goalWeight}kg × 1.6g)`)}
+    ${line("脂質", `${t.targetFat} g`, "(目安カロリーの25%・下限あり)")}
+    ${line("炭水化物", `${t.targetCarb} g`, "(残り)")}
+    ${mp ? `
+    <div style="background:var(--paper);border-radius:8px;padding:10px;margin-top:10px;">
+      <p class="muted" style="font-size:10.5px;margin:0 0 6px;line-height:1.6;">エネルギー比と、厚生労働省「日本人の食事摂取基準(2025年版)」の目標量との比較(${age >= 65 ? "65歳以上" : "18〜64歳"}):</p>
+      <p class="mono" style="font-size:11px;margin:0;line-height:1.9;">
+        たんぱく質 ${mp.protein}% <span class="muted">/ 基準 ${pLow}〜20%</span> ${badge(inRange(mp.protein, pLow, 20))}<br>
+        脂質 ${mp.fat}% <span class="muted">/ 基準 20〜30%</span> ${badge(inRange(mp.fat, 20, 30))}<br>
+        炭水化物 ${mp.carb}% <span class="muted">/ 基準 50〜65%</span> ${badge(inRange(mp.carb, 50, 65))}
+      </p>
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">たんぱく質が基準の上限を超えるのは、この目標が<b>減量中に筋肉を落としにくくすること</b>を優先しているためです(基準の比率は、一般的な生活習慣病予防を想定したもの)。総カロリーが低いほど、同じg数でも%は高く出ます。持病などで食事制限がある場合は、医師・管理栄養士の指示を優先してください。</p>
+    </div>` : ""}
+  </div>`;
+}
+// 目安カロリーに占める各栄養素の割合(%エネルギー)。厚労省の目標量と見比べるために表示する。
+function macroPercents(t) {
+  if (!t || !t.targetCalories) return null;
+  const pc = v => Math.round(v / t.targetCalories * 1000) / 10;
+  return { protein: pc(t.targetProtein * 4), fat: pc(t.targetFat * 9), carb: pc(t.targetCarb * 4) };
 }
 function getTargets() {
   if (!profile) return null;
@@ -2821,7 +2962,7 @@ function settingsHtml() {
           </div>
         </div>
       </div>
-      <div>
+      <div style="margin-bottom:14px;">
         <div class="between" style="margin-bottom:4px;">
           <span style="font-size:12px;">週間トレーニング目標</span>
           <div class="row" style="gap:4px;width:auto;">
@@ -2830,7 +2971,16 @@ function settingsHtml() {
           </div>
         </div>
       </div>
+      <div>
+        <p style="font-size:12px;margin:0 0 6px;">減量ペース</p>
+        <div class="wrap" style="margin-bottom:6px;">
+          ${PACE_OPTIONS.map(o => `<button class="chip ${currentPace()===o.value?"active":""}" data-action="set-pace" data-val="${o.value}">${o.label}</button>`).join("")}
+        </div>
+        <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">1週間に落としたいペースです。ここから1日あたりに必要な赤字(体脂肪1kg≒7200kcal)を計算し、目安カロリーを決めます。目標体重より軽い場合は、増量方向に0.25kg/週で計算します。</p>
+      </div>
     </div>
+
+    ${targets ? calorieTargetBreakdownHtml(targets) : ""}
 
     <div class="card">
       ${settingsSectionHeader("profile", "🤖 AIアドバイス用プロフィール")}
@@ -3357,6 +3507,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "apply-routine") { applyRoutine(t.dataset.id); }
   else if (action === "del-routine") { routineMaster = routineMaster.filter(r => r.id !== t.dataset.id); saveState(); renderTabContent(); }
+  else if (action === "set-pace") { goals.paceKgPerWeek = Number(t.dataset.val); saveState(); renderTabContent(); scheduleSync(); }
   else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-lifestyle") { profile.lifestyle = t.dataset.val; saveState(); renderTabContent(); }
@@ -3474,7 +3625,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "reset-show") { confirmReset = true; renderTabContent(); }
   else if (action === "reset-no") { confirmReset = false; renderTabContent(); }
   else if (action === "reset-yes") {
-    entries = []; weightEntries = []; mealEntries = []; goals = { weight: 65, weeklyFreq: 3 };
+    entries = []; weightEntries = []; mealEntries = []; goals = { weight: 65, weeklyFreq: 3, paceKgPerWeek: DEFAULT_PACE };
     profile = null; moodByDate = {}; confirmReset = false; onboardStep = 0;
     exerciseMaster = []; mealMaster = []; masterExercisePart = "胸";
     lastStrengthByExercise = {}; lastCardioMinutes = {}; mealDetailOpen = false;
