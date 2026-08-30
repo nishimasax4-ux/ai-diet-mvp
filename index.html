@@ -163,7 +163,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v41";
+const APP_VERSION = "v41.1";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -183,6 +183,7 @@ const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","ク�
 const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "クロストレーナー":5, "リカベントバイク":4.5, "その他":5 };
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
+const MINUTE_QUICK_OPTIONS = [15,30,45,60]; // 有酸素の時間のワンタップ候補(分)。これ以外の時間は入力欄に直接入力できます
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
 // 内蔵の食品カロリー概算表(外部APIには接続しません)。
 // 数値はすべて一般的な目安量あたりのおおよその値です(kcal, protein/fat/carbはg)。
@@ -2795,7 +2796,8 @@ function trainingHtml() {
         <div class="wrap" id="cardio-buttons" style="margin-bottom:8px;"></div>
         <input type="text" id="cardio-custom-input" placeholder="種目名を入力" class="hidden" style="margin-bottom:8px;">
         <label class="label">時間 (分)</label>
-        <input type="number" id="minutes-input" placeholder="分" class="mono" style="margin-bottom:10px;">
+        <input type="number" id="minutes-input" placeholder="分" class="mono" style="margin-bottom:8px;">
+        <div class="wrap" id="minutes-quick-buttons" style="margin-bottom:10px;"></div>
       </div>
       <button class="btn-primary" data-action="add-training">＋ 記録する</button>
     </div>
@@ -3028,9 +3030,26 @@ function renderTrainingFormOptions() {
   }
 
   // 時間(分): 有酸素の種目ごとに前回の分数を覚えておき、未入力なら提案する。
+  // 筋トレの回数と同じ考え方で、自動で入れた値には印(autofilled)を付けておき、
+  // 種目を切り替えたらその種目の前回値に入れ替える。自分で入力・タップした値には
+  // 印が付かないので、勝手に上書きされることはない。
   const minutesInput = document.getElementById("minutes-input");
-  if (minutesInput && minutesInput.value === "" && lastCardioMinutes[selectedCardio]) {
-    minutesInput.value = lastCardioMinutes[selectedCardio];
+  if (minutesInput && (minutesInput.value === "" || minutesInput.dataset.autofilled === "1")) {
+    const remembered = lastCardioMinutes[selectedCardio];
+    if (remembered) {
+      minutesInput.value = remembered;
+      minutesInput.dataset.autofilled = "1";
+    } else if (minutesInput.dataset.autofilled === "1") {
+      // この種目には過去の記録がない。前の候補が残らないようクリアする。
+      minutesInput.value = "";
+      delete minutesInput.dataset.autofilled;
+    }
+  }
+  const minutesQuickEl = document.getElementById("minutes-quick-buttons");
+  if (minutesQuickEl) {
+    const currentMinutes = minutesInput ? minutesInput.value : "";
+    minutesQuickEl.innerHTML = MINUTE_QUICK_OPTIONS.map(m =>
+      `<button type="button" class="chip ${String(m)===String(currentMinutes)?"active-b":""}" data-action="select-minutes" data-val="${m}">${m}分</button>`).join("");
   }
 }
 
@@ -3542,7 +3561,9 @@ document.getElementById("app").addEventListener("click", (e) => {
       renderTrainingFormOptions();
       const customInput = document.getElementById("cardio-custom-input");
       customInput.value = w.type === "combo" ? w.cardioName : w.name;
-      document.getElementById("minutes-input").value = w.type === "combo" ? w.cardioMin : w.min;
+      const minutesEl = document.getElementById("minutes-input");
+      minutesEl.value = w.type === "combo" ? w.cardioMin : w.min;
+      delete minutesEl.dataset.autofilled; // おすすめの時間を明示的に入れたので上書きしない
       customInput.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }
@@ -3562,6 +3583,13 @@ document.getElementById("app").addEventListener("click", (e) => {
     if (!repsInput) return;
     repsInput.value = t.dataset.val;
     delete repsInput.dataset.autofilled;
+    renderTrainingFormOptions();
+  }
+  else if (action === "select-minutes") {
+    const minutesInput = document.getElementById("minutes-input");
+    if (!minutesInput) return;
+    minutesInput.value = t.dataset.val;
+    delete minutesInput.dataset.autofilled; // 自分で選んだ値なので、以後の自動提案で上書きしない
     renderTrainingFormOptions();
   }
   else if (action === "add-training") { handleAddTraining(); }
@@ -3778,9 +3806,15 @@ document.getElementById("app").addEventListener("input", (e) => {
     renderFoodSuggestions("meal-name-suggestions", e.target.value, "meal");
   } else if (e.target.id === "master-meal-name-input") {
     renderFoodSuggestions("master-meal-name-suggestions", e.target.value, "master");
-  } else if (e.target.id === "reps-input") {
-    // ユーザーが自分で回数を書き換えたら、以後の自動提案で上書きしない。
+  } else if (e.target.id === "reps-input" || e.target.id === "minutes-input") {
+    // ユーザーが自分で回数・時間を書き換えたら、以後の自動提案で上書きしない。
     delete e.target.dataset.autofilled;
+    // 候補ボタンの選択状態(どれが今の値と一致しているか)も合わせて描き直す。
+    if (e.target.id === "minutes-input") {
+      const el = document.getElementById("minutes-quick-buttons");
+      if (el) el.innerHTML = MINUTE_QUICK_OPTIONS.map(m =>
+        `<button type="button" class="chip ${String(m)===String(e.target.value)?"active-b":""}" data-action="select-minutes" data-val="${m}">${m}分</button>`).join("");
+    }
   }
 });
 // 日付欄を変えたら、その日付を覚えておく(1件記録するたびに今日へ戻らないように)。
