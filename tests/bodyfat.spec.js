@@ -2,6 +2,9 @@
 //   npx playwright test tests/bodyfat.spec.js
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+// モックが「十分に新しいApps Script」を名乗るための版数。実際の版数を書くと、
+// バージョンを上げるたびにテストが壊れるため、常に上回る値を使う。
+const LATEST_VER = 'v999';
 const APP = () => 'file://' + path.resolve(__dirname, '../index.html');
 
 async function boot(page) {
@@ -176,7 +179,7 @@ test.describe('training-log v41.2 — 古いApps Scriptの検知とレイアウ�
     await page.route('https://script.google.com/macros/**', (route, request) => {
       const body = JSON.parse(request.postData() || '{}');
       const out = body.action === 'ping'
-        ? { status: 'ok', backendVersion: 'v41.2', ai: { gemini: true, groq: true } }
+        ? { status: 'ok', backendVersion: LATEST_VER, ai: { gemini: true, groq: true } }
         : { status: 'ok', payload: {}, lastWriteAt: null, written: 0 };
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) });
     });

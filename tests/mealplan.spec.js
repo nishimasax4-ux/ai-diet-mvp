@@ -6,6 +6,9 @@
 //   npx playwright test tests/mealplan.spec.js
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+// モックが「十分に新しいApps Script」を名乗るための版数。実際の版数を書くと、
+// バージョンを上げるたびにテストが壊れるため、常に上回る値を使う。
+const LATEST_VER = 'v999';
 
 const APP = () => 'file://' + path.resolve(__dirname, '../index.html');
 
@@ -181,7 +184,7 @@ test.describe('training-log v39.1 — AI接続状態の可視化', () => {
     await page.route('https://script.google.com/macros/**', (route, request) => {
       const body = JSON.parse(request.postData() || '{}');
       const out = body.action === 'ping'
-        ? { status: 'ok', backendVersion: 'v41.2', ai: { gemini: true, groq: false } }
+        ? { status: 'ok', backendVersion: LATEST_VER, ai: { gemini: true, groq: false } }
         : { status: 'ok', payload: {}, lastWriteAt: null, written: 0 };
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) });
     });
@@ -208,7 +211,7 @@ test.describe('training-log v39.1 — AI接続状態の可視化', () => {
     await page.route('https://script.google.com/macros/**', (route, request) => {
       const body = JSON.parse(request.postData() || '{}');
       const out = body.action === 'ping'
-        ? { status: 'ok', backendVersion: 'v41.2', ai: { gemini: true, groq: true } }
+        ? { status: 'ok', backendVersion: LATEST_VER, ai: { gemini: true, groq: true } }
         : { status: 'ok', payload: {}, lastWriteAt: null, written: 0 };
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) });
     });
@@ -229,5 +232,106 @@ test.describe('training-log v39.1 — AI接続状態の可視化', () => {
     expect(html).toContain('AI接続の状態');
     expect(html).toContain('設定済み');
     expect(html).not.toContain('45秒待っても応答がありませんでした');
+  });
+});
+
+test.describe('training-log v42 — 候補の多様化とAI提案の統合', () => {
+  async function ready(page) {
+    await page.goto('file://' + require('path').resolve(__dirname, '../index.html'));
+    await finishOnboarding(page);
+    await seedProfile(page);
+  }
+
+  test('「いつもの」だけでなく「新しく試すなら」も提案される', async ({ page }) => {
+    await ready(page);
+    // 朝食に納豆ばかり食べている状態を作る
+    await page.evaluate(() => {
+      for (let i = 1; i <= 6; i++) {
+        mealEntries.push({ id: uid(), date: '2026-08-0' + i, mealType: '朝食', text: '納豆(1パック)',
+                           calories: 100, protein: 8.3, fat: 5, carb: 6, createdAt: Date.now() });
+      }
+      mealMaster.push({ id: uid(), name: '納豆(1パック)', calories: 100, protein: 8.3, fat: 5, carb: 6 });
+      saveState();
+    });
+    await page.reload();
+    await page.waitForTimeout(250);
+
+    const asa = await page.evaluate(() => buildMealSuggestions().meals[0]);
+    expect(asa.familiar.length).toBeGreaterThan(0);
+    expect(asa.fresh.length).toBeGreaterThan(0);
+    // 「新しく試すなら」には、登録済み・朝食での実績があるものは出さない
+    const familiarNames = asa.familiar.map(f => f.name);
+    for (const f of asa.fresh) {
+      expect(familiarNames).not.toContain(f.name);
+      expect(f.own).toBeFalsy();
+    }
+    await page.locator('[data-tab="today"]').click();
+    await page.waitForTimeout(200);
+    const html = await page.locator('#tab-content').innerHTML();
+    expect(html).toContain('いつもの');
+    expect(html).toContain('新しく試すなら');
+  });
+
+  test('登録が一件も無くても、内蔵の食品辞書から候補が出る', async ({ page }) => {
+    await ready(page);
+    const asa = await page.evaluate(() => buildMealSuggestions().meals[0]);
+    expect(asa.items.length).toBeGreaterThan(0);
+    expect(asa.fresh.length).toBeGreaterThan(0);
+  });
+
+  test('AIの提案がタップできる一覧として表示され、文章の重複表示はしない', async ({ page }) => {
+    await page.route('https://script.google.com/macros/**', (route, request) => {
+      const body = JSON.parse(request.postData() || '{}');
+      const out = body.action === 'mealPlan'
+        ? { status: 'ok', text: '{"meals":[...]}', plan: [
+            { mealType: '朝食', comment: 'たんぱく質を確保できます',
+              items: [{ name: '納豆ご飯と味噌汁', kcal: 380, protein: 16, fat: 7, carb: 62 }] },
+            { mealType: '夕食', comment: '脂質控えめです',
+              items: [{ name: '鶏むね肉のソテーと温野菜', kcal: 520, protein: 42, fat: 14, carb: 48 }] },
+          ] }
+        : { status: 'ok', payload: {}, lastWriteAt: null, written: 0 };
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) });
+    });
+    await ready(page);
+    await page.evaluate(() => {
+      gasConfig = { url: 'https://script.google.com/macros/s/fake/exec', token: 't', lastKnownWriteAt: null };
+      saveConfig(); renderApp();
+    });
+    await page.locator('[data-tab="today"]').click();
+    await page.waitForTimeout(150);
+    await page.locator('[data-action="fetch-ai-mealplan"]').click();
+    await page.waitForTimeout(600);
+
+    const html = await page.locator('#tab-content').innerHTML();
+    expect(html).toContain('AIの提案');
+    expect(html).toContain('納豆ご飯と味噌汁');
+    expect(html).toContain('鶏むね肉のソテーと温野菜');
+    expect(html).not.toContain('{"meals"');   // 生のJSONを文章として出さない
+
+    // AIの提案もタップして食事タブに反映できる
+    await page.locator('[data-action="use-meal-suggestion"][data-name="納豆ご飯と味噌汁"]').click();
+    await page.waitForTimeout(250);
+    expect(await page.locator('#meal-name-input').inputValue()).toBe('納豆ご飯と味噌汁');
+    expect(await page.locator('#meal-cal-input').inputValue()).toBe('380');
+  });
+
+  test('古いApps Script(文章だけ返す)でも、これまでどおり文章で表示される', async ({ page }) => {
+    await page.route('https://script.google.com/macros/**', (route, request) => {
+      const body = JSON.parse(request.postData() || '{}');
+      const out = body.action === 'mealPlan'
+        ? { status: 'ok', text: '朝食は納豆ご飯がおすすめです。' }   // planなし
+        : { status: 'ok', payload: {}, lastWriteAt: null, written: 0 };
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) });
+    });
+    await ready(page);
+    await page.evaluate(() => {
+      gasConfig = { url: 'https://script.google.com/macros/s/fake/exec', token: 't', lastKnownWriteAt: null };
+      saveConfig(); renderApp();
+    });
+    await page.locator('[data-tab="today"]').click();
+    await page.waitForTimeout(150);
+    await page.locator('[data-action="fetch-ai-mealplan"]').click();
+    await page.waitForTimeout(600);
+    expect(await page.locator('#tab-content').innerHTML()).toContain('朝食は納豆ご飯がおすすめです。');
   });
 });

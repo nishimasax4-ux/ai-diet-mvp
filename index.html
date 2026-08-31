@@ -171,7 +171,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v41.2";
+const APP_VERSION = "v42";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -329,7 +329,7 @@ let backendVersion = null;
 // このアプリが必要とするapps-script.gsの版数。これより古いと、AI呼び出しが
 // 極端に遅い・新しいactionを知らない等の問題が起きるため、設定タブで警告する。
 // 「不明なaction」が返るほど古くなくても検知できるのが、版数で見る利点。
-const REQUIRED_BACKEND_VERSION = "v41.2";
+const REQUIRED_BACKEND_VERSION = "v42";
 function versionNum_(v) {
   const parts = String(v || "").replace(/^v/i, "").split(".").map(n => Number(n) || 0);
   return (parts[0] || 0) * 1000 + (parts[1] || 0);
@@ -1212,7 +1212,10 @@ async function fetchAiMealPlan() {
   try {
     const data = await gasPost({ action: "mealPlan", context: buildMealPlanContext() }, GAS_AI_TIMEOUT_MS);
     if (data && data.status === "ok" && data.text) {
-      aiMealPlan = { date: localDateStr(), text: String(data.text) };
+      // v42以降のApps Scriptは、文章に加えて構造化した候補(plan)も返す。
+      // これがあれば、ルールベースの候補と同じ「タップして記録できる一覧」として表示でき、
+      // 「提案されている料理」と「一覧に出ている料理」が食い違わなくなる。
+      aiMealPlan = { date: localDateStr(), text: String(data.text), plan: data.plan || null };
       try { localStorage.setItem(AI_MEALPLAN_KEY, JSON.stringify(aiMealPlan)); } catch (e) {}
       aiMealPlanStatus = "idle";
     } else {
@@ -1618,11 +1621,9 @@ function mealTypeUsageStats_() {
 // ・その区分で実際に食べている食品ほど高得点(いちばん効く)
 // ・目安カロリーに近いほど高得点(大きく超えるものは強めに減点)
 // ・まだ足りていない栄養素、特にたんぱく質を多く含むものを加点
-function suggestForMealType_(mealType, budgetKcal, gaps, limit) {
-  if (!budgetKcal || budgetKcal <= 0) return [];
-  const stats = mealTypeUsageStats_();
+function scoreCandidates_(pool, mealType, budgetKcal, gaps, stats) {
   const proteinShort = gaps && gaps.protein > 0;
-  const scored = mealCandidatePool_().map(f => {
+  return pool.map(f => {
     let score = 0;
     const st = stats[f.name];
     if (st) {
@@ -1639,12 +1640,36 @@ function suggestForMealType_(mealType, budgetKcal, gaps, limit) {
     if (gaps && gaps.fat < 0) score -= Math.min(8, (f.fat / Math.max(1, f.kcal)) * 100 * 2);   // 脂質が超過気味なら控える
     if (gaps && gaps.carb < 0) score -= Math.min(8, (f.carb / Math.max(1, f.kcal)) * 100 * 1); // 炭水化物が超過気味なら控える
     return { ...f, score };
-  });
-  return scored
-    .sort((a, b) => (b.score - a.score) || (a.name < b.name ? -1 : 1))
-    .slice(0, limit || 3);
+  }).sort((a, b) => (b.score - a.score) || (a.name < b.name ? -1 : 1));
 }
-
+// ある区分(朝食/夕食)向けの候補を、2種類に分けて返す(v42)。
+//   familiar … その区分で実際に食べたことがあるもの・自分で登録したもの(=いつもの)
+//   fresh    … まだその区分で記録していないもの(=新しく試す候補)
+// 以前は1本のリストで、実績のあるものが強く優遇される設計だったため、
+// 結果的に「登録済みのメニューばかり並ぶ」状態になっていた。
+// 新しい候補は日替わりで入れ替わるようにして、毎日同じ提案にならないようにする。
+function suggestionsForMealType_(mealType, budgetKcal, gaps) {
+  if (!budgetKcal || budgetKcal <= 0) return { familiar: [], fresh: [] };
+  const stats = mealTypeUsageStats_();
+  const pool = mealCandidatePool_();
+  const isKnown = f => {
+    const st = stats[f.name];
+    return f.own || (st && (st.byType[mealType] || 0) > 0);
+  };
+  const familiar = scoreCandidates_(pool.filter(isKnown), mealType, budgetKcal, gaps, stats).slice(0, 2);
+  // 新しい候補: その区分の実績がなく、自分の登録にもないものだけを対象にする。
+  const freshRanked = scoreCandidates_(pool.filter(f => !isKnown(f)), mealType, budgetKcal, gaps, stats)
+    .slice(0, 8);
+  // 上位8件から日替わりで2件選ぶ。毎日まったく同じ顔ぶれにならないようにするための回転。
+  const fresh = [];
+  if (freshRanked.length) {
+    const offset = (dayOfYear(new Date()) + (mealType === "夕食" ? 4 : 0)) % freshRanked.length;
+    for (let i = 0; i < Math.min(2, freshRanked.length); i++) {
+      fresh.push(freshRanked[(offset + i) % freshRanked.length]);
+    }
+  }
+  return { familiar, fresh };
+}
 // カード表示用にまとめる。プロフィール・体重が未入力で目安が出せない場合はnull。
 function buildMealSuggestions() {
   const b = mealBudgetsForToday_();
@@ -1652,12 +1677,16 @@ function buildMealSuggestions() {
   const gaps = macroGapsForToday_();
   const result = { budgets: b, gaps, meals: [] };
   ["朝食", "夕食"].forEach(mt => {
+    const sug = suggestionsForMealType_(mt, b.budget[mt], gaps);
     result.meals.push({
       mealType: mt,
       alreadyEaten: b.eaten[mt] > 0,
       eaten: b.eaten[mt],
       budget: b.budget[mt],
-      items: suggestForMealType_(mt, b.budget[mt], gaps, 3),
+      familiar: sug.familiar,
+      fresh: sug.fresh,
+      // 既存の呼び出し元・テスト向けに、両方をつなげたものも持たせておく。
+      items: sug.familiar.concat(sug.fresh),
     });
   });
   return result;
@@ -1714,6 +1743,23 @@ function mealSuggestionCardHtml() {
     ? `<p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">今日の残り <span class="mono">${s.budgets.remaining}</span>kcal ／ あと たんぱく質 <span class="mono">${g.protein > 0 ? g.protein.toFixed(1) : 0}</span>g・脂質 <span class="mono">${g.fat > 0 ? g.fat.toFixed(1) : 0}</span>g・炭水化物 <span class="mono">${g.carb > 0 ? g.carb.toFixed(1) : 0}</span>g${g.protein > 0 ? "(たんぱく質が多めのものを優先して選んでいます)" : ""}</p>`
     : "";
 
+  // AIが返した構造化候補を、区分ごとに引けるようにしておく。
+  const aiByType = {};
+  if (aiMealPlan && Array.isArray(aiMealPlan.plan)) {
+    aiMealPlan.plan.forEach(p => { if (p && p.mealType) aiByType[p.mealType] = p; });
+  }
+  // 候補1件ぶんの行。タップすると食事タブの入力欄に入る(記録はされない)。
+  const itemRow = (f, mealType, badge) => `
+      <button type="button" class="entry-row" style="width:100%;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:8px;margin-bottom:6px;padding:8px 10px;"
+              data-action="use-meal-suggestion" data-name="${esc(f.name)}" data-kcal="${Math.round(f.kcal)||0}" data-protein="${round1_(f.protein)}" data-fat="${round1_(f.fat)}" data-carb="${round1_(f.carb)}" data-mealtype="${mealType}">
+        <div style="flex:1;">
+          <div style="font-size:12.5px;">${esc(f.name)}${badge || ""}</div>
+          <div class="muted mono" style="font-size:10.5px;">${Math.round(f.kcal)||0}kcal ／ P${round1_(f.protein)} F${round1_(f.fat)} C${round1_(f.carb)}</div>
+        </div>
+        <span class="muted" style="font-size:11px;">記録する ›</span>
+      </button>`;
+  const groupLabel = t => `<p class="muted" style="font-size:10.5px;margin:6px 0 4px;font-weight:700;">${t}</p>`;
+
   const blocks = s.meals.map(m => {
     if (m.alreadyEaten) {
       return `<div style="margin-bottom:14px;">
@@ -1724,36 +1770,32 @@ function mealSuggestionCardHtml() {
         <p class="muted" style="font-size:11px;margin:0;">今日の${m.mealType}はすでに記録されています。</p>
       </div>`;
     }
-    if (!m.items.length) {
+    const ai = aiByType[m.mealType];
+    const aiItems = (ai && Array.isArray(ai.items)) ? ai.items.filter(x => x && x.name) : [];
+    if (!m.familiar.length && !m.fresh.length && !aiItems.length) {
       return `<div style="margin-bottom:14px;">
         <div class="between" style="margin-bottom:4px;">
           <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
           <span class="muted mono" style="font-size:11px;">目安 ${m.budget}kcal</span>
         </div>
-        <p class="muted" style="font-size:11px;margin:0;">${m.budget > 0 ? "候補を出せませんでした。設定タブの「よく食べるもの」に、普段の食事を登録すると提案の精度が上がります。" : "今日の目安カロリーはすでに使い切っています。無理に食べる必要はありません。"}</p>
+        <p class="muted" style="font-size:11px;margin:0;">${m.budget > 0 ? "候補を出せませんでした。" : "今日の目安カロリーはすでに使い切っています。無理に食べる必要はありません。"}</p>
       </div>`;
     }
-    const items = m.items.map(f => `
-      <button type="button" class="entry-row" style="width:100%;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:8px;margin-bottom:6px;padding:8px 10px;"
-              data-action="use-meal-suggestion" data-name="${esc(f.name)}" data-kcal="${f.kcal}" data-protein="${f.protein}" data-fat="${f.fat}" data-carb="${f.carb}" data-mealtype="${m.mealType}">
-        <div style="flex:1;">
-          <div style="font-size:12.5px;">${esc(f.name)}${f.own ? ' <span class="muted" style="font-size:10px;">📌登録済み</span>' : ""}</div>
-          <div class="muted mono" style="font-size:10.5px;">${f.kcal}kcal ／ P${round1_(f.protein)} F${round1_(f.fat)} C${round1_(f.carb)}</div>
-        </div>
-        <span class="muted" style="font-size:11px;">記録する ›</span>
-      </button>`).join("");
     return `<div style="margin-bottom:14px;">
-      <div class="between" style="margin-bottom:6px;">
+      <div class="between" style="margin-bottom:2px;">
         <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
         <span class="muted mono" style="font-size:11px;">目安 ${m.budget}kcal</span>
       </div>
-      ${items}
+      ${aiItems.length ? groupLabel("🤖 AIの提案") + aiItems.map(f => itemRow(f, m.mealType, "")).join("")
+        + (ai.comment ? `<p class="muted" style="font-size:10.5px;margin:0 0 6px;line-height:1.6;">${esc(String(ai.comment))}</p>` : "") : ""}
+      ${m.familiar.length ? groupLabel("いつもの") + m.familiar.map(f => itemRow(f, m.mealType, f.own ? ' <span class="muted" style="font-size:10px;">📌登録済み</span>' : "")).join("") : ""}
+      ${m.fresh.length ? groupLabel("新しく試すなら") + m.fresh.map(f => itemRow(f, m.mealType, "")).join("") : ""}
     </div>`;
   }).join("");
 
   const aiBlock = gasConfigured() ? `
     <div style="border-top:1px solid var(--line);padding-top:10px;margin-top:2px;">
-      ${aiMealPlan ? `<p style="font-size:12.5px;line-height:1.8;margin:0 0 8px;white-space:pre-wrap;">${esc(aiMealPlan.text)}</p>` : ""}
+      ${aiMealPlan && !aiMealPlan.plan ? `<p style="font-size:12.5px;line-height:1.8;margin:0 0 8px;white-space:pre-wrap;">${esc(aiMealPlan.text)}</p>` : ""}
       ${aiMealPlanStatus === "error" && aiMealPlanError ? `<p style="font-size:11px;margin:0 0 8px;color:var(--coral);line-height:1.6;">${esc(aiMealPlanError)}</p>` : ""}
       <button type="button" class="chip" data-action="fetch-ai-mealplan" ${aiMealPlanStatus === "loading" ? "disabled" : ""}>${aiMealPlanStatus === "loading" ? "相談中…" : (aiMealPlan ? "🤖 もう一度AIに相談する" : "🤖 AIに献立を相談する")}</button>
     </div>` : "";
