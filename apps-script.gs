@@ -49,9 +49,13 @@ var GEMINI_LITE_MODELS = ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite'];
 var NUTRITION_MODELS = GEMINI_LITE_MODELS.concat([GEMINI_MODEL]).concat(GEMINI_FALLBACK_MODELS);
 // 「AIのひとこと」(1日に数回程度しか呼ばれない機能)用のモデル順。
 // 文章の質を優先して本家Flash系から試し、すべて枠切れのときだけ軽量モデルにも回す。
-// 文章生成は1回あたりの所要時間が長いので、総当たりせず先頭3つまでに絞る。
-// 5モデルすべてを順に試すと、混雑時に合計で45秒(ブラウザ側の制限時間)を超えてしまう。
-var ADVICE_MODELS = [GEMINI_MODEL].concat(GEMINI_FALLBACK_MODELS).concat(GEMINI_LITE_MODELS).slice(0, 3);
+// 文章生成(AIのひとこと・献立の相談)用のモデル順。【v41.2で速度優先に変更】
+// gemini-2.5系は thinkingBudget:0 で「思考」を完全に止められるため応答が速い。
+// 一方 gemini-3.x系は thinkingLevel:'low' までしか下げられず、1回の応答に
+// 数十秒かかることがあり、ブラウザ側の制限時間(45秒)を超える原因になっていた。
+// そこで2.5系を先に試し、どちらもだめなときだけ3.x系に回す。
+// 試すのは3つまで(総当たりすると合計時間が制限を超えるため)。
+var ADVICE_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', GEMINI_MODEL];
 // Groq(https://console.groq.com)の無料枠で使えるモデル。クレジットカード登録不要で、
 // 1日あたりの上限もGeminiよりかなり広い(執筆時点でモデルにより1日1,000〜数千件)。
 // 日本語の指示追従・簡単なJSON整形にも十分実用的なため、Geminiが全滅したときの
@@ -60,7 +64,7 @@ var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 // このファイルの版数(v38〜)。アプリ側は、対になっていないapps-script.gs
 // (差分同期版など)が貼られている状態を『不明なaction』の応答から検知して案内する。
-var BACKEND_VERSION = 'v39.1';
+var BACKEND_VERSION = 'v41.2';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -259,7 +263,7 @@ function handleMealPlan_(ctx) {
     '### 今日の状況\n' +
     JSON.stringify(ctx);
 
-  var text = callAi_(prompt, 900, ADVICE_MODELS);
+  var text = callAi_(prompt, 700, ADVICE_MODELS);
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
 }

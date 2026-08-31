@@ -45,9 +45,17 @@
      min-width:0 で縮めるようにし、幅が足りないときは折り返して縦に並べる。
      日付は数字が多く必要な幅が広いので、基準幅と伸び率を少し大きめにしている。 */
   .field-row { display: flex; flex-wrap: wrap; gap: 8px; }
-  .field-row > * { min-width: 0; }
-  .field-row > .f-date { flex: 1.35 1 150px; }
-  .field-row > .f-val  { flex: 1 1 110px; }
+  /* flexの子は既定で min-width:auto(中身より小さくならない)のため、そのままだと
+     隣の入力欄を押し潰したり、はみ出して重なって見えたりする。min-width:0 で
+     正しく縮むようにし、overflow:hidden で万一はみ出しても隣に被らないようにする。 */
+  .field-row > * { min-width: 0; overflow: hidden; }
+  .field-row > .f-val { flex: 1 1 110px; }
+  /* 【重要】<input type="date"> は横並びにしない。
+     iOSのSafariでは日付の表示部分(シャドウDOM)が指定した幅を無視して広がることがあり、
+     隣の入力欄に重なって見える不具合が繰り返し起きた(v40.1で縮むようにしても解消せず)。
+     日付は必ず単独の行に全幅で置く——食事タブ・運動タブと同じ形。 */
+  .field-date { margin-bottom: 10px; }
+  .field-date > input { width: 100%; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
   .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 10px; text-transform: uppercase; }
   .label { font-size: 11px; font-weight: 600; color: var(--ink-faint); display: block; margin-bottom: 4px; }
@@ -163,7 +171,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v41.1";
+const APP_VERSION = "v41.2";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -318,6 +326,17 @@ let backendMismatch = false;
 // pingで取得した接続先の情報(v39.1)。AIキーは「設定されているか」の真偽値だけで、
 // 値そのものはこの端末に来ない。Groq未設定を可視化して案内するために使う。
 let backendVersion = null;
+// このアプリが必要とするapps-script.gsの版数。これより古いと、AI呼び出しが
+// 極端に遅い・新しいactionを知らない等の問題が起きるため、設定タブで警告する。
+// 「不明なaction」が返るほど古くなくても検知できるのが、版数で見る利点。
+const REQUIRED_BACKEND_VERSION = "v41.2";
+function versionNum_(v) {
+  const parts = String(v || "").replace(/^v/i, "").split(".").map(n => Number(n) || 0);
+  return (parts[0] || 0) * 1000 + (parts[1] || 0);
+}
+function backendOutdatedByVersion_() {
+  return backendVersion != null && versionNum_(backendVersion) < versionNum_(REQUIRED_BACKEND_VERSION);
+}
 let backendAiKeys = null;   // { gemini: bool, groq: bool } | null
 let backendChecked = false;
 let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
@@ -1140,9 +1159,31 @@ async function fetchAiAdvice() {
     }
   } catch (e) {
     aiAdviceStatus = "error";
-    aiAdviceError = friendlySyncError_(e && e.message ? e.message : String(e));
+    aiAdviceError = await diagnoseAiFailure_(friendlySyncError_(e && e.message ? e.message : String(e)));
   }
   renderTabContent();
+}
+
+// AI呼び出しが時間切れ・失敗したときに、pingで接続先の状態を確かめて
+// 「なぜ遅いのか」を文言に足す。原因の大半は次の2つで、どちらも画面からは見えない:
+//   ・apps-script.gsが古いまま(AI呼び出しが遅い版のコードが動いている)
+//   ・GROQ_API_KEYが未設定で、Geminiだけに頼っている
+async function diagnoseAiFailure_(baseMessage) {
+  try {
+    const data = await gasPost({ action: "ping" }, 12000);
+    if (data && data.status === "ok") {
+      backendVersion = data.backendVersion || null;
+      backendAiKeys = data.ai || null;
+      if (activeTab === "settings") renderTabContent();
+      if (backendOutdatedByVersion_()) {
+        return baseMessage + ` 接続先のApps Scriptが古いバージョン(${backendVersion})のままです。配布物のapps-script.gsを貼り直し、「デプロイ」→「デプロイを管理」→ 鉛筆マーク → バージョン「新バージョン」→「デプロイ」まで行ってください(これがAIの応答が遅い主な原因です)。`;
+      }
+      if (backendAiKeys && !backendAiKeys.groq) {
+        return baseMessage + " GROQ_API_KEYが未設定のため、AI機能がGeminiだけに頼っています。console.groq.com で無料のキーを発行し(クレジットカード登録不要)、Apps Scriptの「プロジェクトの設定」→「スクリプト プロパティ」に GROQ_API_KEY として登録すると、数秒で返るようになります。";
+      }
+    }
+  } catch (e) { /* 診断できなくても、元のエラー文はそのまま返す */ }
+  return baseMessage;
 }
 
 // 「おすすめの食事」のAI版(v39)。ルールベースの提案は常に表示したうえで、
@@ -1180,7 +1221,7 @@ async function fetchAiMealPlan() {
     }
   } catch (e) {
     aiMealPlanStatus = "error";
-    aiMealPlanError = friendlySyncError_(e && e.message ? e.message : String(e));
+    aiMealPlanError = await diagnoseAiFailure_(friendlySyncError_(e && e.message ? e.message : String(e)));
   }
   renderTabContent();
 }
@@ -2736,11 +2777,11 @@ function weightHtml() {
 
     <div class="card">
       <p class="section-title">体重を記録</p>
+      <div class="field-date">
+        <label class="label">日付</label>
+        <input type="date" id="weight-date-input" data-entry-date="weight" value="${entryDate("weight")}">
+      </div>
       <div class="field-row" style="margin-bottom:10px;">
-        <div class="f-date">
-          <label class="label">日付</label>
-          <input type="date" id="weight-date-input" data-entry-date="weight" value="${entryDate("weight")}">
-        </div>
         <div class="f-val">
           <label class="label">体重 (kg)</label>
           <input type="number" step="0.1" id="weight-value-input" placeholder="例: 65.0" class="mono" value="${latest ? latest.weight : ""}">
@@ -3059,6 +3100,11 @@ function settingsHtml() {
   return `
     <div class="card">
       <p class="section-title">同期</p>
+      ${!backendMismatch && backendOutdatedByVersion_() ? `
+      <div style="background:#FDE9E9;border-radius:8px;padding:11px;margin:0 0 12px;">
+        <p style="font-size:12.5px;margin:0 0 8px;color:var(--coral);font-weight:700;">⚠️ Apps Scriptが古いバージョンです(${esc(backendVersion)} / 必要: ${REQUIRED_BACKEND_VERSION})</p>
+        <p style="font-size:11.5px;margin:0;line-height:1.7;">同期は動きますが、<b>AIの応答が極端に遅くなり「45秒待っても応答がありませんでした」となる原因</b>になります。配布物の <span class="mono">apps-script.gs</span> の中身を貼り直したうえで、<b>「デプロイ」→「デプロイを管理」→ 鉛筆マーク → バージョン「新バージョン」→「デプロイ」</b>まで行ってください(コードを保存しただけでは反映されません)。</p>
+      </div>` : ""}
       ${backendMismatch ? `
       <div style="background:#FDE9E9;border-radius:8px;padding:11px;margin:0 0 12px;">
         <p style="font-size:12.5px;margin:0 0 8px;color:var(--coral);font-weight:700;">⚠️ Apps Script側のコードが、このアプリと対になっていません</p>
