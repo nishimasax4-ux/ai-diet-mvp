@@ -68,7 +68,7 @@ var GROQ_VISION_MODELS = ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b'];
 
 // このファイルの版数(v38〜)。アプリ側は、対になっていないapps-script.gs
 // (差分同期版など)が貼られている状態を『不明なaction』の応答から検知して案内する。
-var BACKEND_VERSION = 'v44';
+var BACKEND_VERSION = 'v44.1';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -346,6 +346,7 @@ function roomyMaxTokens_(maxTokens) {
 function callGeminiRaw_(url, prompt, maxTokens, thinkingConfig, deadlineMs, image) {
   var generationConfig = { temperature: 0.4, maxOutputTokens: maxTokens || 512 };
   if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+  if (AI_WANT_JSON) generationConfig.responseMimeType = 'application/json';
   var options = {
     method: 'post',
     contentType: 'application/json',
@@ -448,6 +449,7 @@ function callGroq_(apiKey, prompt, maxTokens, model, image) {
       messages: [{ role: 'user', content: content }],
       temperature: 0.4,
       max_tokens: maxTokens || 512,
+      response_format: AI_WANT_JSON ? { type: 'json_object' } : undefined,
     }),
   };
   // 一時的な混雑(5xx)だけ、1回だけ短い間隔を空けて再試行する。429(枠切れ)は叩き直しても
@@ -629,6 +631,22 @@ var AI_PRESETS = {
   mealplan:  { models: ADVICE_MODELS,    maxTokens: 700 },
 };
 var AI_PROMPT_MAX = 20000;   // 指示文の上限(記録2週間ぶんのJSONでも十分足りる長さ)
+/**
+ * 「JSONだけを返すモード」(v44.1)。
+ *
+ * アプリが json:true を指定したときだけ、Groqには response_format:{type:'json_object'} を、
+ * Geminiには generationConfig.responseMimeType:'application/json' を付ける。
+ * これを付けると、モデルは前置きの文章やコードフェンスを混ぜられなくなるので、
+ * 「AIの応答を読み取れませんでした」がそもそも起きなくなる。
+ *   Groq  : https://console.groq.com/docs/text-chat (JSONモード。画像入力と併用できる)
+ *   Gemini: https://ai.google.dev/gemini-api/docs/structured-output
+ *
+ * 呼び出しの経路が深く(handleAiVision_ → callAiVision_ → callGroq_/callGeminiRaw_)、
+ * 引数で持ち回すと全ての関数の引数が増え、スマホでの貼り付け量も増えるため、
+ * 1リクエストのあいだだけ有効な変数として持つ。Apps Scriptの実行はリクエストごとに
+ * 独立しているので、他の呼び出しと混ざることはない。
+ */
+var AI_WANT_JSON = false;
 var AI_MAXTOKENS_MAX = 1500;
 
 function aiRelayPrompt_(body) {
@@ -648,7 +666,13 @@ function handleAiText_(body) {
   var p = aiRelayPrompt_(body);
   if (p.error) return { status: 'error', message: p.error };
   var preset = AI_PRESETS[String((body && body.preset) || 'advice')] || AI_PRESETS.advice;
-  var text = callAi_(p.prompt, clampMaxTokens_(body && body.maxTokens, preset.maxTokens), preset.models);
+  var text;
+  AI_WANT_JSON = !!(body && body.json);
+  try {
+    text = callAi_(p.prompt, clampMaxTokens_(body && body.maxTokens, preset.maxTokens), preset.models);
+  } finally {
+    AI_WANT_JSON = false;
+  }
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
 }
@@ -657,8 +681,14 @@ function handleAiVision_(body) {
   var p = aiRelayPrompt_(body);
   if (p.error) return { status: 'error', message: p.error };
   if (!body.imageBase64) return { status: 'error', message: '画像がありません' };
-  var text = callAiVision_(p.prompt, clampMaxTokens_(body.maxTokens, 700),
-    { data: String(body.imageBase64), mimeType: body.mimeType || 'image/jpeg' });
+  var text;
+  AI_WANT_JSON = !!body.json;
+  try {
+    text = callAiVision_(p.prompt, clampMaxTokens_(body.maxTokens, 700),
+      { data: String(body.imageBase64), mimeType: body.mimeType || 'image/jpeg' });
+  } finally {
+    AI_WANT_JSON = false;
+  }
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
 }

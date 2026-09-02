@@ -171,7 +171,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v44";
+const APP_VERSION = "v44.1";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -721,19 +721,88 @@ const AI_PROMPTS = {
 };
 
 // AIは指示しても ```json …``` で囲んで返してくることがあるので、囲みを外してから読む。
+// AIの返事からJSONを取り出す(v44.1で強化)。
+// 「JSONだけ返して」と指示しても、実際には次のような返り方をすることがあります。
+//   ・```json … ``` で囲んでくる
+//   ・「はい、判定しました:」のような前置きや、後ろに感想を付けてくる
+//   ・出力の上限に達して、途中でぶつ切りになる ← 写真の判定でいちばん多い
+// v44までは、これらのどれか1つでも起きると丸ごと失敗していました。
+// ここでは、囲みを外す → そのまま読む → 読めなければ「最後まで揃っているところ」
+// までで組み立て直す、の順で粘ります。
 function parseAiJson_(text) {
   if (!text) return null;
-  const cleaned = String(text).replace(/```json/gi, "").replace(/```/g, "").trim();
-  const start = cleaned.indexOf("{"), end = cleaned.lastIndexOf("}");
-  if (start === -1 || end === -1) return null;
-  try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (e) { return null; }
+  let s = String(text).trim();
+  // ``` で囲まれていれば、その中身だけを見る(閉じの ``` が無くても中身は取れる)。
+  const fenced = s.match(/```(?:json|JSON)?\s*([\s\S]*?)(?:```|$)/);
+  if (fenced && fenced[1].trim()) s = fenced[1].trim();
+  // 最初の { か [ より前は前置きの文章なので捨てる。
+  const start = s.search(/[{[]/);
+  if (start === -1) return null;
+  s = s.slice(start);
+  try { return JSON.parse(s); } catch (e) { /* 続けて修復を試みる */ }
+  return repairJson_(s);
+}
+// 途中で切れている / 後ろに文章が付いている応答を、
+// 「完成している要素だけ」で組み立て直す。
+function repairJson_(s) {
+  // 閉じ括弧の位置を後ろから順に試す。1つの料理が丸ごと入っている位置で切れば、
+  // その料理までは正しく読み取れる(3件目が途中で切れていても2件は使える)。
+  const cuts = [];
+  let inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "}" || c === "]") cuts.push(i + 1);
+  }
+  // 応答が長いときに総当たりしないよう、後ろ200箇所までに限る。
+  for (let k = cuts.length - 1; k >= 0 && k >= cuts.length - 200; k--) {
+    const closed = closeOpenBrackets_(s.slice(0, cuts[k]));
+    if (closed) { try { return JSON.parse(closed); } catch (e) {} }
+  }
+  return null;
+}
+// 開いたままの { [ を閉じて、JSONとして読める形にする。
+// 括弧の対応が取れていない(壊れている)場合は null。
+function closeOpenBrackets_(s) {
+  const stack = [];
+  let inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") stack.push("}");
+    else if (c === "[") stack.push("]");
+    else if (c === "}" || c === "]") { if (stack.pop() !== c) return null; }
+  }
+  if (inStr) return null;
+  let out = s.replace(/,\s*$/, "");   // 末尾のカンマは残せない
+  for (let i = stack.length - 1; i >= 0; i--) out += stack[i];
+  return out;
 }
 // preset は用途名。Apps Script側がこれを見て使うモデルを決める。
-function aiText_(preset, prompt) {
-  return gasPost({ action: "aiText", preset, prompt }, GAS_AI_TIMEOUT_MS);
+// json:true は「JSONだけを返すモード」の要求。対応しているApps Script(v44.1以降)なら
+// そもそも文章や囲みが混ざらなくなる。古いApps Scriptはこの指定を無視するだけなので、
+// 貼り直さなくてもこれまでどおり動く(上の修復で吸収する)。
+function aiText_(preset, prompt, opts) {
+  opts = opts || {};
+  return gasPost({ action: "aiText", preset, prompt, json: !!opts.json, maxTokens: opts.maxTokens },
+                 GAS_AI_TIMEOUT_MS);
 }
-function aiVision_(prompt, imageBase64, mimeType) {
-  return gasPost({ action: "aiVision", prompt, imageBase64, mimeType }, GAS_AI_TIMEOUT_MS);
+function aiVision_(prompt, imageBase64, mimeType, opts) {
+  opts = opts || {};
+  return gasPost({ action: "aiVision", prompt, imageBase64, mimeType, json: !!opts.json, maxTokens: opts.maxTokens },
+                 GAS_AI_TIMEOUT_MS);
 }
 
 // 入力欄に栄養価を反映する共通処理(内蔵辞書・キャッシュ・AI応答のどれでも同じ扱い)。
@@ -797,14 +866,14 @@ async function aiLookupNutrition(target) {
   aiLookupInFlight.add(cacheKey);
   if (statusEl) statusEl.textContent = "🔄 AIに問い合わせ中...(ネット接続が必要です)";
   try {
-    const data = await aiText_("nutrition", AI_PROMPTS.nutrition(foodName));
+    const data = await aiText_("nutrition", AI_PROMPTS.nutrition(foodName), { json: true });
     if (data.status !== "ok" || !data.text) {
       if (statusEl) statusEl.textContent = "⚠️ 取得できませんでした: " + friendlyAiError_(data.message);
       return;
     }
     const raw = parseAiJson_(data.text);
     if (!raw || typeof raw.kcal === "undefined") {
-      if (statusEl) statusEl.textContent = "⚠️ AIの応答を解釈できませんでした(応答: " + String(data.text).slice(0, 120) + ")";
+      if (statusEl) statusEl.textContent = "⚠️ AIの応答を読み取れませんでした。手で入力してください。【AIからの返事】" + String(data.text).slice(0, 200);
       return;
     }
     const n = { kcal: Math.round(Number(raw.kcal) || 0), protein: round1_(raw.protein), fat: round1_(raw.fat), carb: round1_(raw.carb) };
@@ -1339,6 +1408,34 @@ function downscaleImage_(file) {
   });
 }
 
+// 読み取れたJSONから料理の一覧を取り出す(v44.1)。
+// AIは指示どおり {"foods":[…]} で返すこともあれば、配列だけ返したり、
+// キー名を日本語や別名にしてくることもあるので、そこは受け止める。
+// 「料理が写っていない」という正しい答え(空の一覧)と、
+// 「読み取れなかった」(null)は区別する。前者はエラーではない。
+function photoFoodsFrom_(parsed) {
+  if (!parsed) return null;
+  const list = Array.isArray(parsed) ? parsed
+             : Array.isArray(parsed.foods) ? parsed.foods
+             : Array.isArray(parsed.items) ? parsed.items
+             : Array.isArray(parsed.料理) ? parsed.料理
+             : null;
+  if (!list) return null;
+  const pick = (o, keys) => { for (const k of keys) if (o[k] != null && o[k] !== "") return o[k]; return null; };
+  return list.map(f => {
+    if (!f || typeof f !== "object") return null;
+    const name = pick(f, ["name", "料理名", "食品名", "dish", "food", "title"]);
+    if (!name) return null;
+    return {
+      name: String(name).slice(0, 60),
+      kcal: Math.round(Number(pick(f, ["kcal", "calories", "カロリー", "energy"])) || 0),
+      protein: round1_(pick(f, ["protein", "たんぱく質", "タンパク質", "P"])),
+      fat: round1_(pick(f, ["fat", "脂質", "F"])),
+      carb: round1_(pick(f, ["carb", "carbs", "carbohydrate", "炭水化物", "C"])),
+    };
+  }).filter(Boolean);
+}
+
 // AIが答えた料理名が、マスタや内蔵辞書にあるものと「同じ」と言い切れる場合だけ、
 // そちらの値に差し替える。曖昧な一致で勝手に置き換えると、分量の違う別物の
 // 数値が入ってしまうため、正規化した名前が完全に一致する場合に限る。
@@ -1370,23 +1467,20 @@ async function handlePhotoSelected(file) {
   photoStatus = "analyzing"; photoError = null; photoResults = null; renderTabContent();
   try {
     const imageBase64 = await downscaleImage_(file);
-    const data = await aiVision_(AI_PROMPTS.photo(), imageBase64, "image/jpeg");
+    // 写真の判定は文章が長くなりやすく、上限700では途中で切れることがあったので広げる(v44.1)。
+    const data = await aiVision_(AI_PROMPTS.photo(), imageBase64, "image/jpeg", { json: true, maxTokens: 1500 });
     if (!data || data.status !== "ok" || !data.text) {
       photoStatus = "error";
       photoError = friendlyAiError_(data && data.message);
     } else {
-      const parsed = parseAiJson_(data.text);
-      if (!parsed || !parsed.foods) {
+      const foods = photoFoodsFrom_(parseAiJson_(data.text));
+      if (!foods) {
         photoStatus = "error";
-        photoError = "AIの応答を解釈できませんでした。もう一度撮り直すか、手で入力してください。";
+        // 何が返ってきたのかを必ず見せる。これが分からないと原因を絞り込めない。
+        photoError = "AIの応答を読み取れませんでした。もう一度撮り直すか、手で入力してください。\n\n【AIからの返事】\n"
+                   + String(data.text).slice(0, 300);
       } else {
-        photoResults = parsed.foods.slice(0, 3)
-          .filter(f => f && f.name)
-          .map(f => resolveFoodSource_({
-            name: String(f.name).slice(0, 60),
-            kcal: Math.round(Number(f.kcal) || 0),
-            protein: round1_(f.protein), fat: round1_(f.fat), carb: round1_(f.carb),
-          }));
+        photoResults = foods.slice(0, 3).map(resolveFoodSource_);
         photoStatus = "done";
       }
     }
@@ -1418,7 +1512,7 @@ function photoCardHtml() {
     <p class="section-title">📷 写真から記録</p>
     <input type="file" id="photo-input" accept="image/*" capture="environment" class="hidden">
     <button type="button" class="chip active-b" data-action="take-food-photo" ${photoStatus === "analyzing" ? "disabled" : ""}>${photoStatus === "analyzing" ? "判定中…" : "📷 写真を撮る・選ぶ"}</button>
-    ${photoStatus === "error" && photoError ? `<p style="font-size:11px;margin:8px 0 0;color:var(--coral);line-height:1.6;">${esc(photoError)}</p>` : ""}
+    ${photoStatus === "error" && photoError ? `<p style="font-size:11px;margin:8px 0 0;color:var(--coral);line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(photoError)}</p>` : ""}
     ${photoStatus === "done" && photoResults && !photoResults.length ? `<p class="muted" style="font-size:11px;margin:8px 0 0;">食事を判別できませんでした。明るい場所で、料理が画面いっぱいに入るように撮ると認識しやすくなります。</p>` : ""}
     ${rows ? `<p class="muted" style="font-size:10.5px;margin:10px 0 4px;font-weight:700;">判定した候補(タップで入力欄に反映)</p>${rows}
       <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">タップしても記録はされません。内容を確認して「＋ 記録する」を押したときに記録されます。数値が実際と違う場合は書き換えてください。</p>` : ""}
@@ -1472,7 +1566,7 @@ async function fetchAiMealPlan() {
   }
   aiMealPlanStatus = "loading"; aiMealPlanError = null; renderTabContent();
   try {
-    const data = await aiText_("mealplan", AI_PROMPTS.mealplan(buildMealPlanContext()));
+    const data = await aiText_("mealplan", AI_PROMPTS.mealplan(buildMealPlanContext()), { json: true });
     if (data && data.status === "ok" && data.text) {
       // 文章としてだけでなく、JSONとして読めれば構造化した候補(plan)も取り出す。
       // これがあれば、ルールベースの候補と同じ「タップして記録できる一覧」として表示でき、

@@ -21,7 +21,7 @@
  * Google Sheets(Apps Script)との通信はPOSTで、ここでは一切横取りしません。
  * 同期やAIの応答が控えに残ることはありません。
  */
-const VERSION = 'v44';
+const VERSION = 'v44.1';
 const CACHE = 'training-log-' + VERSION;
 // このサービスワーカーが置かれている場所(GitHub Pagesのサブフォルダでも動くよう相対で解決)。
 const HTML_URL = new URL('./index.html', self.registration.scope).href;

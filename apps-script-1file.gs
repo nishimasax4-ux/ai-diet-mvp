@@ -1,8 +1,14 @@
 /**
- * Training Log + AI  Apps Script (v44) 貼り付け用・1ファイル版
+ * Training Log + AI  Apps Script (v44.1) 貼り付け用・1ファイル版
  *
  * コメントを取り除いただけで、動作は apps-script.gs と完全に同じです
- * (同じ自動テスト33件に通しています)。
+ * (同じ自動テスト40件に通しています)。
+ *
+ * 【v44.1の変更 — 貼り直しは必須ではありません】
+ *   AIに「JSONだけを返すモード」を指定できるようにしました。
+ *   写真からの食事判定で『AIの応答を読み取れませんでした』が出た対策です。
+ *   アプリ(index.html)側だけでも直りますが、こちらも更新すると
+ *   そもそも崩れた応答が返らなくなります。お時間のあるときにどうぞ。
  *
  * 【貼り付け手順】
  *  1. Apps Scriptエディタで、今あるコードを「全選択 → 削除」して空にする
@@ -11,14 +17,7 @@
  *  3. 一番下までスクロールし、最終行が「}」であることを確認する
  *     → ここが「}」でなければ、貼り付けが途中で切れています(分割版をお使いください)
  *  4. デプロイ → デプロイを管理 → 鉛筆マーク → 新バージョン → デプロイ
- *  5. アプリの設定タブに「接続先のApps Script: v44 ✅」と出れば完了
- *
- * 【v44でここが変わりました】
- *   AIへの指示文(プロンプト)がアプリ側(index.html)へ移りました。
- *   このファイルは「アプリから受け取った指示文をAIへ渡して返すだけ」になったので、
- *   今後AIの文面や出力形式を変えたくなっても、index.htmlを差し替えるだけで済み、
- *   このファイルを貼り直す必要はありません。
- *   ※APIキーは今までどおりこのサーバー側にしか置きません(アプリには持たせません)。
+ *  5. アプリの設定タブに「接続先のApps Script: v44.1 ✅」と出れば完了
  *
  * 【スクリプトプロパティ】
  *   APP_TOKEN       … アプリの設定タブに入れる合言葉(必須)
@@ -42,7 +41,7 @@ var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 var GROQ_VISION_MODELS = ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b'];
 
-var BACKEND_VERSION = 'v44';
+var BACKEND_VERSION = 'v44.1';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -245,6 +244,7 @@ function roomyMaxTokens_(maxTokens) {
 function callGeminiRaw_(url, prompt, maxTokens, thinkingConfig, deadlineMs, image) {
   var generationConfig = { temperature: 0.4, maxOutputTokens: maxTokens || 512 };
   if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+  if (AI_WANT_JSON) generationConfig.responseMimeType = 'application/json';
   var options = {
     method: 'post',
     contentType: 'application/json',
@@ -333,6 +333,7 @@ function callGroq_(apiKey, prompt, maxTokens, model, image) {
       messages: [{ role: 'user', content: content }],
       temperature: 0.4,
       max_tokens: maxTokens || 512,
+      response_format: AI_WANT_JSON ? { type: 'json_object' } : undefined,
     }),
   };
 
@@ -471,6 +472,8 @@ var AI_PRESETS = {
   mealplan:  { models: ADVICE_MODELS,    maxTokens: 700 },
 };
 var AI_PROMPT_MAX = 20000;
+
+var AI_WANT_JSON = false;
 var AI_MAXTOKENS_MAX = 1500;
 
 function aiRelayPrompt_(body) {
@@ -490,7 +493,13 @@ function handleAiText_(body) {
   var p = aiRelayPrompt_(body);
   if (p.error) return { status: 'error', message: p.error };
   var preset = AI_PRESETS[String((body && body.preset) || 'advice')] || AI_PRESETS.advice;
-  var text = callAi_(p.prompt, clampMaxTokens_(body && body.maxTokens, preset.maxTokens), preset.models);
+  var text;
+  AI_WANT_JSON = !!(body && body.json);
+  try {
+    text = callAi_(p.prompt, clampMaxTokens_(body && body.maxTokens, preset.maxTokens), preset.models);
+  } finally {
+    AI_WANT_JSON = false;
+  }
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
 }
@@ -499,8 +508,14 @@ function handleAiVision_(body) {
   var p = aiRelayPrompt_(body);
   if (p.error) return { status: 'error', message: p.error };
   if (!body.imageBase64) return { status: 'error', message: '画像がありません' };
-  var text = callAiVision_(p.prompt, clampMaxTokens_(body.maxTokens, 700),
-    { data: String(body.imageBase64), mimeType: body.mimeType || 'image/jpeg' });
+  var text;
+  AI_WANT_JSON = !!body.json;
+  try {
+    text = callAiVision_(p.prompt, clampMaxTokens_(body.maxTokens, 700),
+      { data: String(body.imageBase64), mimeType: body.mimeType || 'image/jpeg' });
+  } finally {
+    AI_WANT_JSON = false;
+  }
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
 }
