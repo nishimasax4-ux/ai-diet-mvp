@@ -1,21 +1,28 @@
 /**
- * Training Log + AI  Apps Script (v42) 貼り付け用・1ファイル版
+ * Training Log + AI  Apps Script (v44) 貼り付け用・1ファイル版
  *
- * コメントを取り除いただけで、動作は配布物の apps-script.gs と完全に同じです
- * (同じ自動テスト20件に通しています)。
+ * コメントを取り除いただけで、動作は apps-script.gs と完全に同じです
+ * (同じ自動テスト33件に通しています)。
  *
  * 【貼り付け手順】
  *  1. Apps Scriptエディタで、今あるコードを「全選択 → 削除」して空にする
- *     ※前回5つのファイルに分けた場合は、コード.gs 以外の4つも削除してください
+ *     ※以前5つのファイルに分けていた場合は、余分な4つも削除してください
  *  2. このファイルの中身を全部貼り付けて保存する
  *  3. 一番下までスクロールし、最終行が「}」であることを確認する
- *     → ここが「}」でなければ、貼り付けが途中で切れています
+ *     → ここが「}」でなければ、貼り付けが途中で切れています(分割版をお使いください)
  *  4. デプロイ → デプロイを管理 → 鉛筆マーク → 新バージョン → デプロイ
- *  5. アプリの設定タブに「接続先のApps Script: v42 ✅」と出れば完了
+ *  5. アプリの設定タブに「接続先のApps Script: v44 ✅」と出れば完了
+ *
+ * 【v44でここが変わりました】
+ *   AIへの指示文(プロンプト)がアプリ側(index.html)へ移りました。
+ *   このファイルは「アプリから受け取った指示文をAIへ渡して返すだけ」になったので、
+ *   今後AIの文面や出力形式を変えたくなっても、index.htmlを差し替えるだけで済み、
+ *   このファイルを貼り直す必要はありません。
+ *   ※APIキーは今までどおりこのサーバー側にしか置きません(アプリには持たせません)。
  *
  * 【スクリプトプロパティ】
  *   APP_TOKEN       … アプリの設定タブに入れる合言葉(必須)
- *   GROQ_API_KEY    … console.groq.com で無料発行(推奨。AIの応答が速くなります)
+ *   GROQ_API_KEY    … console.groq.com で無料発行(推奨。写真の判定にも使われます)
  *   GEMINI_API_KEY  … Google AI Studio で発行(任意)
  *
  * 【デプロイ設定】ウェブアプリ / 実行するユーザー: 自分 / アクセスできるユーザー: 全員
@@ -33,7 +40,9 @@ var ADVICE_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', GEMINI_MODEL];
 
 var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
-var BACKEND_VERSION = 'v42';
+var GROQ_VISION_MODELS = ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b'];
+
+var BACKEND_VERSION = 'v44';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -56,6 +65,10 @@ function doPost(e) {
     if (action === 'estimateNutrition') return json_(handleNutrition_(body.foodName));
     if (action === 'advice')            return json_(handleAdvice_(body.context));
     if (action === 'mealPlan')          return json_(handleMealPlan_(body.context));
+    if (action === 'analyzePhoto')      return json_(handleAnalyzePhoto_(body.imageBase64, body.mimeType));
+
+    if (action === 'aiText')            return json_(handleAiText_(body));
+    if (action === 'aiVision')          return json_(handleAiVision_(body));
     return json_({ status: 'error', message: '不明なaction: ' + action });
 
   } catch (err) {
@@ -229,7 +242,7 @@ function roomyMaxTokens_(maxTokens) {
   return Math.max(1536, (maxTokens || 512) * 2);
 }
 
-function callGeminiRaw_(url, prompt, maxTokens, thinkingConfig, deadlineMs) {
+function callGeminiRaw_(url, prompt, maxTokens, thinkingConfig, deadlineMs, image) {
   var generationConfig = { temperature: 0.4, maxOutputTokens: maxTokens || 512 };
   if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
   var options = {
@@ -237,7 +250,10 @@ function callGeminiRaw_(url, prompt, maxTokens, thinkingConfig, deadlineMs) {
     contentType: 'application/json',
     muteHttpExceptions: true,
     payload: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+
+      contents: [{ parts: image
+        ? [{ inline_data: { mime_type: image.mimeType || 'image/jpeg', data: image.data } }, { text: prompt }]
+        : [{ text: prompt }] }],
       generationConfig: generationConfig,
     }),
   };
@@ -300,16 +316,21 @@ function callGemini_(apiKey, prompt, maxTokens, models, budgetMs) {
   throw new Error('Gemini APIエラー (HTTP ' + lastCode + '): ' + lastBody.slice(0, 300));
 }
 
-function callGroq_(apiKey, prompt, maxTokens) {
+function callGroq_(apiKey, prompt, maxTokens, model, image) {
   var url = 'https://api.groq.com/openai/v1/chat/completions';
+
+  var content = image
+    ? [{ type: 'text', text: prompt },
+       { type: 'image_url', image_url: { url: 'data:' + (image.mimeType || 'image/jpeg') + ';base64,' + image.data } }]
+    : prompt;
   var options = {
     method: 'post',
     contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + apiKey },
     muteHttpExceptions: true,
     payload: JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [{ role: 'user', content: prompt }],
+      model: model || GROQ_MODEL,
+      messages: [{ role: 'user', content: content }],
       temperature: 0.4,
       max_tokens: maxTokens || 512,
     }),
@@ -365,6 +386,123 @@ function callAi_(prompt, maxTokens, geminiModels) {
       'Groq側が優先して使われるためこの種のエラーを回避できます。');
   }
   throw geminiError || groqError;
+}
+
+function callAiVision_(prompt, maxTokens, image) {
+  var geminiKey = prop_('GEMINI_API_KEY');
+  var groqKey = prop_('GROQ_API_KEY');
+  if (!geminiKey && !groqKey) {
+    throw new Error('GEMINI_API_KEYもGROQ_API_KEYも設定されていません(どちらか一方の設定で動作します)');
+  }
+  var groqError = null, geminiError = null;
+  if (groqKey) {
+    for (var i = 0; i < GROQ_VISION_MODELS.length; i++) {
+      try {
+        return callGroq_(groqKey, prompt, maxTokens, GROQ_VISION_MODELS[i], image);
+      } catch (e) {
+        groqError = e;
+      }
+    }
+  }
+  if (geminiKey) {
+    try {
+
+      var deadlineMs = new Date().getTime() + (groqKey ? 12000 : 25000);
+      var models = ['gemini-2.5-flash', GEMINI_MODEL];
+      var lastCode = 0, lastBody = '';
+      for (var j = 0; j < models.length; j++) {
+        if (j > 0 && new Date().getTime() > deadlineMs) break;
+        var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+                  models[j] + ':generateContent?key=' + encodeURIComponent(geminiKey);
+        var r = callGeminiRaw_(url, prompt, maxTokens, thinkingConfigFor_(models[j]), deadlineMs, image);
+        if (r.code === 200) {
+          var data = JSON.parse(r.body);
+          var cand = data.candidates && data.candidates[0];
+          if (cand && cand.content && cand.content.parts) {
+            return cand.content.parts.map(function (p) { return p.text || ''; }).join('');
+          }
+        }
+        lastCode = r.code; lastBody = r.body;
+        if (!shouldTryNextModel_(r.code, r.body)) break;
+      }
+      throw new Error('Gemini APIエラー (HTTP ' + lastCode + '): ' + lastBody.slice(0, 300));
+    } catch (e2) {
+      geminiError = e2;
+    }
+  }
+  throw geminiError || groqError;
+}
+
+function handleAnalyzePhoto_(imageBase64, mimeType) {
+  if (!imageBase64) return { status: 'error', message: '画像がありません' };
+
+  var prompt =
+    'この写真に写っている食事を判定してください。\n\n' +
+    'JSONのみを返してください。前置き・後書き・コードフェンスは不要です。\n' +
+    '形式: {"foods":[{"name":"料理名","kcal":数値,"protein":数値,"fat":数値,"carb":数値}]}\n' +
+    '- 確からしい順に最大3件\n' +
+    '- name は日本語の一般的な料理名。写真から読み取れる分量も含める(例:「鶏の唐揚げ(5個)」)\n' +
+    '- 栄養値は、その分量あたりの概算。protein/fat/carb はグラム、小数第1位まで\n' +
+    '- 複数の料理が写っている場合は、それぞれを1件ずつ挙げる\n' +
+    '- 食事が写っていないと判断した場合は {"foods":[]} だけを返す';
+
+  var text = callAiVision_(prompt, 700, { data: String(imageBase64), mimeType: mimeType || 'image/jpeg' });
+  var parsed = parseJson_(text);
+  if (!parsed || !parsed.foods) {
+    return { status: 'error', message: 'AIの応答を解釈できませんでした' };
+  }
+  var foods = [];
+  (parsed.foods || []).slice(0, 3).forEach(function (f) {
+    if (!f || !f.name) return;
+    foods.push({
+      name: String(f.name).slice(0, 60),
+      kcal: Math.round(Number(f.kcal) || 0),
+      protein: round1_(f.protein),
+      fat: round1_(f.fat),
+      carb: round1_(f.carb),
+    });
+  });
+  return { status: 'ok', foods: foods };
+}
+
+var AI_PRESETS = {
+  nutrition: { models: NUTRITION_MODELS, maxTokens: 512 },
+  advice:    { models: ADVICE_MODELS,    maxTokens: 768 },
+  mealplan:  { models: ADVICE_MODELS,    maxTokens: 700 },
+};
+var AI_PROMPT_MAX = 20000;
+var AI_MAXTOKENS_MAX = 1500;
+
+function aiRelayPrompt_(body) {
+  var prompt = body && body.prompt ? String(body.prompt) : '';
+  if (!prompt.trim()) return { error: 'promptがありません' };
+  if (prompt.length > AI_PROMPT_MAX) return { error: 'promptが長すぎます(' + prompt.length + '文字)' };
+  return { prompt: prompt };
+}
+
+function clampMaxTokens_(v, fallback) {
+  var n = Math.round(Number(v));
+  if (!isFinite(n) || n <= 0) return fallback;
+  return Math.min(n, AI_MAXTOKENS_MAX);
+}
+
+function handleAiText_(body) {
+  var p = aiRelayPrompt_(body);
+  if (p.error) return { status: 'error', message: p.error };
+  var preset = AI_PRESETS[String((body && body.preset) || 'advice')] || AI_PRESETS.advice;
+  var text = callAi_(p.prompt, clampMaxTokens_(body && body.maxTokens, preset.maxTokens), preset.models);
+  if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
+  return { status: 'ok', text: String(text).trim() };
+}
+
+function handleAiVision_(body) {
+  var p = aiRelayPrompt_(body);
+  if (p.error) return { status: 'error', message: p.error };
+  if (!body.imageBase64) return { status: 'error', message: '画像がありません' };
+  var text = callAiVision_(p.prompt, clampMaxTokens_(body.maxTokens, 700),
+    { data: String(body.imageBase64), mimeType: body.mimeType || 'image/jpeg' });
+  if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
+  return { status: 'ok', text: String(text).trim() };
 }
 
 function testAi() {

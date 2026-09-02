@@ -171,7 +171,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v42";
+const APP_VERSION = "v44";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -329,7 +329,7 @@ let backendVersion = null;
 // このアプリが必要とするapps-script.gsの版数。これより古いと、AI呼び出しが
 // 極端に遅い・新しいactionを知らない等の問題が起きるため、設定タブで警告する。
 // 「不明なaction」が返るほど古くなくても検知できるのが、版数で見る利点。
-const REQUIRED_BACKEND_VERSION = "v42";
+const REQUIRED_BACKEND_VERSION = "v44";
 function versionNum_(v) {
   const parts = String(v || "").replace(/^v/i, "").split(".").map(n => Number(n) || 0);
   return (parts[0] || 0) * 1000 + (parts[1] || 0);
@@ -661,6 +661,81 @@ function loadNutritionCache() {
 function saveNutritionCache() {
   try { localStorage.setItem(AI_NUTRITION_CACHE_KEY, JSON.stringify(nutritionCache)); } catch (e) {}
 }
+// ============ AIへの指示文と中継(v44) ============
+// v43までは、AIへの指示文(プロンプト)がすべてApps Script側に書かれていた。
+// そのため文面をひとこと直すだけでも、スマホでApps Scriptを全文貼り直して
+// デプロイし直す必要があり、実際に何度もつまずいた。
+//
+// v44からは指示文をこのファイル側に置き、Apps Scriptは
+// 「受け取った指示文をAIへ渡して、返ってきた文章をそのまま返す」だけにした。
+// これで、AIの言い回しや出力形式を変えたいときは index.html の差し替えだけで済む。
+//
+// APIキーは従来どおりApps Scriptのスクリプトプロパティにしか置かない。
+// ブラウザからAI(Groq/Gemini)を直接呼ぶことはなく、必ずApps Script経由のまま。
+// どのモデルを使うかもApps Script側が用途名(preset)から決める。
+const AI_PROMPTS = {
+  nutrition: (foodName) =>
+    '次の食品の栄養価を、日本で一般的な1食あたりの目安量で概算してください。\n' +
+    '食品名: ' + foodName + '\n\n' +
+    'JSONのみを返してください。前置き・後書き・コードフェンスは不要です。\n' +
+    '形式: {"kcal": 数値, "protein": 数値, "fat": 数値, "carb": 数値}\n' +
+    'protein/fat/carb の単位はグラム、小数第1位まで。',
+
+  advice: (ctx) =>
+    'あなたは親しみやすいパーソナルトレーナー兼栄養サポート役です。\n' +
+    '以下は利用者の直近2週間の記録(JSON)です。これをもとに、日本語で3〜4文の短いコメントを書いてください。\n\n' +
+    '### 守ること\n' +
+    '- 具体的な数字や種目名に触れ、記録をちゃんと見ていると伝わる内容にする\n' +
+    '- 良かった点を1つ、次にやると良いことを1つ、必ず入れる\n' +
+    '- 断定的な医学的助言・診断はしない。極端な食事制限は勧めない\n' +
+    '- 記録が少ない日を責めない。前向きで落ち着いた口調で\n' +
+    '- 見出しや箇条書きは使わず、地の文だけで書く\n\n' +
+    '### 記録\n' + JSON.stringify(ctx),
+
+  mealplan: (ctx) =>
+    'あなたは日本の家庭料理に詳しい管理栄養士です。\n' +
+    '以下は利用者の「今日の状況」です(JSON)。今日の朝食と夕食の候補を提案してください。\n\n' +
+    '### 出力形式(JSONのみ。前置き・後書き・コードフェンスは不要)\n' +
+    '{"meals":[{"mealType":"朝食","comment":"一言","items":[' +
+    '{"name":"料理名","kcal":数値,"protein":数値,"fat":数値,"carb":数値}]}]}\n' +
+    '- mealTypeは "朝食" と "夕食" の2つ。それぞれ items を2件ずつ\n' +
+    '- name は「納豆ご飯と味噌汁」のように、1食ぶんの内容が分かる具体的な料理名\n' +
+    '- kcal は「区分ごとの目安kcal」に収める。protein/fat/carb はグラム、小数第1位まで\n' +
+    '- comment は40文字程度で、なぜその内容かを一言\n\n' +
+    '### 守ること\n' +
+    '- 「よく食べている朝食」「よく食べている夕食」に挙がっているものを1件は活かし、もう1件は違う料理を提案して変化をつける\n' +
+    '- 「今日まだ不足しているPFCg」で不足している栄養素(特にたんぱく質)を補える内容にする\n' +
+    '- 日本のスーパーやコンビニで手に入る、平日でも用意できる現実的なものにする\n' +
+    '- 断定的な医学的助言・診断はしない。極端な食事制限は勧めない。責める言い方をしない\n\n' +
+    '### 今日の状況\n' + JSON.stringify(ctx),
+
+  photo: () =>
+    'この写真に写っている食事を判定してください。\n\n' +
+    'JSONのみを返してください。前置き・後書き・コードフェンスは不要です。\n' +
+    '形式: {"foods":[{"name":"料理名","kcal":数値,"protein":数値,"fat":数値,"carb":数値}]}\n' +
+    '- 確からしい順に最大3件\n' +
+    '- name は日本語の一般的な料理名。写真から読み取れる分量も含める(例:「鶏の唐揚げ(5個)」)\n' +
+    '- 栄養値は、その分量あたりの概算。protein/fat/carb はグラム、小数第1位まで\n' +
+    '- 複数の料理が写っている場合は、それぞれを1件ずつ挙げる\n' +
+    '- 食事が写っていないと判断した場合は {"foods":[]} だけを返す',
+};
+
+// AIは指示しても ```json …``` で囲んで返してくることがあるので、囲みを外してから読む。
+function parseAiJson_(text) {
+  if (!text) return null;
+  const cleaned = String(text).replace(/```json/gi, "").replace(/```/g, "").trim();
+  const start = cleaned.indexOf("{"), end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1) return null;
+  try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (e) { return null; }
+}
+// preset は用途名。Apps Script側がこれを見て使うモデルを決める。
+function aiText_(preset, prompt) {
+  return gasPost({ action: "aiText", preset, prompt }, GAS_AI_TIMEOUT_MS);
+}
+function aiVision_(prompt, imageBase64, mimeType) {
+  return gasPost({ action: "aiVision", prompt, imageBase64, mimeType }, GAS_AI_TIMEOUT_MS);
+}
+
 // 入力欄に栄養価を反映する共通処理(内蔵辞書・キャッシュ・AI応答のどれでも同じ扱い)。
 function applyNutritionToForm_(target, n) {
   const ids = foodFieldIds_(target);
@@ -722,12 +797,17 @@ async function aiLookupNutrition(target) {
   aiLookupInFlight.add(cacheKey);
   if (statusEl) statusEl.textContent = "🔄 AIに問い合わせ中...(ネット接続が必要です)";
   try {
-    const data = await gasPost({ action: "estimateNutrition", foodName }, GAS_AI_TIMEOUT_MS);
-    if (data.status !== "ok" || !data.nutrition) {
+    const data = await aiText_("nutrition", AI_PROMPTS.nutrition(foodName));
+    if (data.status !== "ok" || !data.text) {
       if (statusEl) statusEl.textContent = "⚠️ 取得できませんでした: " + friendlyAiError_(data.message);
       return;
     }
-    const n = data.nutrition;
+    const raw = parseAiJson_(data.text);
+    if (!raw || typeof raw.kcal === "undefined") {
+      if (statusEl) statusEl.textContent = "⚠️ AIの応答を解釈できませんでした(応答: " + String(data.text).slice(0, 120) + ")";
+      return;
+    }
+    const n = { kcal: Math.round(Number(raw.kcal) || 0), protein: round1_(raw.protein), fat: round1_(raw.fat), carb: round1_(raw.carb) };
     // 次回以降は通信せずに済むよう覚えておく。
     nutritionCache[cacheKey] = n;
     saveNutritionCache();
@@ -1008,6 +1088,48 @@ function flushSync() {
 }
 // force: trueのときは、他の端末が新しく書き込んでいても構わず上書きする
 // (上書き事故防止の警告カードで、ユーザーが「上書きして同期する」を選んだ場合のみ渡される)。
+// ============ 送信量の削減(v44) ============
+// この同期は「送ったシートを丸ごと書き直す」方式で、Apps Script側は payload に
+// 含まれているシートだけを処理する。つまり【変更のあったシートだけ送れば十分】。
+// 1年ぶんの記録(約3,300件)で実測すると、毎回の送信は117KBあり、その内訳は
+// 筋トレ53KB・食事46KB・有酸素10KB・体重9KB だった。体重を1件記録しただけでも
+// 筋トレと食事の全履歴を送り直していたことになる。
+// シートごとに内容の指紋を持ち、前回送ったものと同じなら送らないようにする。
+const SENT_SIG_KEY = "training-log-sent-sheets";
+let sentSheetSigs = {};   // { シート名: 指紋 }
+function loadSentSigs() {
+  try {
+    const raw = localStorage.getItem(SENT_SIG_KEY);
+    sentSheetSigs = raw ? JSON.parse(raw) : {};
+  } catch (e) { sentSheetSigs = {}; }
+}
+function saveSentSigs() {
+  try { localStorage.setItem(SENT_SIG_KEY, JSON.stringify(sentSheetSigs)); }
+  catch (e) { /* 保存できなくても、次回は全件送るだけで実害はない */ }
+}
+// 中身が変わったかどうかだけ分かればよいので、軽量なハッシュで十分。
+// (衝突しても「送らなくてよいものを送る/送るべきものを送らない」が起きるだけだが、
+//  後者を避けるため長さも一緒に持たせて取り違えにくくしている)
+function sheetSignature_(sheet) {
+  const json = JSON.stringify(sheet);
+  let h = 5381;
+  for (let i = 0; i < json.length; i++) h = ((h * 33) ^ json.charCodeAt(i)) >>> 0;
+  return json.length + ":" + h.toString(36);
+}
+// 送るべきシートだけを抜き出す。fullを指定した場合は全件返す。
+function changedPayload_(full) {
+  const all = buildPayload();
+  if (full) return { payload: all, sigs: Object.keys(all).reduce((a, k) => (a[k] = sheetSignature_(all[k]), a), {}), skipped: [] };
+  const payload = {}, sigs = {}, skipped = [];
+  Object.keys(all).forEach(name => {
+    const sig = sheetSignature_(all[name]);
+    sigs[name] = sig;
+    if (sentSheetSigs[name] === sig) skipped.push(name);
+    else payload[name] = all[name];
+  });
+  return { payload, sigs, skipped };
+}
+
 async function syncToSheet(force) {
   if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
   if (!gasConfigured()) { syncStatus = "idle"; renderSyncStatus(); return; }
@@ -1015,10 +1137,25 @@ async function syncToSheet(force) {
   syncInFlight = true;
   syncPending = false;
   syncStatus = "syncing"; renderSyncStatus();
+  // force(=「今すぐ同期を試す」や競合時の上書き)のときは、指紋に頼らず全件送り直す。
+  // シートを消してしまった・別のシートに繋ぎ替えた等で指紋と実際が食い違っていても、
+  // この操作で必ず復旧できるようにしておくため。
+  const { payload, sigs, skipped } = changedPayload_(!!force);
+  const nothingToSend = Object.keys(payload).length === 0;
   try {
+    if (nothingToSend) {
+      // 送るべき変更が無いので、通信自体を省く。
+      syncStatus = "synced";
+      lastSyncedAt = new Date();
+      lastSyncError = null;
+      syncInFlight = false;
+      renderSyncStatus();
+      if (activeTab === "settings") renderTabContent();
+      return;
+    }
     const data = await gasPost({
       action: "save",
-      payload: buildPayload(),
+      payload: payload,
       knownWriteAt: gasConfig.lastKnownWriteAt,
       force: !!force,
     });
@@ -1027,6 +1164,9 @@ async function syncToSheet(force) {
       lastSyncedAt = new Date();
       lastSyncError = null;
       syncConflict = null;
+      // 送信に成功したぶんだけ指紋を更新する(失敗したものは次回また送られる)。
+      Object.keys(payload).forEach(name => { sentSheetSigs[name] = sigs[name]; });
+      saveSentSigs();
       // 次回の同期時の食い違いチェック用に、サーバーが返した最新の書き込み時刻を覚えておく。
       // (apps-script.gsが未更新でこのフィールドを返さない場合は従来通りnullのままで、
       //  食い違いチェック自体が働かない=これまでと同じ動作になるだけで、壊れはしない)
@@ -1148,7 +1288,7 @@ async function fetchAiAdvice() {
   }
   aiAdviceStatus = "loading"; aiAdviceError = null; renderTabContent();
   try {
-    const data = await gasPost({ action: "advice", context: buildAdviceContext() }, GAS_AI_TIMEOUT_MS);
+    const data = await aiText_("advice", AI_PROMPTS.advice(buildAdviceContext()));
     if (data && data.status === "ok" && data.text) {
       aiAdvice = { date: localDateStr(), text: String(data.text) };
       try { localStorage.setItem(AI_ADVICE_KEY, JSON.stringify(aiAdvice)); } catch (e) {}
@@ -1162,6 +1302,128 @@ async function fetchAiAdvice() {
     aiAdviceError = await diagnoseAiFailure_(friendlySyncError_(e && e.message ? e.message : String(e)));
   }
   renderTabContent();
+}
+
+// ============ 写真から食事を記録(v43) ============
+// カメラで撮った写真をAIに渡して料理名と栄養値の候補を受け取り、
+// マスタ・内蔵辞書に同じものがあればそちらの値を優先して候補に出す。
+// 写真は端末側で縮小してから送る(通信量とAIの無料枠の節約、応答時間の短縮)。
+const PHOTO_MAX_SIDE = 768;      // 長辺をこの画素数まで縮小する
+const PHOTO_JPEG_QUALITY = 0.7;  // 料理の判別には十分な画質
+let photoStatus = "idle";        // idle | analyzing | done | error
+let photoError = null;
+let photoResults = null;         // [{name, kcal, protein, fat, carb, source}]
+
+// 画像を縮小してJPEGのbase64(data:のプレフィックスなし)にする。
+// iPhoneの写真はそのままだと数MBあり、AIへ送るには大きすぎる。
+// canvasを通すことでHEICなどもJPEGに揃えられる(送信先が対応していない形式を避けられる)。
+function downscaleImage_(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", PHOTO_JPEG_QUALITY);
+        resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("写真を読み込めませんでした")); };
+    img.src = url;
+  });
+}
+
+// AIが答えた料理名が、マスタや内蔵辞書にあるものと「同じ」と言い切れる場合だけ、
+// そちらの値に差し替える。曖昧な一致で勝手に置き換えると、分量の違う別物の
+// 数値が入ってしまうため、正規化した名前が完全に一致する場合に限る。
+function resolveFoodSource_(aiFood) {
+  const target = normalizeFoodText(aiFood.name);
+  if (target) {
+    const master = mealMaster.find(m => normalizeFoodText(m.name) === target && m.calories != null);
+    if (master) {
+      return { name: master.name, kcal: master.calories, protein: master.protein || 0,
+               fat: master.fat || 0, carb: master.carb || 0, source: "master" };
+    }
+    const dict = FOOD_CALORIE_DB.find(f => normalizeFoodText(f.name) === target
+      || (f.aliases || []).some(a => normalizeFoodText(a) === target));
+    if (dict) {
+      return { name: dict.name, kcal: dict.kcal, protein: dict.protein || 0,
+               fat: dict.fat || 0, carb: dict.carb || 0, source: "dict" };
+    }
+  }
+  return { ...aiFood, source: "ai" };
+}
+
+async function handlePhotoSelected(file) {
+  if (!file) return;
+  if (!gasConfigured()) {
+    photoStatus = "error";
+    photoError = "設定タブで接続先URLとトークンを登録すると、写真から記録できるようになります。";
+    renderTabContent(); return;
+  }
+  photoStatus = "analyzing"; photoError = null; photoResults = null; renderTabContent();
+  try {
+    const imageBase64 = await downscaleImage_(file);
+    const data = await aiVision_(AI_PROMPTS.photo(), imageBase64, "image/jpeg");
+    if (!data || data.status !== "ok" || !data.text) {
+      photoStatus = "error";
+      photoError = friendlyAiError_(data && data.message);
+    } else {
+      const parsed = parseAiJson_(data.text);
+      if (!parsed || !parsed.foods) {
+        photoStatus = "error";
+        photoError = "AIの応答を解釈できませんでした。もう一度撮り直すか、手で入力してください。";
+      } else {
+        photoResults = parsed.foods.slice(0, 3)
+          .filter(f => f && f.name)
+          .map(f => resolveFoodSource_({
+            name: String(f.name).slice(0, 60),
+            kcal: Math.round(Number(f.kcal) || 0),
+            protein: round1_(f.protein), fat: round1_(f.fat), carb: round1_(f.carb),
+          }));
+        photoStatus = "done";
+      }
+    }
+  } catch (e) {
+    photoStatus = "error";
+    photoError = await diagnoseAiFailure_(friendlySyncError_(e && e.message ? e.message : String(e)));
+  }
+  renderTabContent();
+}
+
+// 食事タブに出すカード。撮影ボタンと、判定結果の候補を並べる。
+function photoCardHtml() {
+  const rows = (photoResults || []).map(f => {
+    const badge = f.source === "master" ? '<span class="muted" style="font-size:10px;">📌登録済みの値</span>'
+                : f.source === "dict"   ? '<span class="muted" style="font-size:10px;">内蔵辞書の値</span>'
+                : '<span class="muted" style="font-size:10px;">AIの概算</span>';
+    return `
+      <button type="button" class="entry-row" style="width:100%;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:8px;margin-bottom:6px;padding:8px 10px;"
+              data-action="use-meal-suggestion" data-name="${esc(f.name)}" data-kcal="${Math.round(f.kcal)||0}" data-protein="${round1_(f.protein)}" data-fat="${round1_(f.fat)}" data-carb="${round1_(f.carb)}" data-mealtype="${esc(selectedMealType)}">
+        <div style="flex:1;">
+          <div style="font-size:12.5px;">${esc(f.name)} ${badge}</div>
+          <div class="muted mono" style="font-size:10.5px;">${Math.round(f.kcal)||0}kcal ／ P${round1_(f.protein)} F${round1_(f.fat)} C${round1_(f.carb)}</div>
+        </div>
+        <span class="muted" style="font-size:11px;">入力する ›</span>
+      </button>`;
+  }).join("");
+
+  return `<div class="card">
+    <p class="section-title">📷 写真から記録</p>
+    <input type="file" id="photo-input" accept="image/*" capture="environment" class="hidden">
+    <button type="button" class="chip active-b" data-action="take-food-photo" ${photoStatus === "analyzing" ? "disabled" : ""}>${photoStatus === "analyzing" ? "判定中…" : "📷 写真を撮る・選ぶ"}</button>
+    ${photoStatus === "error" && photoError ? `<p style="font-size:11px;margin:8px 0 0;color:var(--coral);line-height:1.6;">${esc(photoError)}</p>` : ""}
+    ${photoStatus === "done" && photoResults && !photoResults.length ? `<p class="muted" style="font-size:11px;margin:8px 0 0;">食事を判別できませんでした。明るい場所で、料理が画面いっぱいに入るように撮ると認識しやすくなります。</p>` : ""}
+    ${rows ? `<p class="muted" style="font-size:10.5px;margin:10px 0 4px;font-weight:700;">判定した候補(タップで入力欄に反映)</p>${rows}
+      <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">タップしても記録はされません。内容を確認して「＋ 記録する」を押したときに記録されます。数値が実際と違う場合は書き換えてください。</p>` : ""}
+    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">撮った写真は、判定のためにあなたのApps Script経由でAI(Groq / Gemini)へ送られます。端末内やスプレッドシートには保存しません。送る前に長辺${PHOTO_MAX_SIDE}pxまで縮小しています。</p>
+  </div>`;
 }
 
 // AI呼び出しが時間切れ・失敗したときに、pingで接続先の状態を確かめて
@@ -1210,12 +1472,14 @@ async function fetchAiMealPlan() {
   }
   aiMealPlanStatus = "loading"; aiMealPlanError = null; renderTabContent();
   try {
-    const data = await gasPost({ action: "mealPlan", context: buildMealPlanContext() }, GAS_AI_TIMEOUT_MS);
+    const data = await aiText_("mealplan", AI_PROMPTS.mealplan(buildMealPlanContext()));
     if (data && data.status === "ok" && data.text) {
-      // v42以降のApps Scriptは、文章に加えて構造化した候補(plan)も返す。
+      // 文章としてだけでなく、JSONとして読めれば構造化した候補(plan)も取り出す。
       // これがあれば、ルールベースの候補と同じ「タップして記録できる一覧」として表示でき、
       // 「提案されている料理」と「一覧に出ている料理」が食い違わなくなる。
-      aiMealPlan = { date: localDateStr(), text: String(data.text), plan: data.plan || null };
+      const parsed = parseAiJson_(data.text);
+      const plan = (parsed && parsed.meals && parsed.meals.length) ? parsed.meals : null;
+      aiMealPlan = { date: localDateStr(), text: String(data.text), plan };
       try { localStorage.setItem(AI_MEALPLAN_KEY, JSON.stringify(aiMealPlan)); } catch (e) {}
       aiMealPlanStatus = "idle";
     } else {
@@ -2075,6 +2339,13 @@ async function restoreFromSheet() {
     if (!data || data.status !== "ok" || !data.payload) throw new Error((data && data.message) || "読み込みに失敗しました");
     applyPayload(data.payload);
     saveState();
+    // 取り込んだ直後はローカルとシートの中身が一致しているので、
+    // その状態を「送信済み」として記録しておく(直後に全件送り直さないため)。
+    try {
+      const cur = buildPayload();
+      sentSheetSigs = Object.keys(cur).reduce((a, k) => (a[k] = sheetSignature_(cur[k]), a), {});
+      saveSentSigs();
+    } catch (e) { sentSheetSigs = {}; saveSentSigs(); }
     // シートの最新内容を取り込んだので、この端末は今のシートの状態を把握したことになる。
     // 次に同期するときの食い違いチェックの基準を更新しておく(上書き事故防止、v32)。
     gasConfig.lastKnownWriteAt = data.lastWriteAt || null;
@@ -2092,17 +2363,51 @@ async function restoreFromSheet() {
 }
 
 // ============ CHART HELPERS ============
-function lineChartSvg(points, colorHex, goalValue) {
+// 体重などの推移グラフ。avgPoints を渡すと、生の値を薄い点として残したうえで
+// 移動平均の線を主役として重ねる(v44)。体重は水分や食事で日々±1kg動くため、
+// 生の値だけを線で結ぶと「減っているのに増えたように見える日」が頻繁に現れる。
+function lineChartSvg(points, colorHex, goalValue, avgPoints) {
   if (points.length < 2) return '<p class="muted">データが2件以上になるとグラフが表示されます。</p>';
   const w=300, h=100, pad=8;
-  const values = points.map(p=>p.value).concat(goalValue!=null?[goalValue]:[]);
+  const values = points.map(p=>p.value)
+    .concat(avgPoints ? avgPoints.map(p=>p.value) : [])
+    .concat(goalValue!=null?[goalValue]:[]);
   const min = Math.min(...values)-1, max = Math.max(...values)+1;
   const xStep = (w-pad*2)/(points.length-1);
   const yFor = v => h-pad-((v-min)/(max-min))*(h-pad*2);
+  const goalLine = goalValue!=null ? `<line x1="${pad}" y1="${yFor(goalValue)}" x2="${w-pad}" y2="${yFor(goalValue)}" stroke="var(--sand)" stroke-dasharray="4 4" stroke-width="1"/>` : "";
+
+  if (avgPoints && avgPoints.length === points.length) {
+    // 生の値は小さな点だけにして、平均線を読み取りやすくする。
+    // 点が多いときは間引く(1年ぶんだと点で線が埋まってしまうため)。
+    const step = Math.max(1, Math.ceil(points.length / 60));
+    const rawDots = points.map((p,i) => (i % step === 0 || i === points.length-1)
+      ? `<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="1.8" fill="${colorHex}" opacity="0.35"/>` : "").join("");
+    const avgLine = avgPoints.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
+    const lastAvg = avgPoints[avgPoints.length-1];
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}${rawDots}` +
+      `<polyline points="${avgLine}" fill="none" stroke="${colorHex}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>` +
+      `<circle cx="${pad+(avgPoints.length-1)*xStep}" cy="${yFor(lastAvg.value)}" r="3.5" fill="${colorHex}" stroke="#fff" stroke-width="2"/></svg>`;
+  }
+
   const line = points.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
   const dots = points.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${colorHex}" stroke="#fff" stroke-width="2"/>`).join("");
-  const goalLine = goalValue!=null ? `<line x1="${pad}" y1="${yFor(goalValue)}" x2="${w-pad}" y2="${yFor(goalValue)}" stroke="var(--sand)" stroke-dasharray="4 4" stroke-width="1"/>` : "";
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}<polyline points="${line}" fill="none" stroke="${colorHex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
+}
+// 各点について「その日を含む直近7日ぶんの記録」の平均を返す(v44)。
+// 単純に直近7件ではなく日付の範囲で見るので、記録が飛んでいる日があっても
+// 実際の期間からずれない。記録が少ない序盤は、その時点までの平均になる。
+function movingAverage_(points, days) {
+  const span = (days || 7) * 86400000;  // 「7日ぶん」= その日と、その前6日
+  return points.map((p, i) => {
+    const end = new Date(p.date).getTime();
+    let sum = 0, n = 0;
+    for (let j = i; j >= 0; j--) {
+      if (end - new Date(points[j].date).getTime() >= span) break;
+      sum += points[j].value; n++;
+    }
+    return { date: p.date, value: n ? sum / n : p.value };
+  });
 }
 function topRoundedPath(x,y,width,height,r) {
   if (height<=0) return "";
@@ -2558,6 +2863,8 @@ function mealsHtml() {
   const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
 
   return `
+    ${photoCardHtml()}
+
     <div class="card">
       <p class="section-title">🍽️ 今日の食事</p>
       ${targets ? `
@@ -2799,7 +3106,27 @@ function weightHtml() {
         <p class="section-title" style="margin:0;">⚖️ 体重の推移</p>
         <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
       </div>
-      ${lineChartSvg(points, "var(--slate)", goals.weight)}
+      ${(() => {
+        const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
+        const chart = lineChartSvg(points, "var(--slate)", goals.weight, avg);
+        if (!avg) return chart;
+        const cur = avg[avg.length-1].value;
+        // 7日前の平均と比べた変化。日々の増減ではなく傾向として見せる。
+        const weekAgoIdx = (() => {
+          const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
+          for (let i = avg.length-1; i >= 0; i--) if (new Date(avg[i].date).getTime() <= t) return i;
+          return 0;
+        })();
+        const diff = round1_(cur - avg[weekAgoIdx].value);
+        const trend = avg.length > weekAgoIdx + 1
+          ? `<span class="mono" style="color:${diff < 0 ? "var(--teal)" : diff > 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}kg</span> <span class="muted">/ 1週間</span>`
+          : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
+        return chart + `<div class="between" style="margin-top:6px;">
+          <span class="muted" style="font-size:10.5px;">──── 7日平均 <span style="opacity:0.5;">・</span> 実測</span>
+          <span style="font-size:12px;">${trend}</span>
+        </div>
+        <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。</p>`;
+      })()}
     </div>
 
     <div class="card">
@@ -3153,7 +3480,8 @@ function settingsHtml() {
         <p style="font-size:11.5px;margin:0;line-height:1.7;">接続先のApps Scriptが、このアプリ用ではないコード(差分同期版など)になっているため、同期が失敗します。配布物の <span class="mono">apps-script.gs</span> の中身を貼り直したうえで、<b>「デプロイ」→「デプロイを管理」→ 鉛筆マーク → バージョン「新バージョン」→「デプロイ」</b>まで行ってください(コードを保存しただけでは反映されません)。</p>
       </div>` : ""}
       <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
-      <button class="chip" data-action="retry-sync">今すぐ同期を試す</button>
+      <button class="chip" data-action="retry-sync">今すぐ全部を同期し直す</button>
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">ふだんは変更のあった記録だけを自動で送っています。シートの中身がおかしいときは、このボタンで全件を送り直せます。</p>
       ${backendAiKeys ? `
       <div style="background:${backendAiKeys.groq ? "var(--paper)" : "#FDF1E7"};border-radius:8px;padding:10px;margin-top:12px;">
         <p style="font-size:11.5px;margin:0 0 6px;font-weight:700;">AI接続の状態${backendVersion ? ` <span class="muted mono" style="font-weight:400;">(Apps Script ${esc(backendVersion)})</span>` : ""}</p>
@@ -3721,6 +4049,10 @@ document.getElementById("app").addEventListener("click", (e) => {
     if (detailEl) detailEl.classList.toggle("hidden", !mealDetailOpen);
     t.textContent = (mealDetailOpen ? "▾" : "▸") + " 栄養素も入力(任意)";
   }
+  else if (action === "take-food-photo") {
+    const el = document.getElementById("photo-input");
+    if (el) el.click();
+  }
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
   else if (action === "open-x-share") { openXShare(); }
@@ -3764,7 +4096,9 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-lifestyle") { profile.lifestyle = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
-  else if (action === "retry-sync") { syncToSheet(); }
+  // 「今すぐ同期を試す」は、変更の有無にかかわらず全件送り直す。
+  // 何かおかしいときに押すボタンなので、差分送信の判断ごと作り直せるようにしておく。
+  else if (action === "retry-sync") { syncToSheet(true); }
   else if (action === "force-sync") { syncToSheet(true); }
   else if (action === "dismiss-sync-conflict") {
     // 警告を消すだけで、データの送信はしない。ローカルの記録はそのまま端末に残っているので、
@@ -3780,8 +4114,14 @@ document.getElementById("app").addEventListener("click", (e) => {
   // (記録そのものは、本人が内容を確認して「＋ 記録する」を押したときだけ行う)。
   else if (action === "use-meal-suggestion") {
     const d = t.dataset;
-    selectedMealType = d.mealtype || selectedMealType;
     switchTab("meals");
+    // switchTab("meals") は時刻から区分を選び直すので、指定された区分はその後に入れる。
+    // タブ全体はすでに描き終わっているため、区分チップの選択状態だけ直接付け替える。
+    if (d.mealtype) {
+      selectedMealType = d.mealtype;
+      document.querySelectorAll("#meal-type-buttons .chip").forEach(c =>
+        c.classList.toggle("active", c.dataset.val === selectedMealType));
+    }
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
     set("meal-name-input", d.name);
     set("meal-cal-input", d.kcal);
@@ -3804,6 +4144,9 @@ document.getElementById("app").addEventListener("click", (e) => {
     // 誤って適用しないため)。
     gasConfig = { url, token, lastKnownWriteAt: null };
     saveConfig();
+    // 接続先が変わると別のスプレッドシートの可能性があるため、
+    // 「送信済み」の記録は捨てて、次回は全件送り直す。
+    sentSheetSigs = {}; saveSentSigs();
     syncConflict = null;
     backendVersion = null; backendAiKeys = null; backendChecked = false;
     if (gasConfigured()) { syncStatus = "idle"; syncToSheet(); checkBackendVersion_(); }
@@ -3884,6 +4227,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     entryDates = { meal: null, weight: null, training: null };
     routineMaster = []; savingRoutine = false;
     nutritionCache = {}; saveNutritionCache();
+    sentSheetSigs = {}; saveSentSigs();
     seedExerciseMasterIfEmpty();
     onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
     saveState(); renderApp();
@@ -3927,6 +4271,12 @@ document.getElementById("app").addEventListener("change", (e) => {
   }
 });
 document.getElementById("app").addEventListener("change", (e) => {
+  if (e.target.id === "photo-input" && e.target.files && e.target.files[0]) {
+    const f = e.target.files[0];
+    e.target.value = "";   // 同じ写真をもう一度選んでも change が起きるようにする
+    handlePhotoSelected(f);
+    return;
+  }
   if (e.target.id === "import-file-input" && e.target.files && e.target.files[0]) {
     importJsonFile(e.target.files[0]);
     e.target.value = "";
@@ -3960,6 +4310,7 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 // ============ INIT ============
 selectedCalDate = localDateStr();
 loadConfig();
+loadSentSigs();
 loadState();
 // 記録を読み込んだあとで、有酸素の初期選択を「いちばん使っている種目」に合わせる
 // (loadStateより前に決めると、まだ記録が無い状態で判定してしまうためこの位置)。
@@ -3967,6 +4318,15 @@ selectedCardio = defaultCardio();
 loadAiAdvice();
 loadAiMealPlan();
 loadNutritionCache();
+// 電波が届かない場所(地下のジム・機内モード)でもアプリを起動できるようにする(v44)。
+// sw.js は index.html と同じ場所に置いてください。
+// ファイルをそのまま開いた場合(file://)やHTTPS以外では登録できないので、その時は何もしない。
+// 記録・同期のしくみには一切影響しません(登録に失敗しても今までどおり動きます)。
+if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
 // 未送信の変更を残したままアプリを閉じないよう、離脱時にまとめて送る。
 window.addEventListener("pagehide", flushSync);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushSync(); });
