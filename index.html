@@ -171,7 +171,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v44.1";
+const APP_VERSION = "v44.2";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -709,14 +709,23 @@ const AI_PROMPTS = {
     '- 断定的な医学的助言・診断はしない。極端な食事制限は勧めない。責める言い方をしない\n\n' +
     '### 今日の状況\n' + JSON.stringify(ctx),
 
+  // AIは料理を取り違えることがあり、そのたびに写真を撮り直すのは面倒なので、
+  // 「違う料理の候補」を3件出させて、その場で選べるようにする(v44.2)。
   photo: () =>
-    'この写真に写っている食事を判定してください。\n\n' +
+    'この写真に写っている食事を判定してください。\n' +
+    '判定は外れることがあります。利用者が選べるよう、必ず【候補を3件】挙げてください。\n\n' +
     'JSONのみを返してください。前置き・後書き・コードフェンスは不要です。\n' +
-    '形式: {"foods":[{"name":"料理名","kcal":数値,"protein":数値,"fat":数値,"carb":数値}]}\n' +
-    '- 確からしい順に最大3件\n' +
-    '- name は日本語の一般的な料理名。写真から読み取れる分量も含める(例:「鶏の唐揚げ(5個)」)\n' +
+    '形式: {"mode":"alternatives","foods":[{"name":"料理名","kcal":数値,"protein":数値,' +
+    '"fat":数値,"carb":数値,"note":"見分け方"}]}\n\n' +
+    '### modeの決め方\n' +
+    '- 1品だけ写っている → "alternatives"。その1品として考えられる【違う料理】を可能性の高い順に3件\n' +
+    '  (例: 鶏の唐揚げ / ヤンニョムチキン / 竜田揚げ のように、写真では見分けにくいものを挙げる)\n' +
+    '  同じ料理で分量だけを変えた候補は並べない。どうしても1品に絞れる場合だけ、2件目以降を分量ちがいにしてよい\n' +
+    '- 定食など複数の料理が写っている → "items"。写っているものを1件ずつ、多いものから3件まで\n\n' +
+    '### 共通のきまり\n' +
+    '- name は日本語の一般的な料理名。分量も含める(例:「鶏の唐揚げ(5個)」)\n' +
     '- 栄養値は、その分量あたりの概算。protein/fat/carb はグラム、小数第1位まで\n' +
-    '- 複数の料理が写っている場合は、それぞれを1件ずつ挙げる\n' +
+    '- note は20文字程度。なぜその候補かの手がかりや見分け方(例:「衣が厚めならこちら」)\n' +
     '- 食事が写っていないと判断した場合は {"foods":[]} だけを返す',
 };
 
@@ -1381,7 +1390,8 @@ const PHOTO_MAX_SIDE = 768;      // 長辺をこの画素数まで縮小する
 const PHOTO_JPEG_QUALITY = 0.7;  // 料理の判別には十分な画質
 let photoStatus = "idle";        // idle | analyzing | done | error
 let photoError = null;
-let photoResults = null;         // [{name, kcal, protein, fat, carb, source}]
+let photoResults = null;         // [{name, kcal, protein, fat, carb, note, source}]
+let photoMode = null;            // "alternatives"(3つから選ぶ) | "items"(1つずつ記録) | null
 
 // 画像を縮小してJPEGのbase64(data:のプレフィックスなし)にする。
 // iPhoneの写真はそのままだと数MBあり、AIへ送るには大きすぎる。
@@ -1432,8 +1442,16 @@ function photoFoodsFrom_(parsed) {
       protein: round1_(pick(f, ["protein", "たんぱく質", "タンパク質", "P"])),
       fat: round1_(pick(f, ["fat", "脂質", "F"])),
       carb: round1_(pick(f, ["carb", "carbs", "carbohydrate", "炭水化物", "C"])),
+      note: (() => { const n = pick(f, ["note", "reason", "備考", "見分け方"]); return n ? String(n).slice(0, 40) : ""; })(),
     };
   }).filter(Boolean);
+}
+// 候補の並びが「どれか1つを選ぶもの」なのか「1つずつ記録できるもの」なのかを返す(v44.2)。
+// これが分からないと、定食の写真で1件だけ記録して終わってしまう。
+// 古い応答(modeが無い)のときは、どちらとも言い切らない中立の表示にする。
+function photoModeFrom_(parsed) {
+  const m = parsed && !Array.isArray(parsed) ? parsed.mode : null;
+  return m === "alternatives" || m === "items" ? m : null;
 }
 
 // AIが答えた料理名が、マスタや内蔵辞書にあるものと「同じ」と言い切れる場合だけ、
@@ -1445,13 +1463,13 @@ function resolveFoodSource_(aiFood) {
     const master = mealMaster.find(m => normalizeFoodText(m.name) === target && m.calories != null);
     if (master) {
       return { name: master.name, kcal: master.calories, protein: master.protein || 0,
-               fat: master.fat || 0, carb: master.carb || 0, source: "master" };
+               fat: master.fat || 0, carb: master.carb || 0, note: aiFood.note || "", source: "master" };
     }
     const dict = FOOD_CALORIE_DB.find(f => normalizeFoodText(f.name) === target
       || (f.aliases || []).some(a => normalizeFoodText(a) === target));
     if (dict) {
       return { name: dict.name, kcal: dict.kcal, protein: dict.protein || 0,
-               fat: dict.fat || 0, carb: dict.carb || 0, source: "dict" };
+               fat: dict.fat || 0, carb: dict.carb || 0, note: aiFood.note || "", source: "dict" };
     }
   }
   return { ...aiFood, source: "ai" };
@@ -1464,7 +1482,7 @@ async function handlePhotoSelected(file) {
     photoError = "設定タブで接続先URLとトークンを登録すると、写真から記録できるようになります。";
     renderTabContent(); return;
   }
-  photoStatus = "analyzing"; photoError = null; photoResults = null; renderTabContent();
+  photoStatus = "analyzing"; photoError = null; photoResults = null; photoMode = null; renderTabContent();
   try {
     const imageBase64 = await downscaleImage_(file);
     // 写真の判定は文章が長くなりやすく、上限700では途中で切れることがあったので広げる(v44.1)。
@@ -1473,7 +1491,8 @@ async function handlePhotoSelected(file) {
       photoStatus = "error";
       photoError = friendlyAiError_(data && data.message);
     } else {
-      const foods = photoFoodsFrom_(parseAiJson_(data.text));
+      const parsed = parseAiJson_(data.text);
+      const foods = photoFoodsFrom_(parsed);
       if (!foods) {
         photoStatus = "error";
         // 何が返ってきたのかを必ず見せる。これが分からないと原因を絞り込めない。
@@ -1481,6 +1500,7 @@ async function handlePhotoSelected(file) {
                    + String(data.text).slice(0, 300);
       } else {
         photoResults = foods.slice(0, 3).map(resolveFoodSource_);
+        photoMode = photoModeFrom_(parsed);
         photoStatus = "done";
       }
     }
@@ -1503,6 +1523,7 @@ function photoCardHtml() {
         <div style="flex:1;">
           <div style="font-size:12.5px;">${esc(f.name)} ${badge}</div>
           <div class="muted mono" style="font-size:10.5px;">${Math.round(f.kcal)||0}kcal ／ P${round1_(f.protein)} F${round1_(f.fat)} C${round1_(f.carb)}</div>
+          ${f.note ? `<div class="muted" style="font-size:10px;margin-top:2px;line-height:1.5;">${esc(f.note)}</div>` : ""}
         </div>
         <span class="muted" style="font-size:11px;">入力する ›</span>
       </button>`;
@@ -1514,8 +1535,12 @@ function photoCardHtml() {
     <button type="button" class="chip active-b" data-action="take-food-photo" ${photoStatus === "analyzing" ? "disabled" : ""}>${photoStatus === "analyzing" ? "判定中…" : "📷 写真を撮る・選ぶ"}</button>
     ${photoStatus === "error" && photoError ? `<p style="font-size:11px;margin:8px 0 0;color:var(--coral);line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(photoError)}</p>` : ""}
     ${photoStatus === "done" && photoResults && !photoResults.length ? `<p class="muted" style="font-size:11px;margin:8px 0 0;">食事を判別できませんでした。明るい場所で、料理が画面いっぱいに入るように撮ると認識しやすくなります。</p>` : ""}
-    ${rows ? `<p class="muted" style="font-size:10.5px;margin:10px 0 4px;font-weight:700;">判定した候補(タップで入力欄に反映)</p>${rows}
-      <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">タップしても記録はされません。内容を確認して「＋ 記録する」を押したときに記録されます。数値が実際と違う場合は書き換えてください。</p>` : ""}
+    ${rows ? `<p class="muted" style="font-size:10.5px;margin:10px 0 4px;font-weight:700;">${
+        photoMode === "items" ? "写っているもの(1つずつタップして記録できます)"
+      : photoMode === "alternatives" ? "近いものをタップしてください(この中に無ければ下の案内へ)"
+      : "判定した候補(タップで入力欄に反映)"}</p>${rows}
+      <p class="muted" style="font-size:10.5px;margin:0 0 6px;line-height:1.6;">タップしても記録はされません。内容を確認して「＋ 記録する」を押したときに記録されます。数値が実際と違う場合は書き換えてください。</p>
+      <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">どれも違うときは、<b>写真を撮り直さなくても大丈夫</b>です。上の「食品名」に料理名を入力して「🔍 AIで栄養を調べる」を押すと、その名前でカロリーとPFCを調べられます。</p>` : ""}
     <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">撮った写真は、判定のためにあなたのApps Script経由でAI(Groq / Gemini)へ送られます。端末内やスプレッドシートには保存しません。送る前に長辺${PHOTO_MAX_SIDE}pxまで縮小しています。</p>
   </div>`;
 }
