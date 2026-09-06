@@ -171,7 +171,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v44.2";
+const APP_VERSION = "v44.5";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -438,6 +438,14 @@ function weekBuckets(n) {
     buckets.push({ start, label: `${start.getMonth()+1}/${start.getDate()}`, count });
   }
   return buckets;
+}
+// 今週(月曜始まり)がまだ何日残っているか。0 = 日曜(週が終わっている)。
+// 「週間トレーニング ○/○回」は今週まだ来ていない曜日を数えられないぶん自然と
+// 分母より小さくなるので、週の途中であることを見せて「未達成」と誤解されないようにする。
+function daysLeftInWeek() {
+  const dow = new Date().getDay();
+  const diffToMonday = (dow === 0 ? 6 : dow - 1);
+  return 6 - diffToMonday;
 }
 function uid() { return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
 function exerciseNamesForPart(part) { return exerciseMaster.filter(x => x.part === part).map(x => x.name); }
@@ -1796,15 +1804,45 @@ function bodyCompositionCardHtml() {
           "除脂肪体重の減りが大きめです。減量ペースをゆっくりにする、たんぱく質を確保する、筋トレを増やす、といった調整を検討してみてください。"}</p>` : ""}
       </div>`;
   }
+  // 体脂肪率の推移グラフ(v44.3)。体重グラフと同じ描画関数・同じ7日平均の
+  // 考え方を流用する。単位が違う(kg / %)ため体重の線と同じグラフに重ねると
+  // 軸が2本になって読み違えのもとになるので、あえて別のグラフにして、この
+  // 体組成カードの中で体重グラフのすぐ下に置くことで「まとめて見える」ようにしている。
+  const bfPoints = withBf.map(w => ({ date: w.date, value: w.bodyFat }));
+  const bfAvg = bfPoints.length >= 3 ? movingAverage_(bfPoints, 7) : null;
+  const bfChart = lineChartSvg(bfPoints, "var(--coral)", null, bfAvg);
+  let bfTrendBlock = "";
+  if (bfAvg) {
+    const cur = bfAvg[bfAvg.length-1].value;
+    const weekAgoIdx = (() => {
+      const t = new Date(bfPoints[bfPoints.length-1].date).getTime() - 7*86400000;
+      for (let i = bfAvg.length-1; i >= 0; i--) if (new Date(bfAvg[i].date).getTime() <= t) return i;
+      return 0;
+    })();
+    const diff = round1_(cur - bfAvg[weekAgoIdx].value);
+    const trend = bfAvg.length > weekAgoIdx + 1
+      ? `<span class="mono" style="color:${diff < 0 ? "var(--teal)" : diff > 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}%</span> <span class="muted">/ 1週間</span>`
+      : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
+    bfTrendBlock = `<div class="between" style="margin-top:6px;">
+      ${trendLegendHtml("var(--coral)")}
+      <span style="font-size:12px;">${trend}</span>
+    </div>`;
+  }
+
   return `<div class="card">
     <div class="between" style="margin-bottom:10px;">
       <p class="section-title" style="margin:0;">🧬 体組成</p>
       <span class="muted">${last.date} 時点</span>
     </div>
-    ${row("体重", last.weight.toFixed(1), "kg")}
-    ${row("体脂肪率", last.bf.toFixed(1), "%")}
-    ${row("体脂肪量", last.fat.toFixed(1), "kg")}
-    ${row("除脂肪体重", last.lean.toFixed(1), "kg")}
+    <p class="muted" style="font-size:11px;margin:0 0 6px;">体脂肪率の推移</p>
+    ${bfChart}
+    ${bfTrendBlock}
+    <div style="border-top:1px solid var(--line);margin:12px 0 10px;padding-top:10px;">
+      ${row("体重", last.weight.toFixed(1), "kg")}
+      ${row("体脂肪率", last.bf.toFixed(1), "%")}
+      ${row("体脂肪量", last.fat.toFixed(1), "kg")}
+      ${row("除脂肪体重", last.lean.toFixed(1), "kg")}
+    </div>
     ${changeBlock}
     <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">家庭用の体組成計は体内の水分量で数%変わります。1回の値ではなく推移で見てください(目標カロリーの計算にも、直近${BODYFAT_AVG_COUNT}件までの平均を使っています)。</p>
   </div>`;
@@ -2499,9 +2537,11 @@ function lineChartSvg(points, colorHex, goalValue, avgPoints) {
   if (avgPoints && avgPoints.length === points.length) {
     // 生の値は小さな点だけにして、平均線を読み取りやすくする。
     // 点が多いときは間引く(1年ぶんだと点で線が埋まってしまうため)。
+    // 生の点は主役の色(colorHex)ではなく中間グレー(--ink-faint)にして、
+    // 「太い線=傾向」「淡い点=実測」の見分けをはっきりさせる(v44.5)。
     const step = Math.max(1, Math.ceil(points.length / 60));
     const rawDots = points.map((p,i) => (i % step === 0 || i === points.length-1)
-      ? `<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="1.8" fill="${colorHex}" opacity="0.35"/>` : "").join("");
+      ? `<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="1.8" fill="var(--ink-faint)" opacity="0.6"/>` : "").join("");
     const avgLine = avgPoints.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
     const lastAvg = avgPoints[avgPoints.length-1];
     return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}${rawDots}` +
@@ -2512,6 +2552,17 @@ function lineChartSvg(points, colorHex, goalValue, avgPoints) {
   const line = points.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
   const dots = points.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${colorHex}" stroke="#fff" stroke-width="2"/>`).join("");
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}<polyline points="${line}" fill="none" stroke="${colorHex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
+}
+// lineChartSvgの下に添える凡例(v44.5)。7日平均の線(colorHexそのまま)と
+// 実測の点(グレー固定)を実際の色で示す。以前は文字だけの「────」で色の
+// 説明になっていなかったため、線・点それぞれの実際の色を小さく描いて示す。
+function trendLegendHtml(colorHex) {
+  return `<span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;">` +
+    `<span style="display:inline-block;width:14px;height:2.5px;border-radius:2px;background:${colorHex};"></span>` +
+    `<span class="muted">7日平均</span>` +
+    `<span class="muted" style="opacity:0.5;margin:0 1px;">・</span>` +
+    `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink-faint);opacity:0.6;"></span>` +
+    `<span class="muted">実測</span></span>`;
 }
 // 各点について「その日を含む直近7日ぶんの記録」の平均を返す(v44)。
 // 単純に直近7件ではなく日付の範囲で見るので、記録が飛んでいる日があっても
@@ -2941,6 +2992,9 @@ function todayHtml() {
       <div style="margin-bottom:12px;">
         <div class="between" style="margin-bottom:4px;"><span class="muted">週間トレーニング</span><span class="mono" style="font-size:12px;">${thisWeek.count}/${goals.weeklyFreq}回</span></div>
         ${meterHtml(thisWeek.count, goals.weeklyFreq, "var(--coral)")}
+        ${(() => { const dl = daysLeftInWeek(); return dl > 0 && thisWeek.count < goals.weeklyFreq
+          ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">今週(月曜始まり)はあと${dl}日あります。まだ来ていない曜日は数えられないため、週の途中は分母より小さく出ます</p>`
+          : ""; })()}
       </div>
       <div>
         <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.effectiveTarget}kcal` : "未設定"}</span></div>
@@ -3241,7 +3295,7 @@ function weightHtml() {
           ? `<span class="mono" style="color:${diff < 0 ? "var(--teal)" : diff > 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}kg</span> <span class="muted">/ 1週間</span>`
           : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
         return chart + `<div class="between" style="margin-top:6px;">
-          <span class="muted" style="font-size:10.5px;">──── 7日平均 <span style="opacity:0.5;">・</span> 実測</span>
+          ${trendLegendHtml("var(--slate)")}
           <span style="font-size:12px;">${trend}</span>
         </div>
         <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。</p>`;
