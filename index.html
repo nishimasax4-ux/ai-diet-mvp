@@ -66,7 +66,15 @@
        width:100% を無視して枠からはみ出すことがある。念のため上限を明示する。 */
     max-width: 100%; min-width: 0;
   }
-  button { cursor: pointer; font-family: inherit; border: none; }
+  button { cursor: pointer; font-family: inherit; border: none; transition: transform 0.1s ease, opacity 0.1s ease, filter 0.1s ease; }
+  /* ボタン・選択チップ・カレンダーの日付セルを押したときの「押した感」(v44.6)。
+     このアプリはホーム画面に追加して使うPWAで、標準のボタンのようなOS側の
+     押下フィードバックが無いため、押している間は少し縮んで暗くなるようにする。
+     iOSのSafariは、画面のどこかにtouchstartのリスナーが無いと:activeが
+     効かない癖があるため、JS側で空のtouchstartリスナーを登録している。 */
+  button:active, .cal-cell:active { transform: scale(0.95); opacity: 0.75; }
+  .btn-primary:active, .chip:active, .sub-tab-btn:active, .btn-icon:active, .icon-btn:active { filter: brightness(0.9); }
+  .cal-cell { transition: transform 0.1s ease, opacity 0.1s ease; }
   .chip { padding: 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
   .chip.active { background: var(--teal); color: #fff; border-color: var(--teal); }
   .chip.active-a { background: var(--coral); color: #fff; border-color: var(--coral); }
@@ -171,7 +179,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v44.5";
+const APP_VERSION = "v44.7";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -183,12 +191,15 @@ const EXERCISES_BY_PART = {
   "腕": ["アームカール","トライセップエクステンション","ハンマーカール"],
   "腹筋": ["クランチ","プランク","レッグレイズ"],
 };
-const CARDIO_OPTIONS = ["ランニング","バイク","ウォーキング","クロストレーナー","リカベントバイク","その他"];
+const CARDIO_OPTIONS = ["ランニング","ジョギング","バイク","ウォーキング","クロストレーナー","リカベントバイク","その他"];
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
 // MET値の目安(Compendium of Physical Activities等を参考にした概算・ふつうの強度)。
+// ジョギングはランニングよりゆっくりめのペースを想定し、7.0(Compendiumの
+// "running, jogging, general"目安)。ランニングと同じ8.0で計算すると消費カロリーを
+// 1〜2割ほど多く見積もることになるため、v44.7で項目を分けた。
 // クロストレーナー(エリプティカル)は中強度の有酸素運動として5.0。
 // リカベントバイクは背もたれ付きで負荷が軽めになりやすいため、通常のバイク(7.0)より低めの4.5。
-const CARDIO_MET = { "ランニング":8, "バイク":7, "ウォーキング":3.5, "クロストレーナー":5, "リカベントバイク":4.5, "その他":5 };
+const CARDIO_MET = { "ランニング":8, "ジョギング":7, "バイク":7, "ウォーキング":3.5, "クロストレーナー":5, "リカベントバイク":4.5, "その他":5 };
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
 const MINUTE_QUICK_OPTIONS = [15,30,45,60]; // 有酸素の時間のワンタップ候補(分)。これ以外の時間は入力欄に直接入力できます
@@ -3448,14 +3459,24 @@ function progressBurnHtml() {
     </div>`;
   return label + burnStackedBarSvg(history) + legend + summary;
 }
+// 運動1件ぶんの概算消費カロリー(履歴の各行に表示する用、v44.6)。日ごとの合計
+// (estimateExerciseBurnBreakdownForDate)と同じ式を使うので、合計とも矛盾しない。
+// 体重が未記録のときは、日ごとの集計と同じく60kgを仮の値として使う。
+function estimateEntryBurn_(e, weightKg) {
+  if (e.type === "strength") return STRENGTH_KCAL_PER_SET;
+  const met = CARDIO_MET[e.exercise] || CARDIO_MET["その他"];
+  return Math.round((met * 3.5 * (weightKg || 60) / 200) * (e.minutes || 0));
+}
 function trainingEntryRowHtml(e) {
   const isStrength = e.type === "strength";
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  const burn = estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null);
   const detail = isStrength
     ? `<span style="font-weight:600;">[${esc(e.part)}]</span>${e.exercise ? " "+esc(e.exercise) : ""} <span class="mono" style="color:var(--sand);">${e.weight}kg × ${e.reps}</span>`
     : `${esc(e.exercise)} <span class="mono" style="color:var(--sand);">${e.minutes}分</span>`;
   return `<div class="entry-row">
     <div class="badge" style="background:${isStrength ? "var(--coral-soft)" : "var(--slate-soft)"};">${isStrength ? "🏋️" : "💨"}</div>
-    <div style="flex:1;">${detail}</div>
+    <div style="flex:1;">${detail}${burn ? ` <span class="mono muted">(約${burn}kcal)</span>` : ""}</div>
     <button class="del-btn" data-action="relog-training" data-id="${e.id}" title="今日も記録する">🔁</button>
     <button class="del-btn" data-action="edit-training" data-id="${e.id}">✏️</button>
     <button class="del-btn" data-action="del-training" data-id="${e.id}">🗑️</button>
@@ -4482,6 +4503,12 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 
 // ============ INIT ============
 selectedCalDate = localDateStr();
+// iOSのSafariは、ページ内のどこかにtouchstartのリスナーが登録されていないと
+// ボタンなどの:active(押している間のスタイル)がタップで発火しない癖がある
+// (マウスのクリックでは発火するため、PC・自動テストでは気づきにくい)。
+// ボタンを押したときの「押した感」(CSS側のbutton:active)を実際のiPhoneでも
+// 効かせるため、何もしない空のリスナーを登録しておく(v44.6)。
+document.addEventListener("touchstart", function () {}, { passive: true });
 loadConfig();
 loadSentSigs();
 loadState();
