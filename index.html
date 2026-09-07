@@ -169,11 +169,14 @@
 const CONFIG_KEY = "training-log-config";
 // lastKnownWriteAt: 上書き事故防止(v32)用。この端末が最後に把握した、シート側の
 // 最終書き込み時刻(Apps Scriptから返る値をそのまま保持する)。詳しくはsyncToSheet参照。
-let gasConfig = { url: "", token: "", lastKnownWriteAt: null };
+// sheetUrl: 「スプレッドシートを開く」ボタン用に、本人が任意で貼り付けたシートの
+// 閲覧URL(v46)。Apps ScriptのWebアプリURLとは別物(execで終わるURLを開いても
+// スプレッドシートの画面にはならない)なので、別の欄として持つ。同期には使わない。
+let gasConfig = { url: "", token: "", lastKnownWriteAt: null, sheetUrl: "" };
 function loadConfig() {
   try {
     const raw = localStorage.getItem(CONFIG_KEY);
-    if (raw) gasConfig = Object.assign({ url:"", token:"", lastKnownWriteAt:null }, JSON.parse(raw));
+    if (raw) gasConfig = Object.assign({ url:"", token:"", lastKnownWriteAt:null, sheetUrl:"" }, JSON.parse(raw));
   } catch (e) { console.error("config load error", e); }
 }
 function saveConfig() {
@@ -184,7 +187,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v46";
+const APP_VERSION = "v46.2";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -327,7 +330,7 @@ const WORKOUTS = {
 let entries = [];
 let weightEntries = [];
 let mealEntries = [];
-let goals = { weight: 65, weeklyFreq: 3, paceKgPerWeek: 0.5, startBodyFat: null, startBodyFatDate: null };
+let goals = { weight: 65, weeklyFreq: 3, paceKgPerWeek: 0.5 };
 let profile = null; // null until onboarding completes: {age, gender, height, activity, timeAvail}
 let moodByDate = {};
 let syncStatus = "idle";
@@ -1869,24 +1872,12 @@ function computeTargets(p, weight, goalWeight) {
 }
 // 体組成カード(v41)。体重だけでは「減った分が脂肪なのか筋肉なのか」が分からないため、
 // 体脂肪率を記録している場合に、体脂肪量と除脂肪体重の内訳・その変化を表示する。
-// 体重記録の中から、指定した日付にいちばん近い体重を探す(体脂肪率の
-// 「開始時点」を手入力したとき、その日にちょうど体重を記録していなくても
-// 体脂肪量・除脂肪体重を計算できるようにするため)。
-function resolveWeightNear_(dateStr) {
-  if (!dateStr || !weightEntries.length) return null;
-  const exact = weightEntries.find(w => w.date === dateStr);
-  if (exact) return exact.weight;
-  let best = null, bestDiff = Infinity;
-  for (const w of weightEntries) {
-    const diff = Math.abs(new Date(w.date) - new Date(dateStr));
-    if (diff < bestDiff) { bestDiff = diff; best = w; }
-  }
-  return best ? best.weight : null;
-}
 // 体組成(体重・体脂肪率・体脂肪量・除脂肪体重)の「開始時点」と「直近」を
 // まとめて計算する共通処理。体組成カードとXへのポスト文の両方から使う(v46)。
-// 「開始時点」は、設定で手入力した基準(goals.startBodyFat/startBodyFatDate)が
-// あればそれを優先し、なければ体脂肪率を記録した最初の1件を使う。
+// 「開始時点」は、体脂肪率を記録した最初の1件。過去の日付を基準にしたい場合は、
+// 体重タブの日付欄でその日を指定して体脂肪率つきで記録し直せば、その日が
+// 自動的に基準になる(同じ日付の記録は上書きされる仕組みのため、履歴の一覧に
+// 出てこない古い日付でも直接指定して追記・修正できる)。
 function computeBodyComposition_() {
   const withBf = weightEntries
     .filter(w => w.bodyFat != null && w.weight > 0)
@@ -1894,20 +1885,13 @@ function computeBodyComposition_() {
   const comp = w => ({ date: w.date, weight: w.weight, bf: w.bodyFat,
     fat: Math.round(w.weight * w.bodyFat / 100 * 10) / 10,
     lean: Math.round(w.weight * (1 - w.bodyFat / 100) * 10) / 10 });
-  if (!withBf.length) return { withBf: [], first: null, last: null, manualFirst: false };
-  let first = comp(withBf[0]), manualFirst = false;
-  if (goals.startBodyFat != null && goals.startBodyFatDate) {
-    const w = resolveWeightNear_(goals.startBodyFatDate);
-    if (w != null) {
-      first = comp({ date: goals.startBodyFatDate, weight: w, bodyFat: goals.startBodyFat });
-      manualFirst = true;
-    }
-  }
+  if (!withBf.length) return { withBf: [], first: null, last: null };
+  const first = comp(withBf[0]);
   const last = comp(withBf[withBf.length - 1]);
-  return { withBf, first, last, manualFirst };
+  return { withBf, first, last };
 }
 function bodyCompositionCardHtml() {
-  const { withBf, first, last, manualFirst } = computeBodyComposition_();
+  const { withBf, first, last } = computeBodyComposition_();
   if (!withBf.length) {
     return `<div class="card">
       <p class="section-title">🧬 体組成</p>
@@ -1944,13 +1928,9 @@ function bodyCompositionCardHtml() {
   // 描画関数・同じ7日平均の考え方を流用する。単位が違う(kg / %)ため体重の線と
   // 同じグラフに重ねると軸が2本になって読み違えのもとになるので、あえて別の
   // グラフにして、この体組成カードの中にまとめて置くことで「まとめて見える」
-  // ようにしている。設定で開始時点を手入力していて、実際の記録より前の日付なら、
-  // その1点をグラフの先頭に足して「開始時点からどう動いたか」を見せる。
+  // ようにしている。
   const compPoints = withBf.map(w => ({ date: w.date, weight: w.weight, bf: w.bodyFat,
     fat: Math.round(w.weight * w.bodyFat / 100 * 10) / 10 }));
-  if (manualFirst && first.date < compPoints[0].date) {
-    compPoints.unshift({ date: first.date, weight: first.weight, bf: first.bf, fat: first.fat });
-  }
   const bfPoints = compPoints.map(p => ({ date: p.date, value: p.bf }));
   const fatPoints = compPoints.map(p => ({ date: p.date, value: p.fat }));
   const bfAvg = bfPoints.length >= 3 ? movingAverage_(bfPoints, 7) : null;
@@ -4005,6 +3985,7 @@ function settingsHtml() {
         </div>
       </div>` : ""}
       <div style="margin-top:12px;">
+        ${gasConfig.sheetUrl ? `<button type="button" class="chip" data-action="open-sheet" style="width:100%;margin-bottom:10px;">📊 スプレッドシートを開く</button>` : ""}
         ${gasConfigured() && !gasConfigRevealed ? `
         <div class="between">
           <div>
@@ -4017,11 +3998,13 @@ function settingsHtml() {
         <input type="url" id="gas-url-input" value="${esc(gasConfig.url)}" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:8px;font-size:12px;">
         <label class="label">アクセストークン</label>
         <input type="password" id="gas-token-input" value="${esc(gasConfig.token)}" placeholder="Apps Script側に設定した合言葉" style="margin-bottom:8px;font-size:12px;">
+        <label class="label">スプレッドシートのURL(任意)</label>
+        <input type="url" id="gas-sheet-url-input" value="${esc(gasConfig.sheetUrl || "")}" placeholder="https://docs.google.com/spreadsheets/d/.../edit" style="margin-bottom:8px;font-size:12px;">
         <div class="row">
           <button class="chip active-b" data-action="save-gas-config">接続設定を保存</button>
           ${gasConfigured() ? `<button class="chip" data-action="cancel-gas-edit">キャンセル</button>` : ""}
         </div>
-        <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">この2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはApps Script側のスクリプトプロパティ <span class="mono">APP_TOKEN</span> と一致させてください。保存すると、次にこの画面を開いたときは内容が伏せて表示されます。</p>`}
+        <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">上の2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはApps Script側のスクリプトプロパティ <span class="mono">APP_TOKEN</span> と一致させてください。保存すると、次にこの画面を開いたときは内容が伏せて表示されます。<br>スプレッドシートのURLは「📊 スプレッドシートを開く」ボタン用で、同期には使いません。ブラウザでスプレッドシートを開いてアドレスバーからコピーしたものを貼り付けてください。空欄のままでも構いません。</p>`}
       </div>
     </div>
 
@@ -4051,20 +4034,6 @@ function settingsHtml() {
           ${PACE_OPTIONS.map(o => `<button class="chip ${currentPace()===o.value?"active":""}" data-action="set-pace" data-val="${o.value}">${o.label}</button>`).join("")}
         </div>
         <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">1週間に落としたいペースです。ここから1日あたりに必要な赤字(体脂肪1kg≒7200kcal)を計算し、目安カロリーを決めます。目標体重より軽い場合は、増量方向に0.25kg/週で計算します。</p>
-      </div>
-      <div style="border-top:1px solid var(--line);padding-top:12px;">
-        <p style="font-size:12px;margin:0 0 6px;">開始時点の体脂肪率(任意)</p>
-        <div class="field-row" style="margin-bottom:6px;">
-          <div class="f-val">
-            <label class="label">開始日</label>
-            <input type="date" id="goal-start-bodyfat-date-input" class="mono" value="${goals.startBodyFatDate || ""}">
-          </div>
-          <div class="f-val">
-            <label class="label">体脂肪率 (%)</label>
-            <input type="number" step="0.1" id="goal-start-bodyfat-input" class="mono" placeholder="例: 29.0" value="${goals.startBodyFat != null ? goals.startBodyFat : ""}">
-          </div>
-        </div>
-        <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">体重タブの「体組成」で、記録し始めるより前の日を基準にしたいときに使います。両方入力すると、その日にいちばん近い体重と組み合わせて「開始時点からの変化」を計算します(その日にちょうど体重が未記録でも構いません)。空欄のままなら、これまでどおり体脂肪率を最初に記録した日が基準になります。</p>
       </div>
     </div>
 
@@ -4767,12 +4736,14 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "save-gas-config") {
     const urlEl = document.getElementById("gas-url-input");
     const tokenEl = document.getElementById("gas-token-input");
+    const sheetUrlEl = document.getElementById("gas-sheet-url-input");
     const url = urlEl ? urlEl.value.trim() : "";
     const token = tokenEl ? tokenEl.value.trim() : "";
+    const sheetUrl = sheetUrlEl ? sheetUrlEl.value.trim() : "";
     // 接続先(URL)が変わる場合は別のシートの可能性があるため、上書き事故防止用の
     // 「最後に把握した書き込み時刻」もリセットする(古いシートの情報を新しいシートに
     // 誤って適用しないため)。
-    gasConfig = { url, token, lastKnownWriteAt: null };
+    gasConfig = { url, token, lastKnownWriteAt: null, sheetUrl };
     saveConfig();
     // 接続先が変わると別のスプレッドシートの可能性があるため、
     // 「送信済み」の記録は捨てて、次回は全件送り直す。
@@ -4792,6 +4763,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "reveal-gas-config") { gasConfigRevealed = true; renderTabContent(); }
   else if (action === "cancel-gas-edit") { gasConfigRevealed = false; renderTabContent(); }
+  else if (action === "open-sheet") { if (gasConfig.sheetUrl) window.open(gasConfig.sheetUrl, "_blank"); }
   else if (action === "export-json") { exportJson(); }
   // 復元(JSONから/シートから)は現在の記録を無条件に上書きするため、実行前に必ず
   // 確認ステップを挟む(confirmResetの「すべて削除」と同じ二段階確認パターン)。
@@ -4924,14 +4896,6 @@ document.getElementById("app").addEventListener("change", (e) => {
   } else if (e.target.id === "goal-freq-input") {
     const v = parseInt(e.target.value, 10);
     if (v > 0) { goals.weeklyFreq = v; saveState(); renderTabContent(); }
-  } else if (e.target.id === "goal-start-bodyfat-date-input") {
-    goals.startBodyFatDate = e.target.value || null;
-    saveState(); renderTabContent();
-  } else if (e.target.id === "goal-start-bodyfat-input") {
-    const raw = e.target.value;
-    const v = parseFloat(raw);
-    goals.startBodyFat = raw === "" ? null : (isNaN(v) ? goals.startBodyFat : v);
-    saveState(); renderTabContent();
   } else if (e.target.id === "profile-age-input") {
     profile.age = e.target.value; saveState(); renderTabContent();
   } else if (e.target.id === "profile-height-input") {
