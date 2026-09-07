@@ -21,6 +21,11 @@
        --slateは他の場所(サブタブのボタン・体重グラフの線など)でも広く使われて
        いるため、この一点だけのために値を変えず、専用の変数を別途用意している。 */
     --burn-line:#D6455A;
+    /* 記録が消えうる操作の警告専用(v44.9)。--coral(#E8927C)は白背景に対する
+       コントラストが2.4:1程度しかなく、いちばん読んでほしい警告文が
+       いちばん読みにくいという状態だった。グラフやドットの--coralはそのまま残し、
+       「読ませる警告文・危険なボタン」だけこの濃い赤(白背景で約5.9:1)を使う。 */
+    --danger:#C0392B; --danger-ink:#8E2A20;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
@@ -179,7 +184,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v44.7";
+const APP_VERSION = "v45";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -365,6 +370,27 @@ let selectedCardio = "ランニング";
 let selectedMealType = "朝食";
 let masterExercisePart = "胸"; // which part's tab is active in the master-data editor
 let historyView = "list";
+// ---- 記録が消えてしまう事故を防ぐための状態(v44.9) ----
+// このアプリは「端末のlocalStorageが正」で、その内容をまるごとシートへ書き写す方式のため、
+// 端末側が空になった瞬間に同期するとシート(唯一のバックアップ)まで空になってしまう。
+// 機種変更・ストレージ破損・全削除のいずれの経路でも同じ結末になるので、
+// 「記録が0件のときは送らずに止める」という1か所の関門で全部まとめて塞ぐ。
+let emptySyncBlocked = false;   // 0件のため送信を保留しているか
+let allowEmptySync = false;     // 本人が「それでもシートを空にする」と決めたか
+let dataLoadFailed = false;     // localStorageの読み込みに失敗したか(中身が壊れていた等)
+let storageWriteFailed = false; // localStorageへの保存に失敗したか(容量超過・プライベートモード等)
+let confirmForceSync = false;   // 「今すぐ全部を同期し直す」の確認待ち
+// 接続設定を保存した直後、シートに既に記録があった場合の選択待ち。
+// {sheetCount, localCount} を入れておき、設定タブに「どちらを残すか」を出す。
+let connectSheetChoice = null;
+// Apps Script接続設定(URL・トークン)を編集フォームとして開いているかどうか(v44.8)。
+// 一度保存したあとは、うっかり画面を見られても内容が分からないよう畳んでおき、
+// 「変更する」を押したときだけ入力欄を出す(要望⑦)。
+let gasConfigRevealed = false;
+// 運動・食事の履歴(リスト表示)で、どの日付をアコーディオン展開中か(v44.8)。
+// 初期状態はすべて閉じておき、見たい日だけタップして開く(要望⑥)。
+let trainingHistoryOpenDates = new Set();
+let mealHistoryOpenDates = new Set();
 let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedCalDate = null;
 let editing = null;
@@ -407,7 +433,7 @@ function updateEntryDateNotice(kind) {
 }
 // 設定タブの各セクションの開閉状態。よく使う同期・目標は常時表示、それ以外は
 // デフォルトで畳んでおき、スクロール量を減らす。
-let settingsOpenSections = { profile:false, master:false, data:false };
+let settingsOpenSections = { profile:false, masterExercise:false, masterMeal:false, data:false };
 
 let onboardStep = 0;
 let onboardListenerBound = false; // #appは毎回innerHTMLごと差し替わるが要素自体は使い回すため、
@@ -424,9 +450,13 @@ function localDateStr(d = new Date()) {
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
   return `${y}-${m}-${day}`;
 }
-function calcStreak(list) {
+// startDate(省略時は今日)を起点に、そこから遡って連続で記録がある日数を数える。
+// 「今日タブ」の🔥表示は昨日までの連続日数を見せたいので、todayHtml側で
+// 昨日を起点に呼び出す(v44.8)。今日まだ記録していないだけで、せっかく続いている
+// 連続記録が0にリセットされて見えてしまうのを防ぐため。
+function calcStreak(list, startDate) {
   const dateSet = new Set(list.map(e => e.date));
-  let streak = 0, cur = new Date();
+  let streak = 0, cur = startDate ? new Date(startDate + "T00:00:00") : new Date();
   while (dateSet.has(localDateStr(cur))) { streak++; cur.setDate(cur.getDate()-1); }
   return streak;
 }
@@ -982,7 +1012,13 @@ function loadState() {
       lastCardioMinutes = data.lastCardioMinutes || {};
       routineMaster = data.routineMaster || [];
     }
-  } catch (e) { console.error("load error", e); }
+  } catch (e) {
+    // 保存内容が壊れていた場合、ここで黙って初期状態に戻すと「まっさらな新規状態」として
+    // 立ち上がり、次の1件を記録した瞬間にシート(バックアップ)まで空で上書きされてしまう。
+    // 印を立てて、警告表示と同期の保留(syncToSheet側)につなげる(v44.9)。
+    console.error("load error", e);
+    dataLoadFailed = true;
+  }
   // First run (or upgrading from a version without a master list): seed the
   // exercise master from the built-in suggestions so there is something to
   // edit right away. Meals start empty since we can't guess what someone eats.
@@ -998,7 +1034,16 @@ function seedExerciseMasterIfEmpty() {
 function saveState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes, routineMaster }));
-  } catch (e) { console.error("save error", e); }
+    // 直前まで保存できていなかった場合は、復旧したことを警告表示にも反映する。
+    if (storageWriteFailed) { storageWriteFailed = false; renderDataWarning(); }
+  } catch (e) {
+    // 保存できなかったことを黙って握りつぶすと、画面には記録が出ているのに
+    // 次にアプリを開いたときには消えている、という最悪の形で気づくことになる(v44.9)。
+    // 容量超過やプライベートブラウズが原因のことが多いので、その場で知らせる。
+    console.error("save error", e);
+    storageWriteFailed = true;
+    renderDataWarning();
+  }
 }
 
 // シートへ送るデータ。以前は全カテゴリを同じ6列("項目1〜4")に詰め込んでいたため、
@@ -1239,6 +1284,27 @@ async function syncToSheet(force) {
   // この操作で必ず復旧できるようにしておくため。
   const { payload, sigs, skipped } = changedPayload_(!!force);
   const nothingToSend = Object.keys(payload).length === 0;
+  // 【安全弁】記録が1件も無い状態では、絶対にシートへ書き込まない(v44.9)。
+  // シートへの書き込みは各シートをclearしてから入れ直す全面上書きなので、
+  // 0件の状態で送ると、シートに入っている過去の記録がすべて消える。
+  // 0件になる経路は「機種変更した直後に接続設定を入れた」「localStorageが壊れた」
+  // 「すべてのデータを削除した」の3つがあり、いずれも本人にとっては
+  // 「バックアップが最も必要な瞬間」なので、ここで一律に止めて確認を求める。
+  // forceでも素通りさせない(「今すぐ全部を同期し直す」で消えては意味がないため)。
+  // 記録が戻った(または増えた)時点で、一度きりの許可は自動的に取り下げる。
+  // 「一度シートを空にしてよいと答えたら、以後ずっと無防備」にならないようにするため。
+  if ((entries.length + weightEntries.length + mealEntries.length) > 0) allowEmptySync = false;
+  if (!allowEmptySync && !nothingToSend && (entries.length + weightEntries.length + mealEntries.length) === 0) {
+    emptySyncBlocked = true;
+    syncInFlight = false;
+    syncPending = false;
+    syncStatus = "blocked";
+    renderSyncStatus();
+    renderDataWarning();
+    if (activeTab === "settings") renderTabContent();
+    return;
+  }
+  emptySyncBlocked = false;
   try {
     if (nothingToSend) {
       // 送るべき変更が無いので、通信自体を省く。
@@ -1293,11 +1359,39 @@ async function syncToSheet(force) {
   // (ヘッダーの☁️アイコンだけでなく、タップ後の結果がその場で見えるように)。
   if (activeTab === "settings") renderTabContent();
 }
+// 記録が消えかねない状況(保存失敗・読み込み失敗・0件のまま同期しようとした)を、
+// どのタブにいても目に入る位置に出す(v44.9)。オンボーディング画面にも出す必要がある。
+// ここは「気づかないまま失う」ことを防ぐのが目的なので、控えめな色は使わない。
+function dataWarningHtml() {
+  const blocks = [];
+  if (storageWriteFailed) {
+    blocks.push(`<p style="font-size:12.5px;margin:0 0 6px;font-weight:700;">⚠️ この端末に記録を保存できませんでした</p>
+      <p style="font-size:11.5px;margin:0;line-height:1.7;">画面には出ていますが、<b>このままアプリを閉じると消えます</b>。ストレージの空き容量が不足しているか、プライベートブラウズで開いている可能性があります。空き容量を確保してから、もう一度記録し直してください。</p>`);
+  }
+  if (dataLoadFailed) {
+    blocks.push(`<p style="font-size:12.5px;margin:0 0 6px;font-weight:700;">⚠️ 保存されていた記録を読み込めませんでした</p>
+      <p style="font-size:11.5px;margin:0 0 8px;line-height:1.7;">この端末の保存内容が壊れているため、記録が空の状態で起動しています。<b>Google Sheetsへの同期は安全のため止めてあります</b>(シートに残っている記録を、空の内容で上書きしてしまわないため)。設定タブの「☁️ シートから復元」で戻せます。</p>
+      <button class="chip" data-action="goto-restore">☁️ シートから復元する</button>`);
+  } else if (emptySyncBlocked) {
+    blocks.push(`<p style="font-size:12.5px;margin:0 0 6px;font-weight:700;">🛑 Google Sheetsへの同期を保留しています</p>
+      <p style="font-size:11.5px;margin:0 0 8px;line-height:1.7;">この端末の記録が0件です。このまま同期すると<b>シートに入っている記録もすべて消えます</b>。機種変更などでシートの内容を取り戻したい場合は「シートから復元」を、シートの側も空にしてよい場合は下のボタンを押してください。</p>
+      <div class="wrap">
+        <button class="chip" data-action="goto-restore">☁️ シートから復元する</button>
+        <button class="chip" data-action="allow-empty-sync" style="color:var(--danger);">⚠️ シートも空にする</button>
+      </div>`);
+  }
+  if (!blocks.length) return "";
+  return `<div style="background:#FDE9E9;border:1px solid var(--danger);border-radius:10px;padding:12px;margin:0 0 12px;color:var(--danger-ink);">${blocks.join('<hr style="border:none;border-top:1px solid var(--line);margin:10px 0;">')}</div>`;
+}
+function renderDataWarning() {
+  const el = document.getElementById("data-warning");
+  if (el) el.innerHTML = dataWarningHtml();
+}
 function renderSyncStatus() {
   const el = document.getElementById("sync-status");
   if (!el) return;
-  el.classList.toggle("error", syncStatus === "error" || syncStatus === "conflict");
-  const icon = { idle: "☁️", pending: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️", conflict: "⚠️" }[syncStatus];
+  el.classList.toggle("error", syncStatus === "error" || syncStatus === "conflict" || syncStatus === "blocked");
+  const icon = { idle: "☁️", pending: "☁️", syncing: '<span class="spin">🔄</span>', synced: "☁️", error: "⚠️", conflict: "⚠️", blocked: "🛑" }[syncStatus];
   const text = {
     idle: gasConfigured() ? "Google Sheets 未同期" : "Google Sheets 未設定",
     pending: "変更あり(まもなく同期)",
@@ -1305,6 +1399,7 @@ function renderSyncStatus() {
     synced: `同期済み${lastSyncedAt ? ` (${String(lastSyncedAt.getHours()).padStart(2,"0")}:${String(lastSyncedAt.getMinutes()).padStart(2,"0")})` : ""}`,
     error: "同期エラー(タップして再試行)",
     conflict: "他の端末に新しいデータあり(タップして確認)",
+    blocked: "同期を保留中(記録が0件・タップして確認)",
   }[syncStatus];
   el.innerHTML = `${icon} <span>${text}</span>`;
 }
@@ -1365,7 +1460,6 @@ function buildAdviceContext() {
 
   return {
     今日: localDateStr(),
-    今日の調子: moodByDate[localDateStr()] || null,
     プロフィール: profile ? { 年齢: profile.age, 性別: profile.gender, 身長cm: profile.height, 日常の活動量: profile.lifestyle || "デスクワーク中心", 運動習慣: profile.activity, 使える時間: profile.timeAvail } : null,
     目標: { 目標体重kg: goals.weight, 週の運動回数: goals.weeklyFreq },
     現在体重kg: latestWeight ? latestWeight.weight : null,
@@ -1896,7 +1990,7 @@ function calorieTargetBreakdownHtml(t) {
     </div>
     ${t.gapByExercise > 0 ? `
     <div style="background:#FDF1E7;border-radius:8px;padding:10px;margin-top:10px;">
-      <p style="font-size:11.5px;margin:0;line-height:1.7;">⚠️ 安全のため、目安カロリーが<b>基礎代謝(${t.bmr}kcal)を下回らないところで止めています。</b>そのため食事だけで作れる赤字は <span class="mono">${t.actualDeficit}</span>kcal/日で、目標ペースには <b><span class="mono">${t.gapByExercise}</span>kcal/日ぶん足りません</b>。この分は運動で補う想定です(運動した日は、その消費ぶんが目標カロリーに自動で上乗せされます)。ペースを「ゆっくり」に変えると、食事だけでも届くようになります。</p>
+      <p style="font-size:11.5px;margin:0;line-height:1.7;">⚠️ 安全のため、目安カロリーが<b>基礎代謝(${t.bmr}kcal)を下回らないところで止めています。</b>そのため食事だけで作れる赤字は <span class="mono">${t.actualDeficit}</span>kcal/日で、目標ペースには <b><span class="mono">${t.gapByExercise}</span>kcal/日ぶん足りません</b>。この分は運動で補う想定です(運動した日は、その消費がまずこの不足分の穴埋めに使われ、<b><span class="mono">${t.gapByExercise}</span>kcalを超えたぶんだけ</b>目標カロリーに上乗せされます)。ペースを「ゆっくり」に変えると、食事だけでも届くようになります。</p>
     </div>` : `
     <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.6;">食事だけで目標ペースに必要な${t.direction === "gain" ? "黒字" : "赤字"}(${Math.abs(t.actualDeficit)}kcal/日)を作れる計算です。運動した日は、その消費ぶんが目標カロリーに上乗せされます。</p>`}
 
@@ -1954,11 +2048,11 @@ function resolveWorkoutSuggestion(w) {
   // cardio
   return { ...w, exercise: "", displayName: w.name, displayDetail: `${w.min}分` };
 }
-function pickWorkout(mood) {
-  const baseLevel = TIME_TO_LEVEL[(profile && profile.timeAvail) || "10-15分"] || "medium";
-  let level = baseLevel;
-  if (mood === "tired") level = "low";
-  else if (mood === "energetic") level = baseLevel === "low" ? "medium" : "high";
+// 「今日のおすすめ」の運動を選ぶ。以前は「今日の調子」ボタン(疲れた/ふつう/元気)の
+// 自己申告で強度を上下させていたが、そのボタン自体を廃止したため(v44.8)、
+// 利用可能時間(プロフィールのtimeAvail)だけで決まる基準の強度をそのまま使う。
+function pickWorkout() {
+  const level = TIME_TO_LEVEL[(profile && profile.timeAvail) || "10-15分"] || "medium";
   const pool = WORKOUTS[level];
   const w = pool[dayOfYear(new Date()) % pool.length];
   return resolveWorkoutSuggestion(w);
@@ -2240,24 +2334,55 @@ function mealSuggestionCardHtml() {
     <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">目標カロリーと、これまでにその区分で記録した内容をもとにした提案です(カロリー・栄養素はいずれも目安)。体調や持病に関わる食事制限がある場合は、医師・管理栄養士の指示を優先してください。</p>
   </div>`;
 }
+// 「AIのひとこと」カードの既定コメント(外部AIに未接続、または問い合わせる前に
+// 表示するルールベースの一言)。以前は「今日の調子」ボタンの自己申告に応じて
+// 文面を変えていたが、その場の主観よりも実際の記録(運動・体重・食事)を見た
+// ほうが的確なので、直近の記録から組み立てる形に変更した(v44.8)。
 function generateDailyAdvice() {
   const today = localDateStr();
-  const mood = moodByDate[today];
   const parts = [];
-  if (mood === "tired") parts.push("今日は疲れているようですね。トレーニングは軽めにして、無理のない範囲で過ごしましょう。");
-  else if (mood === "energetic") parts.push("今日は調子が良さそうですね!予定より少しだけ負荷を上げてみましょう。");
-  else if (!mood) parts.push("今日の調子を教えてください。それに合わせておすすめの運動を調整します。");
+
+  // 運動の継続状況。せっかく続いている記録を具体的に褒める/まだなら軽く促す。
+  const streak = calcStreak(entries, yesterdayDateStr());
+  const thisWeek = weekBuckets(1)[0];
+  if (streak >= 3) parts.push(`${streak}日連続で運動を記録できています。この調子を続けましょう。`);
+  else if (thisWeek && thisWeek.count === 0) parts.push("今週はまだ運動の記録がありません。軽い運動からで大丈夫なので、体を動かしてみましょう。");
   else parts.push("いつも通りのペースで大丈夫です。");
+
+  // 直近1週間でよくやっている種目に具体的に触れる(記録をちゃんと見ていると伝わるように)。
+  const since7 = localDateStr(new Date(Date.now() - 6 * 86400000));
+  const exCount = {};
+  entries.filter(e => e.date >= since7).forEach(e => {
+    const name = e.type === "strength" ? (e.exercise || e.part) : e.exercise;
+    if (name) exCount[name] = (exCount[name] || 0) + 1;
+  });
+  const topExercise = Object.keys(exCount).sort((a, b) => exCount[b] - exCount[a])[0];
+  if (topExercise) parts.push(`直近1週間は${topExercise}によく取り組んでいますね。`);
+
+  // 体重の傾向(直近1週間で意味のある変化があれば触れる)。
+  const sortedW = [...weightEntries].sort((a, b) => a.date < b.date ? -1 : 1);
+  if (sortedW.length >= 2) {
+    const latest = sortedW[sortedW.length - 1];
+    const weekAgo = [...sortedW].reverse().find(w => w.date <= since7) || sortedW[0];
+    const diff = round1_(latest.weight - weekAgo.weight);
+    if (weekAgo.date !== latest.date && Math.abs(diff) >= 0.2) {
+      parts.push(`体重は直近1週間で${diff > 0 ? "+" : ""}${diff}kgの変化です。`);
+    }
+  }
 
   const targets = getEffectiveCalorieTarget(today);
   if (targets) {
-    const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
+    const todayCal = mealEntries.filter(m => m.date === today).reduce((s, m) => s + (m.calories || 0), 0);
     const remaining = targets.effectiveTarget - todayCal;
     if (todayCal > 0) {
       if (remaining < -100) parts.push(`カロリーは目標より${Math.abs(Math.round(remaining))}kcalほど多めですが、気にしすぎなくて大丈夫。明日以降で自然に調整できます。`);
-      else if (remaining > targets.effectiveTarget*0.5) parts.push("まだ食事の記録が少なめです。しっかり栄養を摂りましょう。");
+      else if (remaining > targets.effectiveTarget * 0.5) parts.push("まだ食事の記録が少なめです。しっかり栄養を摂りましょう。");
     }
-    if (targets.exerciseBurn > 0) parts.push(`今日の運動で約${targets.exerciseBurn}kcal多く消費している分、目標カロリーを上乗せしています。`);
+    if (targets.exerciseBurn > 0) {
+      parts.push(targets.exerciseBonus > 0
+        ? `今日の運動で約${targets.exerciseBurn}kcal消費しているので、${targets.exerciseBonus}kcalぶん目標カロリーを上乗せしています。`
+        : `今日の運動で約${targets.exerciseBurn}kcal消費しています。食事だけでは足りない赤字の穴埋めに充てているので、目標カロリーは据え置きです。`);
+    }
   }
   return parts.join(" ");
 }
@@ -2305,8 +2430,36 @@ function getEffectiveCalorieTarget(dateStr) {
   const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
   const weightKg = latestWeight ? latestWeight.weight : null;
   const exerciseBurn = weightKg ? estimateExerciseBurnForDate(dateStr, weightKg) : 0;
-  const effectiveTarget = Math.round(targets.targetCalories + exerciseBurn);
-  return { ...targets, exerciseBurn, effectiveTarget };
+  // 運動ぶんの扱い(v44.9で修正)。
+  // 目安カロリーは安全のため基礎代謝より下げないので、ペースによっては
+  // 「食事だけでは目標ペースに足りない分」(gapByExercise)が残る。画面では
+  // それを『この分は運動で補う想定です』と案内している。
+  // ところが以前は、運動の消費をまるごと目標カロリーに上乗せしていたため、
+  // 運動しても不足分がそのまま残り続け(消費した分だけ食べてよいことになるので)、
+  // 「補う想定」が永久に果たされないという自己矛盾があった。
+  //   例) 必要な赤字514・食事だけの赤字331・不足183 のとき、
+  //       60分走って672kcal消費しても、実際の赤字は331のまま変わらなかった。
+  // そこで、運動の消費はまずこの不足分の穴埋めに使い、それを超えたぶんだけを
+  // 目標カロリーに上乗せする。上の例なら 672−183=489 を上乗せし、
+  // 実際の赤字は514(=目標ペースちょうど)になる。
+  // 不足が無い場合(gapByExercise=0)は、これまでどおり消費がそのまま上乗せされる。
+  const gap = targets.gapByExercise || 0;
+  const gapCoveredByExercise = Math.min(exerciseBurn, gap);
+  const exerciseBonus = Math.max(0, exerciseBurn - gap);
+  const effectiveTarget = Math.round(targets.targetCalories + exerciseBonus);
+  return { ...targets, exerciseBurn, gapCoveredByExercise, exerciseBonus, effectiveTarget };
+}
+// 「今日の目標カロリーに運動ぶんがどう反映されているか」の説明文(v44.9)。
+// 3か所で同じ説明を出しているので、食い違わないようここで一本化する。
+function exerciseTargetNoteText_(t) {
+  if (!t || !t.exerciseBurn) return "";
+  if (t.exerciseBonus <= 0) {
+    return `今日の運動 ${t.exerciseBurn}kcal は、食事だけでは足りない赤字(${t.gapByExercise}kcal/日)の穴埋めに使っています`;
+  }
+  if (t.gapCoveredByExercise > 0) {
+    return `今日の運動 ${t.exerciseBurn}kcal のうち ${t.gapCoveredByExercise}kcal を不足分の穴埋めに使い、残り ${t.exerciseBonus}kcal を目標に加算しています`;
+  }
+  return `基礎消費 ${t.tdee}kcal + 今日の運動 ${t.exerciseBurn}kcal を目標に加算しています`;
 }
 // 記録開始からの累計(摂取・消費・その差)(v38)。集計の対象は「カロリーを1kcal以上
 // 入力した日」だけに限る。カロリーを入れていない日まで摂取0kcalとして数えると、実際には
@@ -2497,6 +2650,44 @@ function importJsonFile(file) {
   };
   reader.readAsText(file);
 }
+// 接続設定を保存した直後に呼ぶ(v44.9)。こちらの内容を送るのではなく、
+// 「シートに何が入っているか」をまず見に行くだけの処理。
+//  ・上書き事故防止の基準時刻(lastKnownWriteAt)をここで仕込む
+//  ・シートに記録があり、この端末が空 → 復元を促す(同期は安全弁で止まっている)
+//  ・シートに記録があり、この端末にも記録がある → どちらを残すか確認する
+//  ・シートが空 → これまでどおり普通に同期する
+async function inspectSheetAfterConnect_() {
+  const localCount = entries.length + weightEntries.length + mealEntries.length;
+  try {
+    syncStatus = "syncing"; renderSyncStatus();
+    const data = await gasPost({ action: "load" });
+    if (!data || data.status !== "ok" || !data.payload) throw new Error((data && data.message) || "読み込みに失敗しました");
+    // この端末は「今のシートの状態」を把握した。以後の同期で食い違いチェックが働く。
+    gasConfig.lastKnownWriteAt = data.lastWriteAt || null;
+    saveConfig();
+    const p = data.payload || {};
+    const rowsOf = (name) => ((p[name] && p[name].rows) || []).length;
+    const sheetCount = rowsOf("筋トレ") + rowsOf("有酸素") + rowsOf("体重") + rowsOf("食事");
+    if (sheetCount > 0) {
+      // シートに記録がある。こちらの内容で勝手に上書きせず、必ず本人に選ばせる。
+      connectSheetChoice = { sheetCount, localCount };
+      syncStatus = localCount === 0 ? "blocked" : "idle";
+      if (localCount === 0) emptySyncBlocked = true;
+    } else {
+      connectSheetChoice = null;
+      syncStatus = "idle";
+      scheduleSync();
+    }
+  } catch (e) {
+    // 見に行けなかった場合も、こちらから送りつけることはしない(判断材料が無いため)。
+    connectSheetChoice = null;
+    syncStatus = "error";
+    lastSyncError = friendlySyncError_(e && e.message ? e.message : String(e));
+  }
+  renderSyncStatus();
+  renderDataWarning();
+  if (activeTab === "settings") renderTabContent();
+}
 async function restoreFromSheet() {
   if (!gasConfigured()) {
     dataOpMessage = "先に接続設定(URL・トークン)を保存してください"; dataOpError = true; renderTabContent(); return;
@@ -2519,7 +2710,9 @@ async function restoreFromSheet() {
     gasConfig.lastKnownWriteAt = data.lastWriteAt || null;
     saveConfig();
     syncConflict = null;
-    if (syncStatus === "conflict") syncStatus = "idle";
+    if (syncStatus === "conflict" || syncStatus === "blocked") syncStatus = "idle";
+    // 記録が戻ったので、0件を理由に止めていた保留と、読み込み失敗の警告は解除する(v44.9)。
+    emptySyncBlocked = false; dataLoadFailed = false; connectSheetChoice = null;
     dataOpMessage = `シートから復元しました(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)`;
     dataOpError = false;
     renderApp();
@@ -2796,6 +2989,11 @@ function renderOnboarding() {
   ];
   document.getElementById("app").innerHTML = `
     <h1>🏋️ Training Log + AI</h1>
+    ${dataLoadFailed ? `
+    <div style="background:#FDE9E9;border:1px solid var(--danger);border-radius:10px;padding:12px;margin:10px 0 14px;color:var(--danger-ink);">
+      <p style="font-size:12.5px;margin:0 0 6px;font-weight:700;">⚠️ 保存されていた記録を読み込めませんでした</p>
+      <p style="font-size:11.5px;margin:0;line-height:1.7;">この端末の保存内容が壊れていたため、初回起動と同じ画面が出ています。<b>Google Sheetsに残っている記録は無事です</b>(空の内容で上書きしてしまわないよう、同期は止めてあります)。この画面を進めたあと、設定タブの「☁️ シートから復元」で記録を戻せます。</p>
+    </div>` : ""}
     <p class="muted" style="margin:6px 0 16px;">まずはあなたのことを教えてください(記録データはそのまま引き継がれます)</p>
     <div class="card">
       ${steps.map((s,i) => `<div class="onboard-step ${i===onboardStep?"active":""}">${s}</div>`).join("")}
@@ -2863,6 +3061,7 @@ function renderApp() {
       <button class="icon-btn" data-action="go-settings">⚙️</button>
     </div>
     <button id="sync-status"></button>
+    <div id="data-warning"></div>
     <div id="tab-content"></div>
     <div class="tabbar">
       <button class="tab-item" data-tab="today"><span class="ic">🏠</span>今日</button>
@@ -2872,6 +3071,7 @@ function renderApp() {
       <button class="tab-item" data-tab="settings"><span class="ic">⚙️</span>設定</button>
     </div>`;
   renderSyncStatus();
+  renderDataWarning();
   renderTabContent();
   updateTabbarActive();
 }
@@ -2908,7 +3108,7 @@ function switchTab(tab) {
 // ============ TODAY TAB ============
 function todayHtml() {
   const today = localDateStr();
-  const streak = calcStreak(entries);
+  const streak = calcStreak(entries, yesterdayDateStr());
   const trainedDates = new Set(entries.map(e => e.date));
   const dots = last7Days().map(d => {
     const filled = trainedDates.has(localDateStr(d));
@@ -2918,13 +3118,7 @@ function todayHtml() {
     </div>`;
   }).join("");
 
-  const mood = moodByDate[today];
-  const workout = pickWorkout(mood);
-  const moodBtns = [
-    { key:"tired", label:"😴 疲れた" },
-    { key:"normal", label:"🙂 ふつう" },
-    { key:"energetic", label:"💪 元気" },
-  ].map(m => `<button class="chip ${mood===m.key?"active":""}" data-action="set-mood" data-val="${m.key}" style="flex:1;text-align:center;">${m.label}</button>`).join("");
+  const workout = pickWorkout();
 
   const sortedAscW = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
   const startW = sortedAscW[0], latestW = sortedAscW[sortedAscW.length-1];
@@ -2938,9 +3132,6 @@ function todayHtml() {
   const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
   const balanceHistory = computeCalorieBalanceHistory(14);
   const balanceAdvice = balanceHistory ? generateBalanceAdvice(balanceHistory) : null;
-  const showCopyYesterday = yesterdayHasRecords();
-  const yesterdayHadTraining = entries.some(e => e.date === yesterdayDateStr());
-  const yesterdayMealTypes = yesterdayMealTypesAvailable();
 
   return `
     <div class="card">
@@ -2949,32 +3140,15 @@ function todayHtml() {
         <div style="flex:1;">
           <div class="row" style="gap:4px;align-items:baseline;">
             <span class="mono" style="font-size:20px;font-weight:700;">${streak}</span>
-            <span class="muted">日連続</span>
+            <span class="muted">日連続(昨日まで)</span>
           </div>
           <div class="row" style="gap:6px;margin-top:6px;">${dots}</div>
         </div>
       </div>
     </div>
 
-    ${showCopyYesterday ? `
-    <div class="card">
-      <p class="section-title" style="margin:0 0 8px;">📋 昨日の記録をコピー</p>
-      ${yesterdayHadTraining ? `
-      <div class="between" style="margin-bottom:8px;">
-        <span style="font-size:12.5px;">🏋️ 運動</span>
-        <button class="chip active-b" data-action="copy-yesterday-training">コピー</button>
-      </div>` : ""}
-      ${yesterdayMealTypes.length ? `
-      <p class="muted" style="font-size:11px;margin:0 0 6px;">🍽️ 食事(区分ごとにコピーできます)</p>
-      <div class="wrap" style="margin-bottom:8px;">
-        ${yesterdayMealTypes.map(t => `<button class="chip" data-action="copy-yesterday-meal" data-val="${t}">${t}</button>`).join("")}
-      </div>` : ""}
-      <button class="chip" data-action="copy-yesterday" style="width:100%;text-align:center;">まとめて全部コピー</button>
-    </div>` : ""}
-
     <div class="card">
       <p class="section-title">🤖 AIのひとこと</p>
-      <div class="row" style="margin-bottom:10px;">${moodBtns}</div>
       <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${
         aiAdvice ? esc(aiAdvice.text).replace(/\n/g, "<br>") : esc(generateDailyAdvice())
       }</p>
@@ -3010,7 +3184,7 @@ function todayHtml() {
       <div>
         <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.effectiveTarget}kcal` : "未設定"}</span></div>
         ${targets ? meterHtml(todayCal, targets.effectiveTarget, "var(--teal)") : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力すると計算されます</p>'}
-        ${targets && targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">基礎消費 ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
+        ${targets && targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">${exerciseTargetNoteText_(targets)}</p>` : ""}
       </div>
     </div>
 
@@ -3026,8 +3200,6 @@ function todayHtml() {
         <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの概算です(外部AIには接続していません)。運動の消費カロリーは種目・時間からの簡易推定です。</p>
       ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、カロリー収支の推移とアドバイスが表示されます。</p>'}
     </div>
-
-    ${mealSuggestionCardHtml()}
 
     ${calorieTotalsCardHtml()}`;
 }
@@ -3045,22 +3217,37 @@ function mealsHtml() {
   // 「今日の状況」「収支グラフ」「このグラフ」の3か所で数字が食い違うことはない。
   const intakeHistory = computeCalorieBalanceHistory(14);
   const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
+  // 昨日の食事をそのままコピーしたいという要望向け(v44.8。以前は「今日」タブに
+  // 運動とまとめて出ていたが、食事を触るのは食事タブなのでこちらに移した)。
+  const yesterdayMealTypes = yesterdayMealTypesAvailable();
 
   return `
     ${photoCardHtml()}
+
+    ${yesterdayMealTypes.length ? `
+    <div class="card">
+      <p class="section-title" style="margin:0 0 8px;">📋 昨日の食事をコピー</p>
+      <p class="muted" style="font-size:11px;margin:0 0 6px;">区分ごとにコピーできます</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${yesterdayMealTypes.map(t => `<button class="chip" data-action="copy-yesterday-meal" data-val="${t}">${t}</button>`).join("")}
+      </div>
+      <button class="chip" data-action="copy-yesterday-meals-all" style="width:100%;text-align:center;">まとめてコピー</button>
+    </div>` : ""}
 
     <div class="card">
       <p class="section-title">🍽️ 今日の食事</p>
       ${targets ? `
         <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${todayCal}</span><span class="muted">目標 ${targets.effectiveTarget} kcal</span></div>
         ${meterHtml(todayCal, targets.effectiveTarget, "var(--teal)")}
-        ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">基礎消費 ${targets.tdee}kcal + 今日の運動 ${targets.exerciseBurn}kcal を目標に加算しています</p>` : ""}
+        ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">${exerciseTargetNoteText_(targets)}</p>` : ""}
         <div class="row" style="margin-top:12px;">
           <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein.toFixed(1)}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
           <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat.toFixed(1)}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
           <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">炭水化物</p><p class="mono" style="margin:0;">${todayCarb.toFixed(1)}/${targets.targetCarb}g</p>${meterHtml(todayCarb, targets.targetCarb, "var(--slate)")}</div>
         </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
     </div>
+
+    ${mealSuggestionCardHtml()}
 
     <div class="card">
       <p class="section-title">食事を記録</p>
@@ -3112,7 +3299,7 @@ function mealsHtml() {
 
     <div class="card">
       <p class="section-title">📖 食事の履歴</p>
-      ${mealHistoryHtml()}
+      <div id="meal-history-section">${mealHistoryHtml()}</div>
     </div>`;
 }
 // 食事を日付ごとにグループ化して新しい順に表示する。「今日の食事」カードは
@@ -3184,6 +3371,7 @@ function mealHistoryHtml() {
   return dates.map(d => {
     const dd = new Date(d + "T00:00:00");
     const dayTotal = grouped[d].reduce((s,m) => s + (m.calories||0), 0);
+    const isOpen = mealHistoryOpenDates.has(d);
     const items = grouped[d].map(m => `
       <div class="entry-row">
         <div class="badge" style="background:var(--teal-soft);font-size:13px;">${m.mealType[0]}</div>
@@ -3196,15 +3384,25 @@ function mealHistoryHtml() {
         <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
       </div>`).join("");
     return `<div style="margin-bottom:14px;">
-      <div class="between" style="margin-bottom:6px;">
+      <button type="button" class="between" style="width:100%;background:none;border:none;padding:0;text-align:left;margin-bottom:6px;" data-action="toggle-meal-history-day" data-date="${d}">
         <span class="mono" style="font-weight:700;font-size:14px;">${d}${d===today?" (今日)":""} <span class="muted" style="font-weight:400;">(${WEEKDAY[dd.getDay()]})</span></span>
-        ${dayTotal ? `<span class="muted mono" style="font-size:11px;">計${dayTotal}kcal</span>` : ""}
-      </div>
+        <span class="row" style="gap:8px;width:auto;align-items:center;">
+          ${dayTotal ? `<span class="muted mono" style="font-size:11px;">計${dayTotal}kcal</span>` : ""}
+          <span class="muted" id="meal-history-chevron-${d}">${isOpen ? "▾" : "▸"}</span>
+        </span>
+      </button>
       ${dayEnergyLineHtml_(d)}
       ${dayPfcHtml_(d)}
-      ${items}
+      <div id="meal-history-items-${d}" class="${isOpen ? "" : "hidden"}" style="margin-top:6px;">${items}</div>
     </div>`;
   }).join("");
+}
+// 「📖 食事の履歴」だけを再描画する(アコーディオン開閉用)。食事タブ全体を
+// renderTabContent()で作り直すと、入力中の食事名などが消えてしまうため、
+// この専用idの中身だけを差し替える(v44.8)。
+function renderMealHistory() {
+  const el = document.getElementById("meal-history-section");
+  if (el) el.innerHTML = mealHistoryHtml();
 }
 
 // ============ X(旧Twitter)へのシェア(v37) ============
@@ -3354,7 +3552,19 @@ function weightHtml() {
 // ============ TRAINING TAB(筋トレ・有酸素の記録 + 進捗 + 履歴) ============
 function trainingHtml() {
   const todayHasTraining = entries.some(e => e.date === localDateStr());
+  // 昨日と同じ内容を運動しているだけ、というのはよくあるので、昨日のトレーニング
+  // 記録があるときだけワンタップでコピーできるようにする(v44.8。以前は「今日」
+  // タブに食事とまとめて出ていたが、運動を触るのは運動タブなのでこちらに移した)。
+  const yesterdayHadTraining = entries.some(e => e.date === yesterdayDateStr());
   return `
+    ${yesterdayHadTraining ? `
+    <div class="card">
+      <div class="between">
+        <span style="font-size:12.5px;">📋 昨日の運動をコピー</span>
+        <button class="chip active-b" data-action="copy-yesterday-training">コピー</button>
+      </div>
+    </div>` : ""}
+
     <div class="card">
       <div class="row" style="margin-bottom:14px;">
         <button class="sub-tab-btn ${trainingSubTab==="strength"?"active-a":""}" data-action="select-training-type" data-val="strength">🏋️ 筋トレ</button>
@@ -3564,15 +3774,25 @@ function renderHistory() {
     if (dates.length === 0) {
       body = '<p class="muted">まだ運動の記録がありません。今日のトレーニングを記録してみましょう。</p>';
     } else {
+      const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
       body = dates.map(d => {
         const dd = new Date(d + "T00:00:00");
-        const items = entries.filter(e => e.date === d).map(trainingEntryRowHtml).join("");
+        const dayItems = entries.filter(e => e.date === d);
+        const dayBurn = dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
+        const isOpen = trainingHistoryOpenDates.has(d);
+        const items = dayItems.map(trainingEntryRowHtml).join("");
         return `<div style="margin-bottom:14px;">
-          <div class="row" style="gap:6px;align-items:baseline;margin-bottom:6px;">
-            <span class="mono" style="font-weight:700;font-size:14px;">${d}</span>
-            <span class="muted">(${WEEKDAY[dd.getDay()]})</span>
-          </div>
-          ${items}
+          <button type="button" class="between" style="width:100%;background:none;border:none;padding:0;text-align:left;" data-action="toggle-history-day" data-date="${d}">
+            <span class="row" style="gap:6px;width:auto;align-items:baseline;">
+              <span class="mono" style="font-weight:700;font-size:14px;">${d}</span>
+              <span class="muted">(${WEEKDAY[dd.getDay()]})</span>
+            </span>
+            <span class="row" style="gap:8px;width:auto;align-items:center;">
+              ${dayBurn ? `<span class="muted mono" style="font-size:11px;">計約${dayBurn}kcal</span>` : ""}
+              <span class="muted" id="history-chevron-${d}">${isOpen ? "▾" : "▸"}</span>
+            </span>
+          </button>
+          <div id="history-items-${d}" class="${isOpen ? "" : "hidden"}" style="margin-top:6px;">${items}</div>
         </div>`;
       }).join("");
       body += '<p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.5;">体重は「体重」タブ、食事は「食事」タブの「📖 食事の履歴」で確認できます。カレンダー表示なら、その日の全記録をまとめて見られます。</p>';
@@ -3674,8 +3894,22 @@ function settingsHtml() {
         <p style="font-size:11.5px;margin:0;line-height:1.7;">接続先のApps Scriptが、このアプリ用ではないコード(差分同期版など)になっているため、同期が失敗します。配布物の <span class="mono">apps-script.gs</span> の中身を貼り直したうえで、<b>「デプロイ」→「デプロイを管理」→ 鉛筆マーク → バージョン「新バージョン」→「デプロイ」</b>まで行ってください(コードを保存しただけでは反映されません)。</p>
       </div>` : ""}
       <p style="font-size:13px;margin:0 0 8px;">Google Sheets同期の状態は上部のステータス表示、またはタップで再試行できます。</p>
-      <button class="chip" data-action="retry-sync">今すぐ全部を同期し直す</button>
-      <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">ふだんは変更のあった記録だけを自動で送っています。シートの中身がおかしいときは、このボタンで全件を送り直せます。</p>
+      ${connectSheetChoice ? `
+      <div style="background:#FDE9E9;border:1px solid var(--danger);border-radius:8px;padding:11px;margin:0 0 12px;color:var(--danger-ink);">
+        <p style="font-size:12.5px;margin:0 0 8px;font-weight:700;">📋 接続したシートには、すでに記録が入っています</p>
+        <p style="font-size:11.5px;margin:0 0 10px;line-height:1.7;">シート側に <b>${connectSheetChoice.sheetCount}件</b>、この端末に <b>${connectSheetChoice.localCount}件</b> の記録があります。どちらを残すかを選ぶまで、同期は止めてあります。${connectSheetChoice.localCount === 0 ? "<br><b>この端末は0件なので、通常は「シートの内容を取り込む」を選んでください。</b>" : ""}</p>
+        <div class="wrap">
+          <button class="chip" data-action="connect-use-sheet">☁️ シートの内容を取り込む</button>
+          <button class="chip" data-action="connect-use-local" style="color:var(--danger);">⬆️ この端末の内容でシートを上書きする</button>
+        </div>
+      </div>` : ""}
+      ${confirmForceSync
+        ? `<div style="border:1px solid var(--danger);border-radius:8px;padding:11px;margin:0 0 10px;color:var(--danger-ink);">
+             <p style="font-size:11.5px;margin:0 0 10px;line-height:1.7;">この端末の記録(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)で、<b>シートの内容を全部置き換えます</b>。他の端末でつけた記録がシートにある場合、それも消えます。</p>
+             <div class="row"><button class="chip" data-action="force-sync-yes" style="color:var(--danger);">上書きして送信する</button><button class="chip" data-action="force-sync-no">キャンセル</button></div>
+           </div>`
+        : `<button class="chip" data-action="retry-sync">今すぐ全部を同期し直す</button>`}
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">ふだんは変更のあった記録だけを自動で送っています。シートの中身がおかしいときは、このボタンで全件を送り直せます(シートはこの端末の内容で置き換わります)。</p>
       ${backendAiKeys ? `
       <div style="background:${backendAiKeys.groq ? "var(--paper)" : "#FDF1E7"};border-radius:8px;padding:10px;margin-top:12px;">
         <p style="font-size:11.5px;margin:0 0 6px;font-weight:700;">AI接続の状態${backendVersion ? ` <span class="muted mono" style="font-weight:400;">(Apps Script ${esc(backendVersion)})</span>` : ""}</p>
@@ -3696,12 +3930,23 @@ function settingsHtml() {
         </div>
       </div>` : ""}
       <div style="margin-top:12px;">
+        ${gasConfigured() && !gasConfigRevealed ? `
+        <div class="between">
+          <div>
+            <p style="font-size:12px;margin:0 0 3px;color:var(--teal);font-weight:600;">✅ 接続設定は登録済みです</p>
+            <p class="muted mono" style="font-size:11px;margin:0;">URL: ●●●●●●●●●●●● ／ トークン: ●●●●●●●●</p>
+          </div>
+          <button class="chip" data-action="reveal-gas-config">変更する</button>
+        </div>` : `
         <label class="label">Apps Script Webアプリ URL</label>
         <input type="url" id="gas-url-input" value="${esc(gasConfig.url)}" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:8px;font-size:12px;">
         <label class="label">アクセストークン</label>
         <input type="password" id="gas-token-input" value="${esc(gasConfig.token)}" placeholder="Apps Script側に設定した合言葉" style="margin-bottom:8px;font-size:12px;">
-        <button class="chip active-b" data-action="save-gas-config">接続設定を保存</button>
-        <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">この2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはApps Script側のスクリプトプロパティ <span class="mono">APP_TOKEN</span> と一致させてください。</p>
+        <div class="row">
+          <button class="chip active-b" data-action="save-gas-config">接続設定を保存</button>
+          ${gasConfigured() ? `<button class="chip" data-action="cancel-gas-edit">キャンセル</button>` : ""}
+        </div>
+        <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">この2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはApps Script側のスクリプトプロパティ <span class="mono">APP_TOKEN</span> と一致させてください。保存すると、次にこの画面を開いたときは内容が伏せて表示されます。</p>`}
       </div>
     </div>
 
@@ -3773,18 +4018,23 @@ function settingsHtml() {
     </div>
 
     <div class="card">
-      ${settingsSectionHeader("master", "🗂️ マスタ管理")}
-      <div id="settings-section-master" class="${settingsOpenSections.master ? "" : "hidden"}" style="margin-top:10px;">
-        <p class="muted" style="margin:0 0 12px;">よく使う筋トレ種目・食事をあらかじめ登録しておくと、記録時にワンタップで選べます。</p>
-
+      ${settingsSectionHeader("masterExercise", "🏋️ 種目マスタ")}
+      <div id="settings-section-masterExercise" class="${settingsOpenSections.masterExercise ? "" : "hidden"}" style="margin-top:10px;">
+        <p class="muted" style="margin:0 0 12px;">よく使う筋トレ種目をあらかじめ登録しておくと、記録時にワンタップで選べます。✏️で名前や部位を修正できます。</p>
         <p class="label" style="margin-bottom:6px;">筋トレ種目(部位ごと)</p>
         <div class="wrap" id="master-ex-part-buttons" style="margin-bottom:8px;"></div>
         <div id="master-ex-list" style="margin-bottom:8px;"></div>
-        <div class="row" style="margin-bottom:18px;">
+        <div class="row" style="margin-bottom:0;">
           <input type="text" id="master-ex-name-input" placeholder="種目名を追加(例: レッグプレスマシン)">
           <button class="btn-icon" style="background:var(--coral);flex:0 0 auto;" data-action="add-exercise-master">＋</button>
         </div>
+      </div>
+    </div>
 
+    <div class="card">
+      ${settingsSectionHeader("masterMeal", "🍽️ 食事マスタ")}
+      <div id="settings-section-masterMeal" class="${settingsOpenSections.masterMeal ? "" : "hidden"}" style="margin-top:10px;">
+        <p class="muted" style="margin:0 0 12px;">よく食べるものをあらかじめ登録しておくと、記録時にワンタップで選べます。✏️で名前やカロリーを修正できます。</p>
         <p class="label" style="margin-bottom:6px;">よく食べるもの</p>
         <div id="master-meal-list" style="margin-bottom:8px;"></div>
         <input type="text" id="master-meal-name-input" placeholder="例: 鶏胸肉のサラダ" style="margin-bottom:6px;">
@@ -3820,9 +4070,18 @@ function settingsHtml() {
           : ""}
         ${dataOpMessage ? `<p style="font-size:11px;margin:0 0 10px;color:${dataOpError ? "var(--coral)" : "var(--ink)"};line-height:1.5;">${esc(dataOpMessage)}</p>` : ""}
         ${confirmReset
-          ? `<p class="muted" style="margin-bottom:8px;">本当にすべてのデータを削除しますか?</p>
-             <div class="row"><button class="chip" data-action="reset-yes" style="color:var(--coral);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`
-          : `<button class="chip" data-action="reset-show">すべてのデータを削除</button>`}
+          ? `<div style="border:1px solid var(--danger);border-radius:8px;padding:11px;color:var(--danger-ink);">
+               <p style="font-size:12.5px;margin:0 0 8px;font-weight:700;">本当にすべてのデータを削除しますか?</p>
+               ${gasConfigured()
+                 ? `<p style="font-size:11.5px;margin:0 0 10px;line-height:1.7;">Google Sheetsに連携しているため、<b>シート側の記録をどうするかも選んでください</b>。シートを残しておけば、あとで「☁️ シートから復元」で戻せます。</p>
+                    <div class="wrap">
+                      <button class="chip" data-action="reset-yes-keep-sheet">端末だけ削除(シートは残す)</button>
+                      <button class="chip" data-action="reset-yes-with-sheet" style="color:var(--danger);">端末とシートの両方を削除</button>
+                      <button class="chip" data-action="reset-no">キャンセル</button>
+                    </div>`
+                 : `<div class="row"><button class="chip" data-action="reset-yes-keep-sheet" style="color:var(--danger);">削除する</button><button class="chip" data-action="reset-no">キャンセル</button></div>`}
+             </div>`
+          : `<button class="chip" data-action="reset-show" style="color:var(--danger);border-color:var(--danger);">すべてのデータを削除</button>`}
       </div>
     </div>
 
@@ -3851,14 +4110,14 @@ function renderMasterExerciseSection() {
   partEl.innerHTML = PARTS.map(p => `<button class="chip ${masterExercisePart===p?"active-a":""}" data-action="select-master-ex-part" data-val="${p}">${p}</button>`).join("");
   const list = exerciseMaster.filter(x => x.part === masterExercisePart);
   document.getElementById("master-ex-list").innerHTML = list.length
-    ? list.map(x => `<div class="entry-row"><span style="flex:1;">${esc(x.name)}</span><button class="del-btn" data-action="del-exercise-master" data-id="${x.id}">🗑️</button></div>`).join("")
+    ? list.map(x => `<div class="entry-row"><span style="flex:1;">${esc(x.name)}</span><button class="del-btn" data-action="open-edit-exercise-master" data-id="${x.id}">✏️</button><button class="del-btn" data-action="del-exercise-master" data-id="${x.id}">🗑️</button></div>`).join("")
     : '<p class="muted" style="font-size:11px;">この部位の種目はまだ登録されていません。</p>';
 }
 function renderMasterMealList() {
   const el = document.getElementById("master-meal-list");
   if (!el) return;
   el.innerHTML = mealMaster.length
-    ? mealMaster.map(m => `<div class="entry-row"><div style="flex:1;">${esc(m.name)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}${m.quickHidden?`<span class="muted" style="font-size:10.5px;">(食事タブの一覧では非表示)</span>`:""}${(m.protein||m.fat||m.carb)?`<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>`:""}</div>${m.quickHidden?`<button class="del-btn" data-action="show-meal-quick" data-id="${m.id}" title="食事タブの一覧に戻す">↩️</button>`:""}<button class="del-btn" data-action="del-meal-master" data-id="${m.id}">🗑️</button></div>`).join("")
+    ? mealMaster.map(m => `<div class="entry-row"><div style="flex:1;">${esc(m.name)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}${m.quickHidden?`<span class="muted" style="font-size:10.5px;">(食事タブの一覧では非表示)</span>`:""}${(m.protein||m.fat||m.carb)?`<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>`:""}</div>${m.quickHidden?`<button class="del-btn" data-action="show-meal-quick" data-id="${m.id}" title="食事タブの一覧に戻す">↩️</button>`:""}<button class="del-btn" data-action="open-edit-meal-master" data-id="${m.id}">✏️</button><button class="del-btn" data-action="del-meal-master" data-id="${m.id}">🗑️</button></div>`).join("")
     : '<p class="muted" style="font-size:11px;">まだ登録がありません。</p>';
 }
 
@@ -3879,6 +4138,15 @@ function openEdit(kind, key) {
     if (!m) return;
     editing = { kind, id: key, tempMealType: m.mealType, draftText: m.text, draftCalories: m.calories || "", draftDate: m.date,
       draftProtein: m.protein || "", draftFat: m.fat || "", draftCarb: m.carb || "" };
+  } else if (kind === "exercise-master") {
+    const x = exerciseMaster.find(i => i.id === key);
+    if (!x) return;
+    editing = { kind, id: key, tempPart: x.part, draftName: x.name || "" };
+  } else if (kind === "meal-master") {
+    const m = mealMaster.find(i => i.id === key);
+    if (!m) return;
+    editing = { kind, id: key, draftName: m.name || "", draftCalories: m.calories || "",
+      draftProtein: m.protein || "", draftFat: m.fat || "", draftCarb: m.carb || "" };
   }
   renderEditModal();
 }
@@ -3886,7 +4154,7 @@ function bindEditModalDraftInputs() {
   const map = {
     "edit-exercise": "draftExercise", "edit-reps": "draftReps", "edit-weight": "draftWeight",
     "edit-minutes": "draftMinutes", "edit-date": "draftDate", "edit-text": "draftText", "edit-calories": "draftCalories",
-    "edit-protein": "draftProtein", "edit-fat": "draftFat", "edit-carb": "draftCarb",
+    "edit-protein": "draftProtein", "edit-fat": "draftFat", "edit-carb": "draftCarb", "edit-master-name": "draftName",
   };
   Object.keys(map).forEach((id) => {
     const inp = document.getElementById(id);
@@ -3946,10 +4214,26 @@ function renderEditModal() {
         <input type="number" id="edit-carb" value="${editing.draftCarb||""}" placeholder="炭水化物" class="mono">
       </div>
       <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
+  } else if (editing.kind === "exercise-master") {
+    body = `
+      <label class="label">部位</label>
+      <div class="wrap" style="margin-bottom:10px;">${PARTS.map(p => `<button class="chip ${editing.tempPart===p?"active-a":""}" data-edit-action="set-part" data-val="${p}">${p}</button>`).join("")}</div>
+      <label class="label">種目名</label><input type="text" id="edit-master-name" value="${esc(editing.draftName||"")}" style="margin-bottom:14px;">`;
+  } else if (editing.kind === "meal-master") {
+    body = `
+      <label class="label">名前</label><input type="text" id="edit-master-name" value="${esc(editing.draftName||"")}" style="margin-bottom:10px;">
+      <label class="label">カロリー(任意)</label><input type="number" id="edit-calories" value="${editing.draftCalories||""}" class="mono" style="margin-bottom:10px;">
+      <p class="label" style="margin:0 0 4px;">たんぱく質・脂質・炭水化物(g・任意)</p>
+      <div class="row" style="margin-bottom:14px;">
+        <input type="number" id="edit-protein" value="${editing.draftProtein||""}" placeholder="たんぱく質" class="mono">
+        <input type="number" id="edit-fat" value="${editing.draftFat||""}" placeholder="脂質" class="mono">
+        <input type="number" id="edit-carb" value="${editing.draftCarb||""}" placeholder="炭水化物" class="mono">
+      </div>`;
   }
+  const isMasterEdit = editing.kind === "exercise-master" || editing.kind === "meal-master";
   el.innerHTML = `<div class="modal-overlay" id="modal-overlay">
     <div class="modal-card">
-      <p class="section-title">記録を編集</p>
+      <p class="section-title">${isMasterEdit ? "登録内容を編集" : "記録を編集"}</p>
       ${body}
       <div class="row">
         <button class="btn-primary" data-edit-action="save" style="flex:1;">保存</button>
@@ -4000,16 +4284,47 @@ function handleEditSave() {
     m.protein = Number(document.getElementById("edit-protein").value) || 0;
     m.fat = Number(document.getElementById("edit-fat").value) || 0;
     m.carb = Number(document.getElementById("edit-carb").value) || 0;
+  } else if (editing.kind === "exercise-master") {
+    const x = exerciseMaster.find(i => i.id === editing.id);
+    if (x) {
+      const name = document.getElementById("edit-master-name").value.trim();
+      if (name) x.name = name;
+      x.part = editing.tempPart;
+    }
+  } else if (editing.kind === "meal-master") {
+    const m = mealMaster.find(i => i.id === editing.id);
+    if (m) {
+      const name = document.getElementById("edit-master-name").value.trim();
+      if (name) m.name = name;
+      const cal = document.getElementById("edit-calories").value;
+      m.calories = cal ? Number(cal) : null;
+      m.protein = Number(document.getElementById("edit-protein").value) || 0;
+      m.fat = Number(document.getElementById("edit-fat").value) || 0;
+      m.carb = Number(document.getElementById("edit-carb").value) || 0;
+    }
   }
+  const wasMasterEdit = editing.kind === "exercise-master" || editing.kind === "meal-master";
+  const wasExerciseMaster = editing.kind === "exercise-master";
   editing = null;
-  saveState(); renderTabContent(); renderEditModal(); scheduleSync();
+  saveState();
+  // マスタ登録の編集は、種目マスタ・食事マスタの各一覧のみを更新すれば十分
+  // (add/del-*-masterと同じ扱い。運動・食事の「記録」そのものではないため
+  // renderTabContent()による全体再描画やscheduleSync()は行わない)。
+  if (wasMasterEdit) { wasExerciseMaster ? renderMasterExerciseSection() : renderMasterMealList(); renderEditModal(); }
+  else { renderTabContent(); renderEditModal(); scheduleSync(); }
 }
 function handleEditDelete() {
   if (editing.kind === "training") entries = entries.filter(x => x.id !== editing.id);
   else if (editing.kind === "weight") weightEntries = weightEntries.filter(x => x.date !== editing.date);
   else if (editing.kind === "meal") mealEntries = mealEntries.filter(x => x.id !== editing.id);
+  else if (editing.kind === "exercise-master") exerciseMaster = exerciseMaster.filter(x => x.id !== editing.id);
+  else if (editing.kind === "meal-master") mealMaster = mealMaster.filter(x => x.id !== editing.id);
+  const wasMasterEdit = editing.kind === "exercise-master" || editing.kind === "meal-master";
+  const wasExerciseMaster = editing.kind === "exercise-master";
   editing = null;
-  saveState(); renderTabContent(); renderEditModal(); scheduleSync();
+  saveState();
+  if (wasMasterEdit) { wasExerciseMaster ? renderMasterExerciseSection() : renderMasterMealList(); renderEditModal(); }
+  else { renderTabContent(); renderEditModal(); scheduleSync(); }
 }
 
 // ============ ACTIONS ============
@@ -4088,19 +4403,10 @@ function relogMeal(id) {
   mealEntries.unshift({ ...src, id: uid(), date: localDateStr(), createdAt: Date.now() });
   saveState(); renderTabContent(); scheduleSync();
 }
-// 「今日」タブ用: 昨日記録したトレーニング・食事をまとめて今日にコピーする。
 function yesterdayDateStr() { return localDateStr(new Date(Date.now() - 86400000)); }
-function yesterdayHasRecords() {
-  const y = yesterdayDateStr();
-  return entries.some(e => e.date === y) || mealEntries.some(m => m.date === y);
-}
-function copyYesterdayToToday() {
-  const y = yesterdayDateStr(), today = localDateStr();
-  entries.filter(e => e.date === y).forEach(e => entries.unshift({ ...e, id: uid(), date: today, createdAt: Date.now() }));
-  mealEntries.filter(m => m.date === y).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
-  saveState(); renderTabContent(); scheduleSync();
-}
 // 運動だけ/食事区分(朝食・昼食・夕食・間食)だけ、を個別にコピーしたいという要望向け。
+// v44.8で「今日」タブの合同カードは廃止し、運動タブ(コピー)・食事タブ(区分ごと・
+// まとめて)にそれぞれ分けたので、運動と食事をまとめて一度にコピーする関数はもう無い。
 function copyYesterdayTraining() {
   const y = yesterdayDateStr(), today = localDateStr();
   entries.filter(e => e.date === y).forEach(e => entries.unshift({ ...e, id: uid(), date: today, createdAt: Date.now() }));
@@ -4109,6 +4415,12 @@ function copyYesterdayTraining() {
 function copyYesterdayMealType(mealType) {
   const y = yesterdayDateStr(), today = localDateStr();
   mealEntries.filter(m => m.date === y && m.mealType === mealType).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
+  saveState(); renderTabContent(); scheduleSync();
+}
+// 食事タブの「まとめてコピー」: 昨日の食事(区分を問わずすべて)をコピーする。
+function copyYesterdayAllMeals() {
+  const y = yesterdayDateStr(), today = localDateStr();
+  mealEntries.filter(m => m.date === y).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
   saveState(); renderTabContent(); scheduleSync();
 }
 function yesterdayMealTypesAvailable() {
@@ -4149,9 +4461,8 @@ document.getElementById("app").addEventListener("click", (e) => {
   const today = localDateStr();
 
   if (action === "go-settings") { switchTab("settings"); }
-  else if (action === "set-mood") { moodByDate[today] = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "quicklog-workout") {
-    const w = pickWorkout(moodByDate[today]);
+    const w = pickWorkout();
     if (w.type === "strength") {
       trainingSubTab = "strength";
       switchTab("training");
@@ -4270,7 +4581,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "del-meal") { mealEntries = mealEntries.filter(m => m.id !== t.dataset.id); saveState(); renderTabContent(); scheduleSync(); }
   else if (action === "relog-training") { relogTraining(t.dataset.id); }
   else if (action === "relog-meal") { relogMeal(t.dataset.id); }
-  else if (action === "copy-yesterday") { copyYesterdayToToday(); }
+  else if (action === "copy-yesterday-meals-all") { copyYesterdayAllMeals(); }
   else if (action === "copy-yesterday-training") { copyYesterdayTraining(); }
   else if (action === "copy-yesterday-meal") { copyYesterdayMealType(t.dataset.val); }
   else if (action === "save-routine-start") { savingRoutine = true; renderTabContent(); }
@@ -4292,7 +4603,42 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "set-timeavail") { profile.timeAvail = t.dataset.val; saveState(); renderTabContent(); }
   // 「今すぐ同期を試す」は、変更の有無にかかわらず全件送り直す。
   // 何かおかしいときに押すボタンなので、差分送信の判断ごと作り直せるようにしておく。
-  else if (action === "retry-sync") { syncToSheet(true); }
+  // 全件送り直しはシートをこの端末の内容で置き換える操作なので、確認を挟む(v44.9)。
+  else if (action === "retry-sync") { confirmForceSync = true; renderTabContent(); }
+  else if (action === "force-sync-no") { confirmForceSync = false; renderTabContent(); }
+  else if (action === "force-sync-yes") { confirmForceSync = false; renderTabContent(); syncToSheet(true); }
+  // 上部の警告から「シートから復元」へ誘導する(設定タブのデータセクションを開いて確認へ)。
+  else if (action === "goto-restore") {
+    settingsOpenSections.data = true;
+    confirmRestore = "sheet";
+    switchTab("settings");
+    const el = document.getElementById("settings-section-data");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  // 「記録が0件だが、シートも空にしてよい」と本人が判断した場合だけ同期を再開する。
+  else if (action === "allow-empty-sync") {
+    allowEmptySync = true;
+    emptySyncBlocked = false;
+    connectSheetChoice = null;
+    renderDataWarning();
+    scheduleSync();
+  }
+  // 接続直後の「シートとこの端末、どちらを残すか」の選択。
+  else if (action === "connect-use-sheet") {
+    connectSheetChoice = null;
+    emptySyncBlocked = false;
+    confirmRestore = null;
+    renderDataWarning();
+    restoreFromSheet();
+  }
+  else if (action === "connect-use-local") {
+    connectSheetChoice = null;
+    emptySyncBlocked = false;
+    allowEmptySync = true;   // 本人が「この端末の内容で上書きする」と明示的に選んだ
+    renderDataWarning();
+    syncToSheet(true);
+    renderTabContent();
+  }
   else if (action === "force-sync") { syncToSheet(true); }
   else if (action === "dismiss-sync-conflict") {
     // 警告を消すだけで、データの送信はしない。ローカルの記録はそのまま端末に残っているので、
@@ -4343,10 +4689,19 @@ document.getElementById("app").addEventListener("click", (e) => {
     sentSheetSigs = {}; saveSentSigs();
     syncConflict = null;
     backendVersion = null; backendAiKeys = null; backendChecked = false;
-    if (gasConfigured()) { syncStatus = "idle"; syncToSheet(); checkBackendVersion_(); }
+    // 接続直後にこちらの内容を送りつけない(v44.9)。機種変更で新しい端末に入れ直した
+    // 直後がまさにこの操作で、そのとき端末は空・シートには全記録、という状態にある。
+    // 以前はここで即座に同期していたため、復元するより先にシートが空で上書きされていた。
+    // まずシートの状態だけを見に行き(inspectSheetAfterConnect_)、こちらの記録が0件なら
+    // 送信は安全弁(syncToSheet側)で止まる。
+    if (gasConfigured()) { syncStatus = "idle"; inspectSheetAfterConnect_(); checkBackendVersion_(); }
     else { syncStatus = "idle"; renderSyncStatus(); }
+    // 保存できたら(=設定済みになったら)、次にこのタブを開いたときも伏せ表示に戻す。
+    gasConfigRevealed = !gasConfigured();
     renderTabContent();
   }
+  else if (action === "reveal-gas-config") { gasConfigRevealed = true; renderTabContent(); }
+  else if (action === "cancel-gas-edit") { gasConfigRevealed = false; renderTabContent(); }
   else if (action === "export-json") { exportJson(); }
   // 復元(JSONから/シートから)は現在の記録を無条件に上書きするため、実行前に必ず
   // 確認ステップを挟む(confirmResetの「すべて削除」と同じ二段階確認パターン)。
@@ -4387,6 +4742,18 @@ document.getElementById("app").addEventListener("click", (e) => {
     exerciseMaster = exerciseMaster.filter(x => x.id !== t.dataset.id);
     saveState(); renderMasterExerciseSection();
   }
+  else if (action === "open-edit-exercise-master") { openEdit("exercise-master", t.dataset.id); }
+  else if (action === "open-edit-meal-master") { openEdit("meal-master", t.dataset.id); }
+  else if (action === "toggle-history-day") {
+    const d = t.dataset.date;
+    if (trainingHistoryOpenDates.has(d)) trainingHistoryOpenDates.delete(d); else trainingHistoryOpenDates.add(d);
+    renderHistory();
+  }
+  else if (action === "toggle-meal-history-day") {
+    const d = t.dataset.date;
+    if (mealHistoryOpenDates.has(d)) mealHistoryOpenDates.delete(d); else mealHistoryOpenDates.add(d);
+    renderMealHistory();
+  }
   else if (action === "add-meal-master") {
     const nameInp = document.getElementById("master-meal-name-input");
     const name = nameInp.value.trim();
@@ -4413,7 +4780,11 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "reset-show") { confirmReset = true; renderTabContent(); }
   else if (action === "reset-no") { confirmReset = false; renderTabContent(); }
-  else if (action === "reset-yes") {
+  // 全削除は2通り(v44.9)。シートも空にするかどうかで、そのあとの同期の扱いが変わる。
+  //  ・keep-sheet: シートは触らない。0件になるので安全弁が同期を止める
+  //  ・with-sheet: 本人が明示的に望んだので、安全弁を解除して空の内容を送る
+  else if (action === "reset-yes-keep-sheet" || action === "reset-yes-with-sheet") {
+    allowEmptySync = (action === "reset-yes-with-sheet");
     entries = []; weightEntries = []; mealEntries = []; goals = { weight: 65, weeklyFreq: 3, paceKgPerWeek: DEFAULT_PACE };
     profile = null; moodByDate = {}; confirmReset = false; onboardStep = 0;
     exerciseMaster = []; mealMaster = []; masterExercisePart = "胸";
@@ -4424,7 +4795,12 @@ document.getElementById("app").addEventListener("click", (e) => {
     sentSheetSigs = {}; saveSentSigs();
     seedExerciseMasterIfEmpty();
     onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
-    saveState(); renderApp();
+    // 本人の意思で消したので、壊れて読めなかった場合の警告は取り下げる。
+    dataLoadFailed = false; emptySyncBlocked = false; connectSheetChoice = null;
+    saveState();
+    // シートも消すと決めた場合だけ、その場で空の内容を送る(安全弁は上で解除済み)。
+    if (allowEmptySync && gasConfigured()) syncToSheet(true);
+    renderApp();
   }
 });
 document.getElementById("app").addEventListener("input", (e) => {
