@@ -184,7 +184,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v45";
+const APP_VERSION = "v46";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -327,7 +327,7 @@ const WORKOUTS = {
 let entries = [];
 let weightEntries = [];
 let mealEntries = [];
-let goals = { weight: 65, weeklyFreq: 3, paceKgPerWeek: 0.5 };
+let goals = { weight: 65, weeklyFreq: 3, paceKgPerWeek: 0.5, startBodyFat: null, startBodyFatDate: null };
 let profile = null; // null until onboarding completes: {age, gender, height, activity, timeAvail}
 let moodByDate = {};
 let syncStatus = "idle";
@@ -1869,20 +1869,51 @@ function computeTargets(p, weight, goalWeight) {
 }
 // 体組成カード(v41)。体重だけでは「減った分が脂肪なのか筋肉なのか」が分からないため、
 // 体脂肪率を記録している場合に、体脂肪量と除脂肪体重の内訳・その変化を表示する。
-function bodyCompositionCardHtml() {
+// 体重記録の中から、指定した日付にいちばん近い体重を探す(体脂肪率の
+// 「開始時点」を手入力したとき、その日にちょうど体重を記録していなくても
+// 体脂肪量・除脂肪体重を計算できるようにするため)。
+function resolveWeightNear_(dateStr) {
+  if (!dateStr || !weightEntries.length) return null;
+  const exact = weightEntries.find(w => w.date === dateStr);
+  if (exact) return exact.weight;
+  let best = null, bestDiff = Infinity;
+  for (const w of weightEntries) {
+    const diff = Math.abs(new Date(w.date) - new Date(dateStr));
+    if (diff < bestDiff) { bestDiff = diff; best = w; }
+  }
+  return best ? best.weight : null;
+}
+// 体組成(体重・体脂肪率・体脂肪量・除脂肪体重)の「開始時点」と「直近」を
+// まとめて計算する共通処理。体組成カードとXへのポスト文の両方から使う(v46)。
+// 「開始時点」は、設定で手入力した基準(goals.startBodyFat/startBodyFatDate)が
+// あればそれを優先し、なければ体脂肪率を記録した最初の1件を使う。
+function computeBodyComposition_() {
   const withBf = weightEntries
     .filter(w => w.bodyFat != null && w.weight > 0)
     .sort((a, b) => a.date < b.date ? -1 : 1);
+  const comp = w => ({ date: w.date, weight: w.weight, bf: w.bodyFat,
+    fat: Math.round(w.weight * w.bodyFat / 100 * 10) / 10,
+    lean: Math.round(w.weight * (1 - w.bodyFat / 100) * 10) / 10 });
+  if (!withBf.length) return { withBf: [], first: null, last: null, manualFirst: false };
+  let first = comp(withBf[0]), manualFirst = false;
+  if (goals.startBodyFat != null && goals.startBodyFatDate) {
+    const w = resolveWeightNear_(goals.startBodyFatDate);
+    if (w != null) {
+      first = comp({ date: goals.startBodyFatDate, weight: w, bodyFat: goals.startBodyFat });
+      manualFirst = true;
+    }
+  }
+  const last = comp(withBf[withBf.length - 1]);
+  return { withBf, first, last, manualFirst };
+}
+function bodyCompositionCardHtml() {
+  const { withBf, first, last, manualFirst } = computeBodyComposition_();
   if (!withBf.length) {
     return `<div class="card">
       <p class="section-title">🧬 体組成</p>
       <p class="muted" style="font-size:11.5px;margin:0;line-height:1.7;">体脂肪率を記録すると、体脂肪量と除脂肪体重(筋肉や骨など)の内訳が表示されます。体重が減ったとき、それが脂肪なのか、筋肉も一緒に落ちているのかは体重だけでは分かりません。</p>
     </div>`;
   }
-  const comp = w => ({ date: w.date, weight: w.weight, bf: w.bodyFat,
-    fat: Math.round(w.weight * w.bodyFat / 100 * 10) / 10,
-    lean: Math.round(w.weight * (1 - w.bodyFat / 100) * 10) / 10 });
-  const first = comp(withBf[0]), last = comp(withBf[withBf.length - 1]);
   const row = (label, v, unit) => `
     <div class="between" style="margin-bottom:5px;">
       <span style="font-size:12px;">${label}</span>
@@ -1891,7 +1922,7 @@ function bodyCompositionCardHtml() {
   const signed = v => (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v).toFixed(1);
 
   let changeBlock = "";
-  if (withBf.length >= 2 && first.date !== last.date) {
+  if (first && first.date !== last.date) {
     const dW = Math.round((last.weight - first.weight) * 10) / 10;
     const dF = Math.round((last.fat - first.fat) * 10) / 10;
     const dL = Math.round((last.lean - first.lean) * 10) / 10;
@@ -1909,30 +1940,42 @@ function bodyCompositionCardHtml() {
           "除脂肪体重の減りが大きめです。減量ペースをゆっくりにする、たんぱく質を確保する、筋トレを増やす、といった調整を検討してみてください。"}</p>` : ""}
       </div>`;
   }
-  // 体脂肪率の推移グラフ(v44.3)。体重グラフと同じ描画関数・同じ7日平均の
-  // 考え方を流用する。単位が違う(kg / %)ため体重の線と同じグラフに重ねると
-  // 軸が2本になって読み違えのもとになるので、あえて別のグラフにして、この
-  // 体組成カードの中で体重グラフのすぐ下に置くことで「まとめて見える」ようにしている。
-  const bfPoints = withBf.map(w => ({ date: w.date, value: w.bodyFat }));
+  // 体脂肪率・体脂肪量の推移グラフ(v44.3, 体脂肪量は v46)。体重グラフと同じ
+  // 描画関数・同じ7日平均の考え方を流用する。単位が違う(kg / %)ため体重の線と
+  // 同じグラフに重ねると軸が2本になって読み違えのもとになるので、あえて別の
+  // グラフにして、この体組成カードの中にまとめて置くことで「まとめて見える」
+  // ようにしている。設定で開始時点を手入力していて、実際の記録より前の日付なら、
+  // その1点をグラフの先頭に足して「開始時点からどう動いたか」を見せる。
+  const compPoints = withBf.map(w => ({ date: w.date, weight: w.weight, bf: w.bodyFat,
+    fat: Math.round(w.weight * w.bodyFat / 100 * 10) / 10 }));
+  if (manualFirst && first.date < compPoints[0].date) {
+    compPoints.unshift({ date: first.date, weight: first.weight, bf: first.bf, fat: first.fat });
+  }
+  const bfPoints = compPoints.map(p => ({ date: p.date, value: p.bf }));
+  const fatPoints = compPoints.map(p => ({ date: p.date, value: p.fat }));
   const bfAvg = bfPoints.length >= 3 ? movingAverage_(bfPoints, 7) : null;
   const bfChart = lineChartSvg(bfPoints, "var(--coral)", null, bfAvg);
-  let bfTrendBlock = "";
-  if (bfAvg) {
-    const cur = bfAvg[bfAvg.length-1].value;
+  const fatAvg = fatPoints.length >= 3 ? movingAverage_(fatPoints, 7) : null;
+  const fatChart = lineChartSvg(fatPoints, "var(--coral)", null, fatAvg);
+  const trendBlockFor = (points, avg, unit) => {
+    if (!avg) return "";
+    const cur = avg[avg.length-1].value;
     const weekAgoIdx = (() => {
-      const t = new Date(bfPoints[bfPoints.length-1].date).getTime() - 7*86400000;
-      for (let i = bfAvg.length-1; i >= 0; i--) if (new Date(bfAvg[i].date).getTime() <= t) return i;
+      const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
+      for (let i = avg.length-1; i >= 0; i--) if (new Date(avg[i].date).getTime() <= t) return i;
       return 0;
     })();
-    const diff = round1_(cur - bfAvg[weekAgoIdx].value);
-    const trend = bfAvg.length > weekAgoIdx + 1
-      ? `<span class="mono" style="color:${diff < 0 ? "var(--teal)" : diff > 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}%</span> <span class="muted">/ 1週間</span>`
+    const diff = round1_(cur - avg[weekAgoIdx].value);
+    const trend = avg.length > weekAgoIdx + 1
+      ? `<span class="mono" style="color:${diff < 0 ? "var(--teal)" : diff > 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}${unit}</span> <span class="muted">/ 1週間</span>`
       : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
-    bfTrendBlock = `<div class="between" style="margin-top:6px;">
+    return `<div class="between" style="margin-top:6px;">
       ${trendLegendHtml("var(--coral)")}
       <span style="font-size:12px;">${trend}</span>
     </div>`;
-  }
+  };
+  const bfTrendBlock = trendBlockFor(bfPoints, bfAvg, "%");
+  const fatTrendBlock = trendBlockFor(fatPoints, fatAvg, "kg");
 
   return `<div class="card">
     <div class="between" style="margin-bottom:10px;">
@@ -1942,6 +1985,9 @@ function bodyCompositionCardHtml() {
     <p class="muted" style="font-size:11px;margin:0 0 6px;">体脂肪率の推移</p>
     ${bfChart}
     ${bfTrendBlock}
+    <p class="muted" style="font-size:11px;margin:14px 0 6px;">体脂肪量の推移</p>
+    ${fatChart}
+    ${fatTrendBlock}
     <div style="border-top:1px solid var(--line);margin:12px 0 10px;padding-top:10px;">
       ${row("体重", last.weight.toFixed(1), "kg")}
       ${row("体脂肪率", last.bf.toFixed(1), "%")}
@@ -3222,33 +3268,6 @@ function mealsHtml() {
   const yesterdayMealTypes = yesterdayMealTypesAvailable();
 
   return `
-    ${photoCardHtml()}
-
-    ${yesterdayMealTypes.length ? `
-    <div class="card">
-      <p class="section-title" style="margin:0 0 8px;">📋 昨日の食事をコピー</p>
-      <p class="muted" style="font-size:11px;margin:0 0 6px;">区分ごとにコピーできます</p>
-      <div class="wrap" style="margin-bottom:8px;">
-        ${yesterdayMealTypes.map(t => `<button class="chip" data-action="copy-yesterday-meal" data-val="${t}">${t}</button>`).join("")}
-      </div>
-      <button class="chip" data-action="copy-yesterday-meals-all" style="width:100%;text-align:center;">まとめてコピー</button>
-    </div>` : ""}
-
-    <div class="card">
-      <p class="section-title">🍽️ 今日の食事</p>
-      ${targets ? `
-        <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${todayCal}</span><span class="muted">目標 ${targets.effectiveTarget} kcal</span></div>
-        ${meterHtml(todayCal, targets.effectiveTarget, "var(--teal)")}
-        ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">${exerciseTargetNoteText_(targets)}</p>` : ""}
-        <div class="row" style="margin-top:12px;">
-          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein.toFixed(1)}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
-          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat.toFixed(1)}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
-          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">炭水化物</p><p class="mono" style="margin:0;">${todayCarb.toFixed(1)}/${targets.targetCarb}g</p>${meterHtml(todayCarb, targets.targetCarb, "var(--slate)")}</div>
-        </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
-    </div>
-
-    ${mealSuggestionCardHtml()}
-
     <div class="card">
       <p class="section-title">食事を記録</p>
       <div class="wrap" style="margin-bottom:10px;" id="meal-type-buttons">
@@ -3285,6 +3304,33 @@ function mealsHtml() {
       <p class="muted" style="font-size:10.5px;margin:0 0 8px;">カロリーを入れておくと、「今日」タブのカロリー収支グラフに反映されます。分からないときは「🔍 AIで栄養を調べる」で自動入力できます。</p>
       <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
     </div>
+
+    ${photoCardHtml()}
+
+    ${yesterdayMealTypes.length ? `
+    <div class="card">
+      <p class="section-title" style="margin:0 0 8px;">📋 昨日の食事をコピー</p>
+      <p class="muted" style="font-size:11px;margin:0 0 6px;">区分ごとにコピーできます</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${yesterdayMealTypes.map(t => `<button class="chip" data-action="copy-yesterday-meal" data-val="${t}">${t}</button>`).join("")}
+      </div>
+      <button class="chip" data-action="copy-yesterday-meals-all" style="width:100%;text-align:center;">まとめてコピー</button>
+    </div>` : ""}
+
+    <div class="card">
+      <p class="section-title">🍽️ 今日の食事</p>
+      ${targets ? `
+        <div class="between" style="margin-bottom:6px;"><span class="mono" style="font-size:18px;font-weight:700;">${todayCal}</span><span class="muted">目標 ${targets.effectiveTarget} kcal</span></div>
+        ${meterHtml(todayCal, targets.effectiveTarget, "var(--teal)")}
+        ${targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">${exerciseTargetNoteText_(targets)}</p>` : ""}
+        <div class="row" style="margin-top:12px;">
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">タンパク質</p><p class="mono" style="margin:0;">${todayProtein.toFixed(1)}/${targets.targetProtein}g</p>${meterHtml(todayProtein, targets.targetProtein, "var(--coral)")}</div>
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">脂質</p><p class="mono" style="margin:0;">${todayFat.toFixed(1)}/${targets.targetFat}g</p>${meterHtml(todayFat, targets.targetFat, "var(--sand)")}</div>
+          <div style="flex:1;"><p class="muted" style="margin:0 0 4px;">炭水化物</p><p class="mono" style="margin:0;">${todayCarb.toFixed(1)}/${targets.targetCarb}g</p>${meterHtml(todayCarb, targets.targetCarb, "var(--slate)")}</div>
+        </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
+    </div>
+
+    ${mealSuggestionCardHtml()}
 
     <div class="card">
       <p class="section-title">📊 摂取カロリーと消費カロリー(直近14日)</p>
@@ -3432,6 +3478,18 @@ function buildXShareText() {
     if (goals.weight) lines.push(`目標: ${goals.weight}kg`);
   }
 
+  // 体組成(体脂肪量)の内訳(v46)。開始時点(手入力の基準、なければ体脂肪率を
+  // 記録した最初の1件)と直近を比べられるときだけ差分つきで、体脂肪率しか
+  // まだないときは直近の値だけを添える。
+  const bodyComp = computeBodyComposition_();
+  if (bodyComp.first && bodyComp.last && bodyComp.first.date !== bodyComp.last.date) {
+    const dFat = round1_(bodyComp.last.fat - bodyComp.first.fat);
+    const dFatStr = (dFat > 0 ? "+" : "") + dFat.toFixed(1);
+    lines.push(`体脂肪量: ${bodyComp.first.fat.toFixed(1)}kg → ${bodyComp.last.fat.toFixed(1)}kg (${dFatStr}kg)`);
+  } else if (bodyComp.last) {
+    lines.push(`体脂肪率: ${bodyComp.last.bf.toFixed(1)}%`);
+  }
+
   // カロリーの内訳(v38)。その日の摂取・消費とその差に加えて、記録開始からの
   // 累計収支も添える。プロフィール未入力などで消費カロリーを計算できない場合は、
   // この2行だけを省いて従来どおりの文面になる。
@@ -3454,9 +3512,15 @@ function buildXShareText() {
   lines.push("#ダイエット記録");
   const text = lines.join("\n");
   // Xの1投稿の上限(280文字相当)に収まらなくなった場合に備え、長くなりすぎたら
-  // カロリー関連の行を落として、体重の経過だけの従来の文面に戻す。
+  // カロリー関連の行、それでも収まらなければ体組成の行も落として、体重の経過
+  // だけの従来の文面に戻す(Bluesky側は300文字までとXより余裕があるので、
+  // ここで作った文章をそのまま使い回せる)。
   if (text.length > 260) {
-    return lines.filter(l => !/^今日: |^累計収支: /.test(l)).join("\n");
+    let trimmed = lines.filter(l => !/^今日: |^累計収支: /.test(l)).join("\n");
+    if (trimmed.length > 260) {
+      trimmed = lines.filter(l => !/^今日: |^累計収支: |^体脂肪/.test(l)).join("\n");
+    }
+    return trimmed;
   }
   return text;
 }
@@ -3464,6 +3528,16 @@ function openXShare() {
   const text = buildXShareText();
   if (!text) return;
   window.open("https://x.com/intent/tweet?text=" + encodeURIComponent(text), "_blank");
+}
+// Blueskyへのシェア(v46)。Xと同様、公式のWeb Intent
+// (https://bsky.app/intent/compose?text=...)を使う。APIキーやアプリ登録は
+// 不要で、リンクを開くとログイン済みのBlueskyの投稿画面に文章が入力された
+// 状態で遷移する。Blueskyの投稿上限は300文字とXより余裕があるため、
+// buildXShareText()が作る文章(260文字以内に収めてある)をそのまま使い回せる。
+function openBlueskyShare() {
+  const text = buildXShareText();
+  if (!text) return;
+  window.open("https://bsky.app/intent/compose?text=" + encodeURIComponent(text), "_blank");
 }
 
 // ============ WEIGHT TAB ============
@@ -3511,20 +3585,21 @@ function weightHtml() {
       })()}
     </div>
 
+    ${bodyCompositionCardHtml()}
+
     <div class="card">
-      <p class="section-title">📤 Xに経過をポスト</p>
+      <p class="section-title">📤 SNSに経過をポスト</p>
       ${xShareText ? `
       <textarea id="x-share-text" readonly rows="4" style="margin-bottom:8px;" onclick="this.select()">${esc(xShareText)}</textarea>
-      <div class="row">
-        <button type="button" class="chip" data-action="copy-x-share" style="flex:1;">📋 コピー</button>
+      <div class="row" style="margin-bottom:8px;">
         <button type="button" class="btn-primary" data-action="open-x-share" style="flex:1;">🐦 Xの投稿画面を開く</button>
+        <button type="button" class="btn-primary" data-action="open-bluesky-share" style="flex:1;">🦋 Blueskyの投稿画面を開く</button>
       </div>
+      <button type="button" class="chip" data-action="copy-x-share" style="width:100%;">📋 文章だけコピー</button>
       <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
-      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">タップするとXの投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
-      ` : `<p class="muted" style="font-size:11.5px;margin:0;">体重を記録すると、ここに経過をXへ投稿するための文章が自動で作られます。</p>`}
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">タップすると投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
+      ` : `<p class="muted" style="font-size:11.5px;margin:0;">体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。</p>`}
     </div>
-
-    ${bodyCompositionCardHtml()}
 
     <div class="card">
       <p class="section-title">体重を記録</p>
@@ -3970,12 +4045,26 @@ function settingsHtml() {
           </div>
         </div>
       </div>
-      <div>
+      <div style="margin-bottom:14px;">
         <p style="font-size:12px;margin:0 0 6px;">減量ペース</p>
         <div class="wrap" style="margin-bottom:6px;">
           ${PACE_OPTIONS.map(o => `<button class="chip ${currentPace()===o.value?"active":""}" data-action="set-pace" data-val="${o.value}">${o.label}</button>`).join("")}
         </div>
         <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">1週間に落としたいペースです。ここから1日あたりに必要な赤字(体脂肪1kg≒7200kcal)を計算し、目安カロリーを決めます。目標体重より軽い場合は、増量方向に0.25kg/週で計算します。</p>
+      </div>
+      <div style="border-top:1px solid var(--line);padding-top:12px;">
+        <p style="font-size:12px;margin:0 0 6px;">開始時点の体脂肪率(任意)</p>
+        <div class="field-row" style="margin-bottom:6px;">
+          <div class="f-val">
+            <label class="label">開始日</label>
+            <input type="date" id="goal-start-bodyfat-date-input" class="mono" value="${goals.startBodyFatDate || ""}">
+          </div>
+          <div class="f-val">
+            <label class="label">体脂肪率 (%)</label>
+            <input type="number" step="0.1" id="goal-start-bodyfat-input" class="mono" placeholder="例: 29.0" value="${goals.startBodyFat != null ? goals.startBodyFat : ""}">
+          </div>
+        </div>
+        <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">体重タブの「体組成」で、記録し始めるより前の日を基準にしたいときに使います。両方入力すると、その日にいちばん近い体重と組み合わせて「開始時点からの変化」を計算します(その日にちょうど体重が未記録でも構いません)。空欄のままなら、これまでどおり体脂肪率を最初に記録した日が基準になります。</p>
       </div>
     </div>
 
@@ -4561,6 +4650,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
   else if (action === "open-x-share") { openXShare(); }
+  else if (action === "open-bluesky-share") { openBlueskyShare(); }
   else if (action === "copy-x-share") {
     const text = buildXShareText();
     const statusEl = document.getElementById("x-share-status");
@@ -4834,6 +4924,14 @@ document.getElementById("app").addEventListener("change", (e) => {
   } else if (e.target.id === "goal-freq-input") {
     const v = parseInt(e.target.value, 10);
     if (v > 0) { goals.weeklyFreq = v; saveState(); renderTabContent(); }
+  } else if (e.target.id === "goal-start-bodyfat-date-input") {
+    goals.startBodyFatDate = e.target.value || null;
+    saveState(); renderTabContent();
+  } else if (e.target.id === "goal-start-bodyfat-input") {
+    const raw = e.target.value;
+    const v = parseFloat(raw);
+    goals.startBodyFat = raw === "" ? null : (isNaN(v) ? goals.startBodyFat : v);
+    saveState(); renderTabContent();
   } else if (e.target.id === "profile-age-input") {
     profile.age = e.target.value; saveState(); renderTabContent();
   } else if (e.target.id === "profile-height-input") {
