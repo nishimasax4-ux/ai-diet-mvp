@@ -187,7 +187,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v46.2";
+const APP_VERSION = "v46.3";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -4888,6 +4888,20 @@ document.getElementById("app").addEventListener("change", (e) => {
   entryDates[kind] = e.target.value || null;
   // タブ全体を作り直すと入力途中の内容が消えるので、注意書きだけを差し替える。
   updateEntryDateNotice(kind);
+  // 体重フォームの日付欄を変えたときは、体重・体脂肪率の入力欄も日付に合わせて
+  // 差し替える(v46.3)。以前はここを何もしていなかったため、フォームを開いた
+  // ときの「最新の記録」の値がそのまま残り続け、過去の日付を選んで記録したのに
+  // 実際には最新の値(=その日とは無関係な数字)が保存されてしまう事故があった。
+  // その日の記録が既にあれば内容を呼び出し、無ければ空欄にして、
+  // 誤って無関係な値を保存してしまわないようにする。
+  if (kind === "weight") {
+    const d = e.target.value || localDateStr();
+    const existing = weightEntries.find(w => w.date === d);
+    const valEl = document.getElementById("weight-value-input");
+    const bfEl = document.getElementById("weight-bodyfat-input");
+    if (valEl) valEl.value = existing ? existing.weight : "";
+    if (bfEl) bfEl.value = existing && existing.bodyFat != null ? existing.bodyFat : "";
+  }
 });
 document.getElementById("app").addEventListener("change", (e) => {
   if (e.target.id === "goal-weight-input") {
