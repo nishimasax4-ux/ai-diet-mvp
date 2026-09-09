@@ -187,7 +187,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v46.3";
+const APP_VERSION = "v46.4";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -973,7 +973,12 @@ function saveFoodToMaster(target) {
   const calories = calEl && calEl.value !== "" ? Number(calEl.value) : null;
   const entry = { name, calories, protein: numOf(ids.protein), fat: numOf(ids.fat), carb: numOf(ids.carb) };
   const existing = mealMaster.find(m => m.name === name);
-  if (existing) Object.assign(existing, entry);
+  // v46.4: 以前は既存の項目をObject.assignで上書きするだけで、quickHiddenを消して
+  // いなかった。そのため、食事タブの✕(この一覧から削除)でいったん非表示にした食品を
+  // 「📌 よく食べるものに登録」で登録し直しても、quickHiddenが残ったままになり、
+  // 「登録しました」と表示されるのに食事タブの一覧には二度と出てこない不具合があった。
+  // 明示的に登録し直す操作なので、その意図どおり一覧に復帰させる。
+  if (existing) { Object.assign(existing, entry); delete existing.quickHidden; }
   else mealMaster.push({ id: uid(), ...entry });
   saveState();
   // フォーム全体は再描画しない(入力中の内容が消えてしまうため)。マスタのチップ一覧に
