@@ -183,11 +183,29 @@ function saveConfig() {
   try { localStorage.setItem(CONFIG_KEY, JSON.stringify(gasConfig)); }
   catch (e) { console.error("config save error", e); }
 }
+// ヘルスケア連携(iPhoneのショートカットアプリ)用に、そのまま貼り付けられる
+// 設定のひな形をまとめたテキストを作る(v46.6)。実際のURL・合言葉は
+// この端末に保存済みのものをそのまま使う(送信はしない、コピーするだけ)。
+function buildShortcutTemplateText_() {
+  return [
+    "■「URLの内容を取得」の設定",
+    "URL: " + (gasConfig.url || "(先に接続設定を保存してください)"),
+    "方法: POST",
+    "ヘッダ: Content-Type = application/json",
+    "本文の種類: JSON",
+    "",
+    "■ 本文(キーと値)",
+    "token: " + (gasConfig.token || "(先に接続設定を保存してください)"),
+    "action: addWeightSample",
+    "weight: (ヘルスケアの体重の値をここに挿入)",
+    "bodyFat: (ヘルスケアの体脂肪率の値をここに挿入・任意)",
+  ].join("\n");
+}
 function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v46.4";
+const APP_VERSION = "v46.6";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -349,6 +367,10 @@ let backendVersion = null;
 // 極端に遅い・新しいactionを知らない等の問題が起きるため、設定タブで警告する。
 // 「不明なaction」が返るほど古くなくても検知できるのが、版数で見る利点。
 const REQUIRED_BACKEND_VERSION = "v44";
+// ヘルスケア連携(iPhoneのショートカットアプリ)の設定手順ガイド(v46.6)。
+// アプリ本体には組み込めない(ショートカットアプリの操作そのものなので)ため、
+// 別ページの手順書として案内する。
+const SHORTCUT_GUIDE_URL = "https://claude.ai/code/artifact/4f4e0c6e-fa8a-40ad-8efc-a1ad3bce1af5";
 function versionNum_(v) {
   const parts = String(v || "").replace(/^v/i, "").split(".").map(n => Number(n) || 0);
   return (parts[0] || 0) * 1000 + (parts[1] || 0);
@@ -1874,6 +1896,41 @@ function computeTargets(p, weight, goalWeight) {
     fatMass: leanMass != null ? Math.round((weight - leanMass) * 10) / 10 : null,
     bmrMifflin: Math.round(bmrMifflin),
   };
+}
+// BMIチェック(v46.5)。プロフィールの身長と直近の体重から計算する。入力の手間を
+// 増やさないよう、体重タブに自動で表示する(手入力ツールにはしない)。
+// 判定は日本肥満学会(JASSO)の基準に合わせた。
+function computeBmi_() {
+  const h = profile ? Number(profile.height) : NaN;
+  if (!Number.isFinite(h) || h <= 0) return null;
+  const sortedDesc = [...weightEntries].sort((a, b) => a.date < b.date ? 1 : -1);
+  const latest = sortedDesc[0];
+  if (!latest || !(latest.weight > 0)) return null;
+  const hM = h / 100;
+  const bmi = Math.round((latest.weight / (hM * hM)) * 10) / 10;
+  let label;
+  if (bmi < 18.5) label = "低体重";
+  else if (bmi < 25) label = "普通体重";
+  else if (bmi < 30) label = "肥満(1度)";
+  else if (bmi < 35) label = "肥満(2度)";
+  else if (bmi < 40) label = "肥満(3度)";
+  else label = "肥満(4度)";
+  const standardWeight = Math.round(22 * hM * hM * 10) / 10; // BMI22(統計的に病気になりにくいとされる値)での体重
+  return { bmi, label, normal: bmi >= 18.5 && bmi < 25, date: latest.date, standardWeight };
+}
+function bmiBlockHtml() {
+  const b = computeBmi_();
+  if (!b) {
+    return `<p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.6;">設定タブでプロフィールの身長を登録すると、ここにBMIが表示されます。</p>`;
+  }
+  return `<div class="between" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);">
+    <span style="font-size:12px;">BMI(${b.date}時点)</span>
+    <span class="mono" style="font-size:13px;color:${b.normal ? "var(--teal)" : "var(--coral)"};">${b.bmi.toFixed(1)} <span style="font-size:11px;">${b.label}</span></span>
+  </div>
+  <p class="muted" style="font-size:10.5px;margin:4px 0 0;">普通体重(BMI 18.5〜25未満)の目安は ${(() => {
+      const h = Number(profile.height) / 100;
+      return `${(Math.round(18.5 * h * h * 10) / 10).toFixed(1)}〜${(Math.round(25 * h * h * 10) / 10).toFixed(1)}kg`;
+    })()}、統計的に病気になりにくいとされるBMI22での体重は ${b.standardWeight.toFixed(1)}kg です。</p>`;
 }
 // 体組成カード(v41)。体重だけでは「減った分が脂肪なのか筋肉なのか」が分からないため、
 // 体脂肪率を記録している場合に、体脂肪量と除脂肪体重の内訳・その変化を表示する。
@@ -3568,6 +3625,7 @@ function weightHtml() {
         </div>
         <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。</p>`;
       })()}
+      ${latest ? bmiBlockHtml() : ""}
     </div>
 
     ${bodyCompositionCardHtml()}
@@ -4011,6 +4069,14 @@ function settingsHtml() {
         </div>
         <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">上の2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはApps Script側のスクリプトプロパティ <span class="mono">APP_TOKEN</span> と一致させてください。保存すると、次にこの画面を開いたときは内容が伏せて表示されます。<br>スプレッドシートのURLは「📊 スプレッドシートを開く」ボタン用で、同期には使いません。ブラウザでスプレッドシートを開いてアドレスバーからコピーしたものを貼り付けてください。空欄のままでも構いません。</p>`}
       </div>
+      ${gasConfigured() ? `
+      <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px;">
+        <p style="font-size:12px;margin:0 0 6px;font-weight:700;">📱 ヘルスケアと自動連携(ショートカット)</p>
+        <p class="muted" style="font-size:11px;margin:0 0 8px;line-height:1.7;">iPhoneの「ショートカット」アプリを使うと、ヘルスケアに記録されている体重・体脂肪率を毎日自動でこのアプリに取り込めます(体重タブを開かなくても記録できます)。設定に必要なURL・合言葉のひな形は、下のボタンでまとめてコピーできます。</p>
+        <button type="button" class="chip" data-action="copy-shortcut-template" style="width:100%;margin-bottom:6px;">📋 ショートカット用の設定をコピー</button>
+        <button type="button" class="chip" data-action="open-shortcut-guide" style="width:100%;">📖 設定手順を見る</button>
+        <p id="shortcut-template-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
+      </div>` : ""}
     </div>
 
     <div class="card">
@@ -4637,6 +4703,18 @@ document.getElementById("app").addEventListener("click", (e) => {
       statusEl.textContent = "このブラウザではコピー機能が使えません。上のテキストを長押しして選択・コピーしてください。";
     }
   }
+  else if (action === "copy-shortcut-template") {
+    const statusEl = document.getElementById("shortcut-template-status");
+    const text = buildShortcutTemplateText_();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => { if (statusEl) statusEl.textContent = "✅ コピーしました。ショートカットの各欄に貼り付けてください。"; })
+        .catch(() => { if (statusEl) statusEl.textContent = "コピーできませんでした。上のURL・トークンを設定画面から直接ご確認ください。"; });
+    } else if (statusEl) {
+      statusEl.textContent = "このブラウザではコピー機能が使えません。上のURL・トークンを設定画面から直接ご確認ください。";
+    }
+  }
+  else if (action === "open-shortcut-guide") { window.open(SHORTCUT_GUIDE_URL, "_blank"); }
   else if (action === "edit-training") { openEdit("training", t.dataset.id); }
   else if (action === "edit-weight") { openEdit("weight", t.dataset.date); }
   else if (action === "edit-meal") { openEdit("meal", t.dataset.id); }

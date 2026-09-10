@@ -1,14 +1,13 @@
 /**
- * Training Log + AI  Apps Script (v44.1) 貼り付け用・1ファイル版
+ * Training Log + AI  Apps Script (v44.2) 貼り付け用・1ファイル版
  *
  * コメントを取り除いただけで、動作は apps-script.gs と完全に同じです
- * (同じ自動テスト40件に通しています)。
+ * (同じ自動テスト58件に通しています)。
  *
- * 【v44.1の変更 — 貼り直しは必須ではありません】
- *   AIに「JSONだけを返すモード」を指定できるようにしました。
- *   写真からの食事判定で『AIの応答を読み取れませんでした』が出た対策です。
- *   アプリ(index.html)側だけでも直りますが、こちらも更新すると
- *   そもそも崩れた応答が返らなくなります。お時間のあるときにどうぞ。
+ * 【v44.2の変更 — 貼り直しは必須ではありません】
+ *   iPhoneの「ショートカット」アプリなどからヘルスケアの体重・体脂肪率を
+ *   直接送れるよう、action='addWeightSample' を追加しました。この機能を
+ *   使いたい場合のみ貼り直してください(save/loadの動作は変えていません)。
  *
  * 【貼り付け手順】
  *  1. Apps Scriptエディタで、今あるコードを「全選択 → 削除」して空にする
@@ -17,7 +16,7 @@
  *  3. 一番下までスクロールし、最終行が「}」であることを確認する
  *     → ここが「}」でなければ、貼り付けが途中で切れています(分割版をお使いください)
  *  4. デプロイ → デプロイを管理 → 鉛筆マーク → 新バージョン → デプロイ
- *  5. アプリの設定タブに「接続先のApps Script: v44.1 ✅」と出れば完了
+ *  5. アプリの設定タブに「接続先のApps Script: v44.2 ✅」と出れば完了
  *
  * 【スクリプトプロパティ】
  *   APP_TOKEN       … アプリの設定タブに入れる合言葉(必須)
@@ -41,7 +40,7 @@ var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 var GROQ_VISION_MODELS = ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b'];
 
-var BACKEND_VERSION = 'v44.1';
+var BACKEND_VERSION = 'v44.2';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -61,6 +60,7 @@ function doPost(e) {
     if (action === 'ping')              return json_(handlePing_());
     if (action === 'save')              return json_(handleSave_(body.payload, body.knownWriteAt, body.force));
     if (action === 'load')              return json_(handleLoad_());
+    if (action === 'addWeightSample')   return json_(handleAddWeightSample_(body));
     if (action === 'estimateNutrition') return json_(handleNutrition_(body.foodName));
     if (action === 'advice')            return json_(handleAdvice_(body.context));
     if (action === 'mealPlan')          return json_(handleMealPlan_(body.context));
@@ -141,6 +141,55 @@ function handleLoad_() {
 function normalizeCell_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   return v;
+}
+
+function handleAddWeightSample_(body) {
+  var weight = Number(body && body.weight);
+  if (!weight || !isFinite(weight) || weight <= 0) {
+    return { status: 'error', message: '体重(weight)が正しくありません' };
+  }
+  var bodyFatRaw = body && body.bodyFat;
+  var bodyFat = (bodyFatRaw === undefined || bodyFatRaw === null || bodyFatRaw === '') ? null : Number(bodyFatRaw);
+  if (bodyFat != null && (!isFinite(bodyFat) || bodyFat <= 0 || bodyFat >= 100)) {
+    return { status: 'error', message: '体脂肪率(bodyFat)が正しくありません' };
+  }
+  var date = (body && body.date)
+    ? String(body.date).slice(0, 10)
+    : Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { status: 'error', message: '日付(date)はYYYY-MM-DD形式で指定してください' };
+  }
+
+  var ss = spreadsheet_();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { status: 'error', message: '他の同期処理と競合しました。少し待って再試行してください。' };
+  try {
+    var sh = ss.getSheetByName('体重') || ss.insertSheet('体重');
+    if (sh.getLastRow() < 1) {
+      sh.getRange(1, 1, 1, 3).setValues([['日付', '体重kg', '体脂肪率%']]).setFontWeight('bold');
+      sh.setFrozenRows(1);
+    }
+    var lastRow = sh.getLastRow();
+    var targetRow = -1;
+    if (lastRow >= 2) {
+      var dateCol = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = 0; i < dateCol.length; i++) {
+        if (normalizeCell_(dateCol[i][0]) === date) { targetRow = i + 2; break; }
+      }
+    }
+    var rowValues = [date, weight, bodyFat != null ? bodyFat : ''];
+    if (targetRow > 0) {
+      sh.getRange(targetRow, 1, 1, 3).setValues([rowValues]);
+    } else {
+      sh.getRange(sh.getLastRow() + 1, 1, 1, 3).setValues([rowValues]);
+    }
+    sh.autoResizeColumns(1, 3);
+    var now = new Date().toISOString();
+    PropertiesService.getScriptProperties().setProperty('LAST_WRITE_AT', now);
+    return { status: 'ok', date: date, weight: weight, bodyFat: bodyFat, updated: targetRow > 0, at: now };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function handleNutrition_(foodName) {

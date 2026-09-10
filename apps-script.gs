@@ -27,6 +27,12 @@
  *   LAST_WRITE_AT   … (v32〜) 複数端末での上書き事故に気づけるよう、書き込みの
  *                     たびに自動更新される最終書き込み時刻。ユーザーが手で設定
  *                     する必要はない。詳細はhandleSave_のコメントを参照。
+ *
+ * 【v44.2の変更】
+ *   iPhoneの「ショートカット」アプリなどからヘルスケアの体重・体脂肪率を直接
+ *   送れるよう、action='addWeightSample' を追加しました(handleAddWeightSample_
+ *   参照)。既存のsave/loadの動作は変えていないため、貼り直しは必須ではありません
+ *   (この機能を使いたい場合のみ更新してください)。
  */
 
 // 2026年8月時点でGoogleがgemini-2.0-flashを廃止したため更新(HTTP 404で通知されました)。
@@ -68,7 +74,7 @@ var GROQ_VISION_MODELS = ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b'];
 
 // このファイルの版数(v38〜)。アプリ側は、対になっていないapps-script.gs
 // (差分同期版など)が貼られている状態を『不明なaction』の応答から検知して案内する。
-var BACKEND_VERSION = 'v44.1';
+var BACKEND_VERSION = 'v44.2';
 
 function doGet() {
   return json_({ status: 'error', message: 'POST only' });
@@ -89,6 +95,9 @@ function doPost(e) {
     if (action === 'ping')              return json_(handlePing_());
     if (action === 'save')              return json_(handleSave_(body.payload, body.knownWriteAt, body.force));
     if (action === 'load')              return json_(handleLoad_());
+    // v44.2: iPhoneの「ショートカット」アプリなど、アプリを経由しない外部連携から
+    // 体重・体脂肪率を1件だけ送るための窓口(handleAddWeightSample_のコメント参照)。
+    if (action === 'addWeightSample')   return json_(handleAddWeightSample_(body));
     if (action === 'estimateNutrition') return json_(handleNutrition_(body.foodName));
     if (action === 'advice')            return json_(handleAdvice_(body.context));
     if (action === 'mealPlan')          return json_(handleMealPlan_(body.context));
@@ -191,6 +200,69 @@ function handleLoad_() {
 function normalizeCell_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   return v;
+}
+
+/**
+ * 体重・体脂肪率を1件だけ追記/上書きする軽量な窓口(v44.2)。
+ *
+ * save(action='save')はアプリが毎回「全件」を丸ごと送って上書きする設計のため、
+ * アプリを経由しない外部連携(iPhoneの「ショートカット」アプリなど)から1件だけ
+ * 送るのには向かない——全件を把握していない状態でsaveを呼ぶと、他の記録を
+ * 消してしまう。この窓口は「体重」シートの中の1件だけを、日付をキーに
+ * 追記または上書きする(アプリ本体の「同じ日付は上書き」という仕様に揃えた)。
+ *
+ * 書き込みのたびにLAST_WRITE_ATを更新するので、次にアプリが自動同期(送信)
+ * しようとしたときは上書き事故防止の仕組み(handleSave_参照)が働き、
+ * 「他の端末に新しいデータあり」として一度止まる。アプリ側で
+ * 「☁️ シートから復元」を選べば、ここで書いた内容が取り込まれる。
+ */
+function handleAddWeightSample_(body) {
+  var weight = Number(body && body.weight);
+  if (!weight || !isFinite(weight) || weight <= 0) {
+    return { status: 'error', message: '体重(weight)が正しくありません' };
+  }
+  var bodyFatRaw = body && body.bodyFat;
+  var bodyFat = (bodyFatRaw === undefined || bodyFatRaw === null || bodyFatRaw === '') ? null : Number(bodyFatRaw);
+  if (bodyFat != null && (!isFinite(bodyFat) || bodyFat <= 0 || bodyFat >= 100)) {
+    return { status: 'error', message: '体脂肪率(bodyFat)が正しくありません' };
+  }
+  var date = (body && body.date)
+    ? String(body.date).slice(0, 10)
+    : Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { status: 'error', message: '日付(date)はYYYY-MM-DD形式で指定してください' };
+  }
+
+  var ss = spreadsheet_();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { status: 'error', message: '他の同期処理と競合しました。少し待って再試行してください。' };
+  try {
+    var sh = ss.getSheetByName('体重') || ss.insertSheet('体重');
+    if (sh.getLastRow() < 1) {
+      sh.getRange(1, 1, 1, 3).setValues([['日付', '体重kg', '体脂肪率%']]).setFontWeight('bold');
+      sh.setFrozenRows(1);
+    }
+    var lastRow = sh.getLastRow();
+    var targetRow = -1;
+    if (lastRow >= 2) {
+      var dateCol = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = 0; i < dateCol.length; i++) {
+        if (normalizeCell_(dateCol[i][0]) === date) { targetRow = i + 2; break; }
+      }
+    }
+    var rowValues = [date, weight, bodyFat != null ? bodyFat : ''];
+    if (targetRow > 0) {
+      sh.getRange(targetRow, 1, 1, 3).setValues([rowValues]);
+    } else {
+      sh.getRange(sh.getLastRow() + 1, 1, 1, 3).setValues([rowValues]);
+    }
+    sh.autoResizeColumns(1, 3);
+    var now = new Date().toISOString();
+    PropertiesService.getScriptProperties().setProperty('LAST_WRITE_AT', now);
+    return { status: 'ok', date: date, weight: weight, bodyFat: bodyFat, updated: targetRow > 0, at: now };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* ====================== Gemini ====================== */
