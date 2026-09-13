@@ -7,30 +7,35 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Training Log">
 <title>TRAINING LOG + AI</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
 <style>
   :root {
-    /* 青系の明るいテーマ。変数名(--teal/--coral/--sand/--slate)は既存コードとの
-       互換のため据え置き、値だけ青系に統一しています。--coral は削除・警告など
-       「注意を引く」用途の意味づけを保つため、あえて暖色のまま残しています。 */
-    --paper:#EFF6FD; --card:#FFFFFF; --ink:#1C2B3A; --ink-faint:#5B7186;
-    --line:#D7E5F2; --teal:#2078C7; --teal-soft:#2078C722; --coral:#E8927C; --coral-soft:#E8927C22;
-    --sand:#4CB8D9; --sand-soft:#4CB8D922; --slate:#3E63C4; --slate-soft:#3E63C422;
+    /* v46.13: 「コマンドダッシュボード」案への再配色。変数名(--teal/--coral/--sand/--slate)は
+       既存コードとの互換のため据え置き、値だけダッシュボード系の配色に統一しています。
+       各変数はもともと意味づけが決まっていたため、その意味に近いダッシュボード色を当てています。
+         --teal  … もともと「良い/成功」を示す色として使われていた → 緑(good)に
+         --coral … もともと「注意/警告/削除」を示す色として使われていた → 赤(warn)に
+         --slate … もともと体重グラフや主要ボタンなど「主役の青」だった → 紺(accent)に
+         --sand  … もともと目標線・脂質メーターなど「3番目の差し色」だった → 琥珀色(amber)に */
+    --paper:#EEF1F6; --card:#FFFFFF; --ink:#101828; --ink-faint:#5B6472;
+    --line:#D7DEE8; --teal:#1F8A5F; --teal-soft:#1F8A5F1A; --coral:#C4483A; --coral-soft:#C4483A1A;
+    --sand:#AD7B12; --sand-soft:#AD7B121A; --slate:#2C4A7C; --slate-soft:#2C4A7C1A;
     /* 「摂取カロリーと消費カロリー」グラフの消費ライン専用(v35)。この折れ線は元々
-       --slate(青系)を使っていたが、同じグラフの棒(--teal、これも青系)と色が
-       被って見分けにくいという指摘を受けて、はっきり区別できる赤にした。
-       --slateは他の場所(サブタブのボタン・体重グラフの線など)でも広く使われて
-       いるため、この一点だけのために値を変えず、専用の変数を別途用意している。 */
+       --slate(青系)を使っていたが、同じグラフの棒(--teal)と色が被って見分けにくい
+       という指摘を受けて、はっきり区別できる赤にした。--slateは他の場所(サブタブの
+       ボタン・体重グラフの線など)でも広く使われているため、この一点だけのために
+       値を変えず、専用の変数を別途用意している。 */
     --burn-line:#D6455A;
-    /* 記録が消えうる操作の警告専用(v44.9)。--coral(#E8927C)は白背景に対する
-       コントラストが2.4:1程度しかなく、いちばん読んでほしい警告文が
-       いちばん読みにくいという状態だった。グラフやドットの--coralはそのまま残し、
-       「読ませる警告文・危険なボタン」だけこの濃い赤(白背景で約5.9:1)を使う。 */
-    --danger:#C0392B; --danger-ink:#8E2A20;
+    /* 記録が消えうる操作の警告専用(v44.9)。読ませたい警告文・危険なボタンには
+       --coralより少し濃いめの赤(白背景で約5.4:1)を使う。 */
+    --danger:#C4483A; --danger-ink:#8A2E22;
+    --font-body: "IBM Plex Sans JP", -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+    --font-mono: "IBM Plex Mono", "SF Mono", "Courier New", monospace;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
     margin: 0; background: var(--paper); color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+    font-family: var(--font-body);
   }
   /* ステータスバー(ノッチ/Dynamic Island)がタイトルに重なるのを防ぐため、
      端末ごとの安全領域(env(safe-area-inset-top))分だけ上に余白を足す。
@@ -38,7 +43,7 @@
      何もしないとコンテンツがステータスバーの裏に潜り込んでしまう。 */
   #app { max-width: 480px; margin: 0 auto; padding: calc(20px + env(safe-area-inset-top, 0px)) 18px 96px; min-height: 100vh; }
   h1 { font-size: 20px; font-weight: 800; margin: 0; }
-  .mono { font-family: "SF Mono", "Courier New", monospace; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   .muted { font-size: 12px; color: var(--ink-faint); }
   .between { display: flex; align-items: center; justify-content: space-between; }
   .row { display: flex; align-items: center; gap: 8px; }
@@ -61,8 +66,22 @@
      日付は必ず単独の行に全幅で置く——食事タブ・運動タブと同じ形。 */
   .field-date { margin-bottom: 10px; }
   .field-date > input { width: 100%; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
-  .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 10px; text-transform: uppercase; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 15px; margin-bottom: 12px; box-shadow: none; }
+  .section-title { font-size: 12px; font-weight: 700; letter-spacing: 0.01em; color: var(--ink); margin: 0 0 10px; }
+  /* v46.13: ダッシュボード風のKPI一覧(各タブの先頭に置き、主要な数字をスクロール
+     無しで把握できるようにする)。中身は既存のロジックで計算した値をそのまま使い、
+     表示の形だけをカード内の数値パネルに変える。 */
+  .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .kpi .kpi-l { font-size: 10.5px; color: var(--ink-faint); margin-bottom: 5px; }
+  .kpi .kpi-v { font-family: var(--font-mono); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .kpi .kpi-v span { font-size: 10.5px; font-weight: 400; color: var(--ink-faint); }
+  .kpi .kpi-d { font-family: var(--font-mono); font-size: 10.5px; margin-top: 4px; }
+  .kpi .kpi-d.good { color: var(--teal); } .kpi .kpi-d.bad { color: var(--coral); } .kpi .kpi-d.neutral { color: var(--ink-faint); }
+  /* 「部位ごとの実施状況」等、良い/悪いを一目で示したいときのバッジ(v46.13)。 */
+  .status-pill { font-family: var(--font-mono); font-size: 10.5px; border-radius: 5px; padding: 3px 8px; font-weight: 600; white-space: nowrap; }
+  .status-pill.bad { background: var(--coral-soft); color: var(--coral); }
+  .status-pill.good { background: var(--teal-soft); color: var(--teal); }
   .label { font-size: 11px; font-weight: 600; color: var(--ink-faint); display: block; margin-bottom: 4px; }
   input, select, textarea {
     background: #FFFFFF; border: 1px solid var(--line); color: var(--ink);
@@ -81,7 +100,10 @@
   .btn-primary:active, .chip:active, .sub-tab-btn:active, .btn-icon:active, .icon-btn:active { filter: brightness(0.9); }
   .cal-cell { transition: transform 0.1s ease, opacity 0.1s ease; }
   .chip { padding: 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
-  .chip.active { background: var(--teal); color: #fff; border-color: var(--teal); }
+  /* v46.13: 選択中チップの既定色は「主役の紺(accent)」にする。--tealは元々この
+     用途にも使われていたが、この配色ではteal=緑(成功/良い)の意味に絞ったため、
+     「選ばれている」という中立的な状態には合わなくなったための変更。 */
+  .chip.active { background: var(--slate); color: #fff; border-color: var(--slate); }
   .chip.active-a { background: var(--coral); color: #fff; border-color: var(--coral); }
   .chip.active-b { background: var(--slate); color: #fff; border-color: var(--slate); }
   .btn-primary { width: 100%; padding: 12px; border-radius: 10px; background: var(--ink); color: var(--paper); font-weight: 700; font-size: 14.5px; }
@@ -101,14 +123,14 @@
   }
   .tab-item { flex: 1; padding: 10px 4px 8px; text-align: center; background: none; font-size: 10.5px; color: var(--ink-faint); font-weight: 600; }
   .tab-item .ic { display: block; font-size: 19px; margin-bottom: 2px; }
-  .tab-item.active { color: var(--teal); }
+  .tab-item.active { color: var(--slate); } /* v46.13: chip.activeと同じ理由でslate(選択中)に統一 */
   .hidden { display: none !important; }
   .banner { background: var(--slate-soft); border: 1px solid #3E63C433; border-radius: 10px; padding: 10px 12px; font-size: 11px; color: var(--slate); line-height: 1.5; margin-bottom: 16px; }
   .onboard-step { display: none; }
   .onboard-step.active { display: block; }
   .progress-dots { display: flex; gap: 5px; justify-content: center; margin: 14px 0 4px; }
   .progress-dots span { width: 6px; height: 6px; border-radius: 999px; background: var(--line); }
-  .progress-dots span.active { background: var(--teal); }
+  .progress-dots span.active { background: var(--slate); } /* v46.13: chip.activeと同じ理由でslate(選択中)に統一 */
   .sub-tab-btn { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--ink); font-weight: 600; font-size: 13.5px; }
   .sub-tab-btn.active-a { background: var(--coral); color: #fff; border-color: var(--coral); }
   .sub-tab-btn.active-b { background: var(--slate); color: #fff; border-color: var(--slate); }
@@ -187,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v46.9";
+const APP_VERSION = "v5.0";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -1187,8 +1209,17 @@ async function gasPost(payload, timeoutMs) {
   try {
     data = await res.json();
   } catch (parseErr) {
-    // Apps Scriptがエラー時にHTML(ログイン画面など)を返すとここに来る。
-    // 典型的な原因は「デプロイ時のアクセス権限が「全員」になっていない」。
+    // Apps Scriptがエラー時にHTML(ログイン画面やGoogleの404ページなど)を返すと
+    // ここに来る。原因はHTTPステータスによっておおよそ絞り込める(v46.10)。
+    //   ・404 … URLそのものが無効(デプロイが削除された・URLの貼り間違い・
+    //     再デプロイではなく「新しいデプロイ」を作って旧URLが失効した、等)。
+    //     このケースを「アクセス権限」の案内で片付けると原因究明が遠回りになるため、
+    //     以前は全ステータス共通で権限設定を疑う文言だったのを、404だけ分けた。
+    //   ・404以外(200でHTMLが返る等) … デプロイ時のアクセス権限が
+    //     「全員」になっていないケースが典型的。
+    if (res.status === 404) {
+      throw new Error(`Apps ScriptのURLが見つかりません(HTTP 404)。URLの貼り間違い、またはデプロイが削除・作り直されてURLが変わった可能性があります。Apps Scriptを開き、「デプロイ」→「デプロイを管理」で現在有効なウェブアプリのURLを確認し、設定タブに貼り直してください。`);
+    }
     throw new Error(`応答がJSONではありません(HTTP ${res.status})。Apps Scriptのデプロイ設定(アクセスできるユーザー:全員)をご確認ください。`);
   }
   // このアプリ用ではない別系統のapps-script.gs(差分同期版など)を貼ってしまうと、
@@ -1769,18 +1800,41 @@ function recentBodyFat_() {
   return Math.round(vals.reduce((s, v) => s + v, 0) / vals.length * 10) / 10;
 }
 
-// 体脂肪1kgあたりのおおよそのエネルギー量。減量ペースから必要な赤字を出すのに使う。
+// 体脂肪1kgあたりのおおよそのエネルギー量。体重を増減させたいペースから
+// 必要な赤字/黒字を出すのに使う。
 const FAT_KCAL_PER_KG = 7200;
-// 減量ペースの選択肢(kg/週)。増量方向は、体脂肪をつけすぎないよう0.25kg/週で固定する。
+// 体重を増減させたいペースの選択肢(kg/週)。減量(赤字)・増量(黒字)の
+// どちらでも同じ選択肢を使う(v46.14。以前は増量方向だけ0.25kg/週に固定していたが、
+// 痩せ型で体重を増やしたい人にも減量側と同じようにペースを選べるようにした)。
 const PACE_OPTIONS = [
   { value: 0.25, label: "ゆっくり (0.25kg/週)" },
   { value: 0.5,  label: "標準 (0.5kg/週)" },
 ];
 const DEFAULT_PACE = 0.5;
-const GAIN_PACE = 0.25;
 function currentPace() {
   const p = Number(goals.paceKgPerWeek);
   return PACE_OPTIONS.some(o => o.value === p) ? p : DEFAULT_PACE;
+}
+// 目標体重まで、あと何kgかを返す(v46.14)。目標体重が現在より重ければ増量、
+// 軽ければ減量のどちらでも同じ考え方で使えるよう、常に差の絶対値を返す
+// (以前は「現在−目標」がプラスのときだけを「残り」として扱っていたため、
+// 増量方向では常に0扱いになり、目標に届いていなくても「達成」と表示される
+// 不具合があった)。
+function weightGoalRemaining_(currentWeight, goalWeight) {
+  if (currentWeight == null || !goalWeight) return null;
+  return Math.abs(Math.round((currentWeight - goalWeight) * 10) / 10);
+}
+// 体重グラフの「1週間の変化」の色を、目標に近づいているかどうかで決める(v46.14)。
+// 以前は「減っていれば緑・増えていれば赤」で固定していたため、体重を増やしたい
+// 利用者にとっては、狙いどおり増えているのに赤字(警告色)で表示されてしまっていた。
+// 目標体重が現在とほぼ同じ(維持目的)、または目標が無いときは、増減どちらにも
+// 良し悪しを付けず中立色にする。
+function weightTrendColor_(diff, currentWeight, goalWeight) {
+  if (diff === 0) return "var(--ink-faint)";
+  if (!goalWeight || currentWeight == null || Math.abs(currentWeight - goalWeight) < 0.5) return "var(--slate)";
+  const wantsIncrease = currentWeight < goalWeight;
+  const towardGoal = wantsIncrease ? diff > 0 : diff < 0;
+  return towardGoal ? "var(--teal)" : "var(--coral)";
 }
 
 /**
@@ -1795,20 +1849,26 @@ function currentPace() {
  * 40歳男性170cm 80kg(目標70kg)なら、500kcalの赤字のはずが実際は251kcalだった。
  *
  * v40では次のようにする。
- *   1. 減量ペース(kg/週)から、必要な赤字を計算する(体脂肪1kg≒7200kcal)
- *   2. 目安カロリー = 基礎消費 − 必要な赤字
+ *   1. 体重を増減させたいペース(kg/週)から、必要な赤字/黒字を計算する
+ *      (体脂肪1kg≒7200kcal)
+ *   2. 目安カロリー = 基礎消費 ∓ 必要な赤字/黒字
  *   3. 安全のため基礎代謝(と最低ライン)を下限とする。下限に当たった場合は
  *      それを隠さず、「食事だけでは足りない分」を gapByExercise として返し、
  *      画面には「運動で補う分」として表示する
  *
- * PFCは「減量中に筋肉を落としにくくする」ことを優先し、たんぱく質を体重比で決める。
+ * 【v46.14で増量方向にも同じペース設定を適用】目標体重が現在より重い場合(増量)は
+ * 以前は体脂肪をつけすぎないよう黒字を0.25kg/週に固定していたが、痩せ型で体重を
+ * 増やしたい利用者にも減量側と同じ「ゆっくり/標準」を選べるようにした。
+ *
+ * PFCは「筋肉量を維持・増やす」ことを優先し、たんぱく質を体重比で決める。
  *   ・たんぱく質 = 目標体重 × 1.6 g
  *   ・脂質       = 目安カロリーの25%。ただし 目標体重 × 0.8 g を下限とする
  *   ・炭水化物   = 残り
  * 総カロリーが低いと、たんぱく質は「日本人の食事摂取基準(2025年版)」の目標量
  * (13〜20%エネルギー)を超えるが、これは基準が一般的な生活習慣病予防を想定した
- * 比率であるのに対し、こちらは減量中の筋肉維持を優先しているため。画面では
- * %エネルギーも併記して、どの位置にいるか分かるようにしている。
+ * 比率であるのに対し、こちらは減量中の筋肉維持・増量中の筋肉の増えやすさを
+ * 優先しているため。画面では%エネルギーも併記して、どの位置にいるか分かるように
+ * している。
  */
 function computeTargets(p, weight, goalWeight) {
   const age = Number(p.age), height = Number(p.height);
@@ -1833,9 +1893,10 @@ function computeTargets(p, weight, goalWeight) {
 
   const pace = currentPace();
   const direction = diff > 0.5 ? "loss" : diff < -0.5 ? "gain" : "keep";
-  // 目標に向けて1日あたり必要なエネルギーの過不足(プラス=減らしたい量)
+  // 目標に向けて1日あたり必要なエネルギーの過不足(プラス=減らしたい量)。
+  // 増量方向も設定タブで選んだ同じペースを使う(v46.14)。
   const needDeficit = direction === "loss" ? Math.round(pace * FAT_KCAL_PER_KG / 7)
-                    : direction === "gain" ? -Math.round(GAIN_PACE * FAT_KCAL_PER_KG / 7)
+                    : direction === "gain" ? -Math.round(pace * FAT_KCAL_PER_KG / 7)
                     : 0;
 
   // 安全のための下限。基礎代謝を下回る食事量を目標として提示しない。
@@ -1978,7 +2039,7 @@ function bodyCompositionCardHtml() {
         ${fatShare != null ? `<p style="font-size:11.5px;margin:8px 0 0;line-height:1.7;">減った ${Math.abs(dW).toFixed(1)}kg のうち <b>${fatShare}%が体脂肪</b>です。${
           fatShare >= 75 ? "脂肪を中心に減らせています。" :
           fatShare >= 50 ? "半分以上は脂肪ですが、除脂肪体重も減っています。たんぱく質と筋トレの量を見直す余地があります。" :
-          "除脂肪体重の減りが大きめです。減量ペースをゆっくりにする、たんぱく質を確保する、筋トレを増やす、といった調整を検討してみてください。"}</p>` : ""}
+          "除脂肪体重の減りが大きめです。体重を変化させるペースをゆっくりにする、たんぱく質を確保する、筋トレを増やす、といった調整を検討してみてください。"}</p>` : ""}
       </div>`;
   }
   // 体脂肪率・体脂肪量の推移グラフ(v44.3, 体脂肪量は v46)。体重グラフと同じ
@@ -2105,7 +2166,7 @@ function calorieTargetBreakdownHtml(t) {
     ${t.needDeficit !== 0 ? line(
         t.direction === "loss" ? "目標ペースに必要な赤字" : "目標ペースに必要な黒字",
         `${Math.abs(t.needDeficit)} kcal/日`,
-        `(${dirLabel} ${t.direction === "loss" ? t.pace : GAIN_PACE}kg/週)`) : ""}
+        `(${dirLabel} ${t.pace}kg/週)`) : ""}
     <div class="between" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;">
       <span style="font-size:12.5px;font-weight:700;">1日の目安カロリー</span>
       <span class="mono" style="font-size:16px;font-weight:700;">${t.targetCalories} kcal</span>
@@ -2129,7 +2190,7 @@ function calorieTargetBreakdownHtml(t) {
         脂質 ${mp.fat}% <span class="muted">/ 基準 20〜30%</span> ${badge(inRange(mp.fat, 20, 30))}<br>
         炭水化物 ${mp.carb}% <span class="muted">/ 基準 50〜65%</span> ${badge(inRange(mp.carb, 50, 65))}
       </p>
-      <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">たんぱく質が基準の上限を超えるのは、この目標が<b>減量中に筋肉を落としにくくすること</b>を優先しているためです(基準の比率は、一般的な生活習慣病予防を想定したもの)。総カロリーが低いほど、同じg数でも%は高く出ます。持病などで食事制限がある場合は、医師・管理栄養士の指示を優先してください。</p>
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">たんぱく質が基準の上限を超えるのは、この目標が${t.direction === "gain" ? "<b>増量中に効率よく筋肉を増やすこと</b>" : "<b>減量中に筋肉を落としにくくすること</b>"}を優先しているためです(基準の比率は、一般的な生活習慣病予防を想定したもの)。総カロリーが低いほど、同じg数でも%は高く出ます。持病などで食事制限がある場合は、医師・管理栄養士の指示を優先してください。</p>
     </div>` : ""}
   </div>`;
 }
@@ -2618,7 +2679,7 @@ function computeCalorieTotals() {
     intake: Math.round(intake),
     exerciseBurn: Math.round(exerciseBurn),
     burn: Math.round(burn),
-    balance: Math.round(intake - burn), // マイナス=累計で赤字(減量方向)
+    balance: Math.round(intake - burn), // マイナス=累計で赤字、プラス=累計で黒字
   };
 }
 // 上の累計を表示するカード。今日タブとXのポスト文面の両方から同じ数値を使うので、
@@ -2879,6 +2940,62 @@ function lineChartSvg(points, colorHex, goalValue, avgPoints) {
   const dots = points.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${colorHex}" stroke="#fff" stroke-width="2"/>`).join("");
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}<polyline points="${line}" fill="none" stroke="${colorHex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
 }
+// 体重の推移グラフに腹囲を重ねて表示する版(v46.11)。体重(kg)と腹囲(cm)は
+// 単位もスケールも違うため、同じ0基準の軸で重ねると片方がつぶれて見える。
+// そこで縦軸はそれぞれ「自分の値の範囲」で正規化し(2軸グラフ)、横位置(日付)
+// だけを揃えて2本の線として重ねる。腹囲は体重ほど毎日は記録しないことが多い
+// ため、腹囲側は記録がある日の値だけを、体重側と同じ日付位置に打つ。
+function lineChartSvgDual(primaryPoints, primaryColor, goalValue, primaryAvg, secondaryPoints, secondaryColor, secondaryAvg) {
+  if (primaryPoints.length < 2) return '<p class="muted">データが2件以上になるとグラフが表示されます。</p>';
+  const w=300, h=100, pad=8;
+  const values = primaryPoints.map(p=>p.value)
+    .concat(primaryAvg ? primaryAvg.map(p=>p.value) : [])
+    .concat(goalValue!=null?[goalValue]:[]);
+  const min = Math.min(...values)-1, max = Math.max(...values)+1;
+  const xStep = (w-pad*2)/(primaryPoints.length-1);
+  const yFor = v => h-pad-((v-min)/(max-min))*(h-pad*2);
+  const goalLine = goalValue!=null ? `<line x1="${pad}" y1="${yFor(goalValue)}" x2="${w-pad}" y2="${yFor(goalValue)}" stroke="var(--sand)" stroke-dasharray="4 4" stroke-width="1"/>` : "";
+
+  let primarySvg;
+  if (primaryAvg && primaryAvg.length === primaryPoints.length) {
+    const step = Math.max(1, Math.ceil(primaryPoints.length / 60));
+    const rawDots = primaryPoints.map((p,i) => (i % step === 0 || i === primaryPoints.length-1)
+      ? `<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="1.8" fill="var(--ink-faint)" opacity="0.6"/>` : "").join("");
+    const avgLine = primaryAvg.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
+    const lastAvg = primaryAvg[primaryAvg.length-1];
+    primarySvg = `${rawDots}<polyline points="${avgLine}" fill="none" stroke="${primaryColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>` +
+      `<circle cx="${pad+(primaryAvg.length-1)*xStep}" cy="${yFor(lastAvg.value)}" r="3.5" fill="${primaryColor}" stroke="#fff" stroke-width="2"/>`;
+  } else {
+    const line = primaryPoints.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
+    const dots = primaryPoints.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${primaryColor}" stroke="#fff" stroke-width="2"/>`).join("");
+    primarySvg = `<polyline points="${line}" fill="none" stroke="${primaryColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}`;
+  }
+
+  let secondarySvg = "";
+  if (secondaryPoints && secondaryPoints.length >= 2) {
+    // 腹囲側のx座標は、体重側と同じ日付の位置に合わせる(記録日が体重と
+    // 一致している前提。両方とも同じ1件の記録から作っているので必ず一致する)。
+    const xFor2 = p => {
+      const idx = primaryPoints.findIndex(pp => pp.date === p.date);
+      return pad + (idx >= 0 ? idx : 0) * xStep;
+    };
+    const values2 = secondaryPoints.map(p=>p.value).concat(secondaryAvg ? secondaryAvg.map(p=>p.value) : []);
+    const min2 = Math.min(...values2)-1, max2 = Math.max(...values2)+1;
+    const yFor2 = v => h-pad-((v-min2)/(max2-min2))*(h-pad*2);
+    if (secondaryAvg && secondaryAvg.length === secondaryPoints.length) {
+      const avgLine2 = secondaryAvg.map(p=>`${xFor2(p)},${yFor2(p.value)}`).join(" ");
+      const lastAvg2 = secondaryAvg[secondaryAvg.length-1];
+      secondarySvg = `<polyline points="${avgLine2}" fill="none" stroke="${secondaryColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 4"/>` +
+        `<circle cx="${xFor2(lastAvg2)}" cy="${yFor2(lastAvg2.value)}" r="3.5" fill="${secondaryColor}" stroke="#fff" stroke-width="2"/>`;
+    } else {
+      const line2 = secondaryPoints.map(p=>`${xFor2(p)},${yFor2(p.value)}`).join(" ");
+      const lastP2 = secondaryPoints[secondaryPoints.length-1];
+      secondarySvg = `<polyline points="${line2}" fill="none" stroke="${secondaryColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 4"/>` +
+        `<circle cx="${xFor2(lastP2)}" cy="${yFor2(lastP2.value)}" r="3.5" fill="${secondaryColor}" stroke="#fff" stroke-width="2"/>`;
+    }
+  }
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}${primarySvg}${secondarySvg}</svg>`;
+}
 // lineChartSvgの下に添える凡例(v44.5)。7日平均の線(colorHexそのまま)と
 // 実測の点(グレー固定)を実際の色で示す。以前は文字だけの「────」で色の
 // 説明になっていなかったため、線・点それぞれの実際の色を小さく描いて示す。
@@ -2889,6 +3006,17 @@ function trendLegendHtml(colorHex) {
     `<span class="muted" style="opacity:0.5;margin:0 1px;">・</span>` +
     `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink-faint);opacity:0.6;"></span>` +
     `<span class="muted">実測</span></span>`;
+}
+// lineChartSvgDual用の凡例(v46.11)。体重(実線)と腹囲(点線)を、それぞれの
+// 色と線種で示す。単位が違う2軸グラフだと知らないと誤読しやすいため、
+// 「グラフの中の数値」を見るのではなく「線の向き(増減)」で見てもらう
+// ことを促す注記もあわせて出す。
+function weightWaistLegendHtml(weightColor, waistColor) {
+  const swatch = (color, dashed) => `<span style="display:inline-block;width:14px;height:2.5px;border-radius:2px;background:${dashed ? `repeating-linear-gradient(90deg,${color} 0 3px,transparent 3px 6px)` : color};"></span>`;
+  return `<span style="display:inline-flex;align-items:center;gap:10px;font-size:10.5px;flex-wrap:wrap;">` +
+    `<span style="display:inline-flex;align-items:center;gap:5px;">${swatch(weightColor,false)}<span class="muted">体重(kg)</span></span>` +
+    `<span style="display:inline-flex;align-items:center;gap:5px;">${swatch(waistColor,true)}<span class="muted">腹囲(cm)</span></span>` +
+    `</span>`;
 }
 // 各点について「その日を含む直近7日ぶんの記録」の平均を返す(v44)。
 // 単純に直近7件ではなく日付の範囲で見るので、記録が飛んでいる日があっても
@@ -3254,8 +3382,35 @@ function todayHtml() {
   const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
   const balanceHistory = computeCalorieBalanceHistory(14);
   const balanceAdvice = balanceHistory ? generateBalanceAdvice(balanceHistory) : null;
+  // v46.13: 冒頭のKPIパネル用に、直近7日の平均カロリー収支を出す。考え方は
+  // generateBalanceAdvice()と同じ(カロリー未入力の日は「不明」として除外)。
+  const balanceWithData = balanceHistory ? balanceHistory.filter(x => x.hasData) : [];
+  const avgBalance7 = balanceWithData.length ? Math.round(balanceWithData.slice(-7).reduce((s,x) => s + x.balance, 0) / Math.min(7, balanceWithData.length)) : null;
 
   return `
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">体重目標</div>
+        <div class="kpi-v">${weightPct != null ? weightPct : "−"}<span>%</span></div>
+        <div class="kpi-d neutral">${(() => { const r = latestW ? weightGoalRemaining_(latestW.weight, goals.weight) : null; return r == null ? "未記録" : r > 0 ? `残り${r}kg` : "目標達成"; })()}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">週間トレーニング</div>
+        <div class="kpi-v">${thisWeek.count}<span>/${goals.weeklyFreq}回</span></div>
+        <div class="kpi-d ${thisWeek.count >= goals.weeklyFreq ? "good" : "neutral"}">${thisWeek.count >= goals.weeklyFreq ? "達成" : `残り${daysLeftInWeek()}日`}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">今日のカロリー</div>
+        <div class="kpi-v">${todayCal}<span>${targets ? `/${targets.effectiveTarget}` : ""}kcal</span></div>
+        <div class="kpi-d ${targets ? (todayCal <= targets.effectiveTarget ? "good" : "bad") : "neutral"}">${targets ? (todayCal <= targets.effectiveTarget ? `残り${targets.effectiveTarget - todayCal}kcal` : `超過${todayCal - targets.effectiveTarget}kcal`) : "未設定"}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">収支(7日平均)</div>
+        <div class="kpi-v">${avgBalance7 != null ? (avgBalance7 > 0 ? "+" : "") + avgBalance7 : "−"}<span>kcal/日</span></div>
+        <div class="kpi-d ${avgBalance7 == null ? "neutral" : (balanceAdvice && balanceAdvice.tone === "encourage" ? "good" : balanceAdvice && balanceAdvice.tone === "caution" ? "bad" : "neutral")}">${avgBalance7 == null ? "未記録" : avgBalance7 < 0 ? "赤字" : avgBalance7 > 0 ? "黒字" : "均衡"}</div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="row">
         <span style="font-size:18px;">🔥</span>
@@ -3344,6 +3499,29 @@ function mealsHtml() {
   const yesterdayMealTypes = yesterdayMealTypesAvailable();
 
   return `
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">今日のカロリー</div>
+        <div class="kpi-v">${todayCal}<span>${targets ? `/${targets.effectiveTarget}` : ""}kcal</span></div>
+        <div class="kpi-d ${targets ? (todayCal <= targets.effectiveTarget ? "good" : "bad") : "neutral"}">${targets ? (todayCal <= targets.effectiveTarget ? `残り${targets.effectiveTarget - todayCal}kcal` : `超過${todayCal - targets.effectiveTarget}kcal`) : "未設定"}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">たんぱく質</div>
+        <div class="kpi-v">${todayProtein}<span>${targets ? `/${targets.targetProtein}g` : "g"}</span></div>
+        <div class="kpi-d neutral">${targets ? Math.round(todayProtein / targets.targetProtein * 100) + "%" : ""}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">脂質</div>
+        <div class="kpi-v">${todayFat}<span>${targets ? `/${targets.targetFat}g` : "g"}</span></div>
+        <div class="kpi-d neutral">${targets ? Math.round(todayFat / targets.targetFat * 100) + "%" : ""}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">炭水化物</div>
+        <div class="kpi-v">${todayCarb}<span>${targets ? `/${targets.targetCarb}g` : "g"}</span></div>
+        <div class="kpi-d neutral">${targets ? Math.round(todayCarb / targets.targetCarb * 100) + "%" : ""}</div>
+      </div>
+    </div>
+
     <div class="card">
       <p class="section-title">食事を記録</p>
       <div class="wrap" style="margin-bottom:10px;" id="meal-type-buttons">
@@ -3542,7 +3720,14 @@ function buildXShareText() {
   const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
   if (sortedAsc.length === 0) return null;
   const start = sortedAsc[0], latest = sortedAsc[sortedAsc.length - 1];
-  const lines = ["ダイエット経過 📉"];
+  // v46.14: 以前は見出しが「ダイエット経過 📉」で固定されていたが、体重を
+  // 増やしたい人にとっては実態と逆の文言・アイコンになってしまっていた。
+  // 実際の変化(記録が2件以上あればその増減、無ければ目標との位置関係)から、
+  // 増量なら📈・減量なら📉・変化なしなら📊を選ぶようにする。
+  const trendDiff = sortedAsc.length >= 2 ? round1_(latest.weight - start.weight)
+    : (goals.weight ? latest.weight - goals.weight : 0);
+  const trendIcon = trendDiff > 0 ? "📈" : trendDiff < 0 ? "📉" : "📊";
+  const lines = [`からだの記録 ${trendIcon}`];
   if (sortedAsc.length >= 2 && start.date !== latest.date) {
     const days = Math.round((new Date(latest.date) - new Date(start.date)) / 86400000) + 1;
     const diff = round1_(latest.weight - start.weight);
@@ -3585,7 +3770,7 @@ function buildXShareText() {
     lines.push(`累計収支: ${totals.balance >= 0 ? "+" : "−"}${Math.abs(totals.balance).toLocaleString()}kcal (${totals.days}日)`);
   }
 
-  lines.push("#ダイエット記録");
+  lines.push("#からだの記録");
   const text = lines.join("\n");
   // Xの1投稿の上限(280文字相当)に収まらなくなった場合に備え、長くなりすぎたら
   // カロリー関連の行、それでも収まらなければ体組成の行も落として、体重の経過
@@ -3621,7 +3806,7 @@ function weightHtml() {
   const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
   const sortedDesc = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1);
   const latest = sortedDesc[0];
-  const remaining = latest ? Math.round((latest.weight - goals.weight)*10)/10 : null;
+  const remaining = latest ? weightGoalRemaining_(latest.weight, goals.weight) : null;
   const points = sortedAsc.map(w => ({ date: w.date, value: w.weight }));
   const xShareText = buildXShareText();
   const list = sortedDesc.slice(0,8).map(w => `
@@ -3632,51 +3817,36 @@ function weightHtml() {
       <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
     </div>`).join("");
 
+  // v46.11: 毎日の記録は上のグラフを見た「あと」ではなく、開いてすぐ入力
+  // できるほうが使いやすいため、入力フォームをからだタブの一番上に置く。
+  const bmi = computeBmi_();
+  // v46.13: 体重の記録が一件も無いときは、BMIタイルは出さない(身長はあっても
+  // 体重が無ければBMIは計算できず、「未記録」案内と重複するため)。
+  // tests/v46.5.spec.js の既存仕様(BMIブロック自体を出さない)を踏襲。
+  const bmiTile = latest ? `
+      <div class="kpi">
+        <div class="kpi-l">BMI</div>
+        <div class="kpi-v">${bmi ? bmi.bmi.toFixed(1) : "−"}<span>${bmi ? bmi.label : ""}</span></div>
+        <div class="kpi-d ${bmi ? (bmi.normal ? "good" : "bad") : "neutral"}">${bmi ? `標準まで${bmi.normal ? "維持中" : round1_(Math.abs(latest.weight - bmi.standardWeight)) + "kg"}` : "身長未登録"}</div>
+      </div>` : "";
   return `
-    <div class="card">
-      <div class="between" style="margin-bottom:8px;">
-        <p class="section-title" style="margin:0;">⚖️ 体重の推移</p>
-        <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">体重</div>
+        <div class="kpi-v">${latest ? latest.weight : "−"}<span>kg</span></div>
+        <div class="kpi-d neutral">${latest ? (remaining > 0 ? `目標まで${remaining}kg` : "目標達成") : "未記録"}</div>
       </div>
-      ${(() => {
-        const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
-        const chart = lineChartSvg(points, "var(--slate)", goals.weight, avg);
-        if (!avg) return chart;
-        const cur = avg[avg.length-1].value;
-        // 7日前の平均と比べた変化。日々の増減ではなく傾向として見せる。
-        const weekAgoIdx = (() => {
-          const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
-          for (let i = avg.length-1; i >= 0; i--) if (new Date(avg[i].date).getTime() <= t) return i;
-          return 0;
-        })();
-        const diff = round1_(cur - avg[weekAgoIdx].value);
-        const trend = avg.length > weekAgoIdx + 1
-          ? `<span class="mono" style="color:${diff < 0 ? "var(--teal)" : diff > 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}kg</span> <span class="muted">/ 1週間</span>`
-          : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
-        return chart + `<div class="between" style="margin-top:6px;">
-          ${trendLegendHtml("var(--slate)")}
-          <span style="font-size:12px;">${trend}</span>
-        </div>
-        <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。</p>`;
-      })()}
-      ${latest ? bmiBlockHtml() : ""}
-    </div>
-
-    ${bodyCompositionCardHtml()}
-    ${waistCardHtml()}
-
-    <div class="card">
-      <p class="section-title">📤 SNSに経過をポスト</p>
-      ${xShareText ? `
-      <textarea id="x-share-text" readonly rows="4" style="margin-bottom:8px;" onclick="this.select()">${esc(xShareText)}</textarea>
-      <div class="row" style="margin-bottom:8px;">
-        <button type="button" class="btn-primary" data-action="open-x-share" style="flex:1;">🐦 Xの投稿画面を開く</button>
-        <button type="button" class="btn-primary" data-action="open-bluesky-share" style="flex:1;">🦋 Blueskyの投稿画面を開く</button>
+      <div class="kpi">
+        <div class="kpi-l">体脂肪率</div>
+        <div class="kpi-v">${latest && latest.bodyFat != null ? latest.bodyFat : "−"}<span>%</span></div>
+        <div class="kpi-d neutral">${latest && latest.bodyFat != null ? latest.date : "任意項目"}</div>
       </div>
-      <button type="button" class="chip" data-action="copy-x-share" style="width:100%;">📋 文章だけコピー</button>
-      <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
-      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">タップすると投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
-      ` : `<p class="muted" style="font-size:11.5px;margin:0;">体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。</p>`}
+      <div class="kpi">
+        <div class="kpi-l">腹囲</div>
+        <div class="kpi-v">${latest && latest.waist != null ? latest.waist : "−"}<span>cm</span></div>
+        <div class="kpi-d neutral">${latest && latest.waist != null ? latest.date : "任意項目"}</div>
+      </div>
+      ${bmiTile}
     </div>
 
     <div class="card">
@@ -3703,6 +3873,58 @@ function weightHtml() {
       ${entryDateNoticeHtml("weight")}
       <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
       ${list}
+    </div>
+
+    <div class="card">
+      <div class="between" style="margin-bottom:8px;">
+        <p class="section-title" style="margin:0;">⚖️ 体重の推移</p>
+        <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
+      </div>
+      ${(() => {
+        const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
+        // v46.11: 腹囲を記録している日があれば、同じグラフに重ねて表示する
+        // (単位が違うkg/cmなので、縦軸はそれぞれの範囲で正規化した2軸グラフ)。
+        const withWaist = sortedAsc.filter(w => w.waist != null).map(w => ({ date: w.date, value: w.waist }));
+        const waistAvg = withWaist.length >= 3 ? movingAverage_(withWaist, 7) : null;
+        const chart = withWaist.length
+          ? lineChartSvgDual(points, "var(--slate)", goals.weight, avg, withWaist, "var(--coral)", waistAvg)
+          : lineChartSvg(points, "var(--slate)", goals.weight, avg);
+        if (!avg) return chart + (withWaist.length ? `<div style="margin-top:6px;">${weightWaistLegendHtml("var(--slate)","var(--coral)")}</div>` : "");
+        const cur = avg[avg.length-1].value;
+        // 7日前の平均と比べた変化。日々の増減ではなく傾向として見せる。
+        const weekAgoIdx = (() => {
+          const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
+          for (let i = avg.length-1; i >= 0; i--) if (new Date(avg[i].date).getTime() <= t) return i;
+          return 0;
+        })();
+        const diff = round1_(cur - avg[weekAgoIdx].value);
+        const trend = avg.length > weekAgoIdx + 1
+          ? `<span class="mono" style="color:${weightTrendColor_(diff, cur, goals.weight)};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}kg</span> <span class="muted">/ 1週間</span>`
+          : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
+        return chart + `<div class="between" style="margin-top:6px;">
+          ${withWaist.length ? weightWaistLegendHtml("var(--slate)","var(--coral)") : trendLegendHtml("var(--slate)")}
+          <span style="font-size:12px;">${trend}</span>
+        </div>
+        <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。${withWaist.length ? "体重(実線)と腹囲(点線)は単位が違うため、それぞれ別の縦軸で表示しています。数値そのものより、線の向き(増えている/減っている)で比べてください。" : ""}</p>`;
+      })()}
+      ${latest ? bmiBlockHtml() : ""}
+    </div>
+
+    ${bodyCompositionCardHtml()}
+    ${waistCardHtml()}
+
+    <div class="card">
+      <p class="section-title">📤 SNSに経過をポスト</p>
+      ${xShareText ? `
+      <textarea id="x-share-text" readonly rows="4" style="margin-bottom:8px;" onclick="this.select()">${esc(xShareText)}</textarea>
+      <div class="row" style="margin-bottom:8px;">
+        <button type="button" class="btn-primary" data-action="open-x-share" style="flex:1;">🐦 Xの投稿画面を開く</button>
+        <button type="button" class="btn-primary" data-action="open-bluesky-share" style="flex:1;">🦋 Blueskyの投稿画面を開く</button>
+      </div>
+      <button type="button" class="chip" data-action="copy-x-share" style="width:100%;">📋 文章だけコピー</button>
+      <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">タップすると投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
+      ` : `<p class="muted" style="font-size:11.5px;margin:0;">体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。</p>`}
     </div>`;
 }
 
@@ -3713,7 +3935,26 @@ function trainingHtml() {
   // 記録があるときだけワンタップでコピーできるようにする(v44.8。以前は「今日」
   // タブに食事とまとめて出ていたが、運動を触るのは運動タブなのでこちらに移した)。
   const yesterdayHadTraining = entries.some(e => e.date === yesterdayDateStr());
+  // v46.13: 冒頭のKPIパネル用。今週の頻度は進捗カードと同じweekBuckets(1)、
+  // 消費カロリーは進捗カードのグラフ(progressBurnHtml)と同じcomputeBurnHistory(14)を使う。
+  const thisWeekTraining = weekBuckets(1)[0];
+  const burnHistory14 = computeBurnHistory(14);
+  const burnTotal14 = burnHistory14.reduce((s,x) => s + x.total, 0);
+  const burnActiveDays14 = burnHistory14.filter(x => x.total > 0).length;
   return `
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">今週のトレーニング</div>
+        <div class="kpi-v">${thisWeekTraining.count}<span>/${goals.weeklyFreq}回</span></div>
+        <div class="kpi-d ${thisWeekTraining.count >= goals.weeklyFreq ? "good" : "neutral"}">${thisWeekTraining.count >= goals.weeklyFreq ? "達成" : `残り${daysLeftInWeek()}日`}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">消費カロリー(14日)</div>
+        <div class="kpi-v">${burnTotal14}<span>kcal</span></div>
+        <div class="kpi-d neutral">運動した日 ${burnActiveDays14}/14日</div>
+      </div>
+    </div>
+
     ${yesterdayHadTraining ? `
     <div class="card">
       <div class="between">
@@ -3791,7 +4032,44 @@ function trainingHtml() {
       ${progressBurnHtml()}
     </div>
 
+    ${bodyPartStatusHtml()}
+
     <div id="history-section"></div>`;
+}
+// 部位ごとの実施状況の一覧(v46.12)。「どの部位をしばらくやっていないか」は
+// 履歴を遡らないと分からなかったため、部位ごとに最終実施日・経過日数・
+// 直近30日のセット数を一覧表にした。しばらくやっていない部位ほど上に来るよう
+// 並べ、色でも目立たせることで、次に何をやるべきかが一目で分かるようにする。
+function bodyPartStatusHtml() {
+  const strengthEntries = entries.filter(e => e.type === "strength");
+  if (!strengthEntries.length) return "";
+  const nowMs = new Date(localDateStr()).getTime();
+  const rows = PARTS.map(part => {
+    const partEntries = strengthEntries.filter(e => e.part === part);
+    if (!partEntries.length) return { part, last: null, daysAgo: null, sets30: 0 };
+    const last = partEntries.reduce((max, e) => e.date > max ? e.date : max, partEntries[0].date);
+    const daysAgo = Math.round((nowMs - new Date(last).getTime()) / 86400000);
+    const sets30 = partEntries.filter(e => (nowMs - new Date(e.date).getTime()) <= 30 * 86400000).length;
+    return { part, last, daysAgo, sets30 };
+  }).sort((a, b) => (b.daysAgo ?? Infinity) - (a.daysAgo ?? Infinity));
+
+  const rowHtml = ({ part, last, daysAgo, sets30 }) => {
+    const stale = daysAgo === null || daysAgo >= 14;
+    const daysLabel = daysAgo === null ? "未実施" : daysAgo === 0 ? "今日" : `${daysAgo}日前`;
+    return `<div class="entry-row">
+      <div class="badge" style="background:${stale ? "var(--coral-soft)" : "var(--slate-soft)"};">🏋️</div>
+      <div style="flex:1;">
+        <div style="font-weight:600;">${esc(part)}</div>
+        <div class="muted" style="font-size:11px;">${last ? `最終 ${last}・直近30日 ${sets30}セット` : "記録なし"}</div>
+      </div>
+      <span class="status-pill ${stale ? "bad" : "good"}">${daysLabel}</span>
+    </div>`;
+  };
+  return `<div class="card">
+    <p class="section-title">📋 部位ごとの実施状況</p>
+    <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">しばらくやっていない部位が上に来るように並んでいます。14日以上空いている部位は赤で示しています。</p>
+    ${rows.map(rowHtml).join("")}
+  </div>`;
 }
 // 運動による概算消費カロリーの推移(筋トレ+有酸素の合計)。
 // 以前は「種目別の推移」で、種目を1つ選ばないと何も見えず、しかも筋トレの重量しか
@@ -4037,7 +4315,36 @@ function renderTrainingFormOptions() {
 // ============ SETTINGS TAB ============
 function settingsHtml() {
   const targets = getTargets();
+  // v46.13: 冒頭のKPIパネル。他タブ同様、既存の計算結果(getTargets()・
+  // currentPace()・backendAiKeys)をそのまま流用し、ここでは再計算しない。
+  const aiConnected = gasConfigured();
+  const aiGood = aiConnected && backendAiKeys && backendAiKeys.groq;
+  const aiBad = aiConnected && backendAiKeys && !backendAiKeys.groq;
+  const aiLabel = !aiConnected ? "未接続" : !backendAiKeys ? "確認中" : backendAiKeys.groq ? "Groq" : backendAiKeys.gemini ? "Geminiのみ" : "未設定";
   return `
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">体重目標</div>
+        <div class="kpi-v">${goals.weight}<span>kg</span></div>
+        <div class="kpi-d neutral">${(PACE_OPTIONS.find(o => o.value === currentPace()) || {}).label || ""}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">週間トレーニング目標</div>
+        <div class="kpi-v">${goals.weeklyFreq}<span>回/週</span></div>
+        <div class="kpi-d neutral">からだタブと連動</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">目標カロリー</div>
+        <div class="kpi-v">${targets ? targets.targetCalories : "−"}<span>kcal</span></div>
+        <div class="kpi-d neutral">${targets ? `P${targets.targetProtein} F${targets.targetFat} C${targets.targetCarb}` : "プロフィール未入力"}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">AI接続</div>
+        <div class="kpi-v" style="font-size:15px;">${aiLabel}</div>
+        <div class="kpi-d ${aiGood ? "good" : aiBad ? "bad" : "neutral"}">${aiGood ? "数秒で応答" : aiBad ? "応答が遅い場合あり" : aiConnected ? "確認中" : "接続設定が必要"}</div>
+      </div>
+    </div>
+
     <div class="card">
       <p class="section-title">同期</p>
       ${!backendMismatch && backendOutdatedByVersion_() ? `
@@ -4131,11 +4438,15 @@ function settingsHtml() {
         </div>
       </div>
       <div style="margin-bottom:14px;">
-        <p style="font-size:12px;margin:0 0 6px;">減量ペース</p>
+        <p style="font-size:12px;margin:0 0 6px;">${targets && targets.direction === "gain" ? "増量ペース" : targets && targets.direction === "loss" ? "減量ペース" : "体重の変化ペース"}</p>
         <div class="wrap" style="margin-bottom:6px;">
           ${PACE_OPTIONS.map(o => `<button class="chip ${currentPace()===o.value?"active":""}" data-action="set-pace" data-val="${o.value}">${o.label}</button>`).join("")}
         </div>
-        <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">1週間に落としたいペースです。ここから1日あたりに必要な赤字(体脂肪1kg≒7200kcal)を計算し、目安カロリーを決めます。目標体重より軽い場合は、増量方向に0.25kg/週で計算します。</p>
+        <p class="muted" style="font-size:10.5px;margin:0;line-height:1.6;">${targets && targets.direction === "gain"
+          ? "1週間に増やしたいペースです。ここから1日あたりに必要な黒字(体脂肪1kg≒7200kcal)を計算し、目安カロリーを決めます。"
+          : targets && targets.direction === "loss"
+          ? "1週間に落としたいペースです。ここから1日あたりに必要な赤字(体脂肪1kg≒7200kcal)を計算し、目安カロリーを決めます。"
+          : "体重目標が今の体重と違う場合に、1週間に増減させたいペースです。ここから1日あたりに必要な黒字/赤字(体脂肪1kg≒7200kcal)を計算し、目安カロリーを決めます。"}</p>
       </div>
     </div>
 
