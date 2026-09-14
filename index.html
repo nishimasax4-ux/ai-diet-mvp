@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.0";
+const APP_VERSION = "v5.1";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -3720,14 +3720,17 @@ function buildXShareText() {
   const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
   if (sortedAsc.length === 0) return null;
   const start = sortedAsc[0], latest = sortedAsc[sortedAsc.length - 1];
-  // v46.14: 以前は見出しが「ダイエット経過 📉」で固定されていたが、体重を
-  // 増やしたい人にとっては実態と逆の文言・アイコンになってしまっていた。
-  // 実際の変化(記録が2件以上あればその増減、無ければ目標との位置関係)から、
-  // 増量なら📈・減量なら📉・変化なしなら📊を選ぶようにする。
+  // v46.14で見出しを「からだの記録」に統一したが、減量中の利用者からは
+  // 「#ダイエット記録のままがよかった」との声があったため、v5.1で元の
+  // 「ダイエット経過 📉」「#ダイエット記録」に戻しつつ、増量方向のときだけ
+  // 対になる「増量記録 📈」「#増量記録」を使うようにする(実際の変化(記録が
+  // 2件以上あればその増減、無ければ目標との位置関係)から判定)。どちらとも
+  // 言えない(変化なし・目標未設定)場合だけ、中立な「からだの記録 📊」にする。
   const trendDiff = sortedAsc.length >= 2 ? round1_(latest.weight - start.weight)
     : (goals.weight ? latest.weight - goals.weight : 0);
-  const trendIcon = trendDiff > 0 ? "📈" : trendDiff < 0 ? "📉" : "📊";
-  const lines = [`からだの記録 ${trendIcon}`];
+  const title = trendDiff < 0 ? "ダイエット経過 📉" : trendDiff > 0 ? "増量記録 📈" : "からだの記録 📊";
+  const hashtag = trendDiff < 0 ? "#ダイエット記録" : trendDiff > 0 ? "#増量記録" : "#からだの記録";
+  const lines = [title];
   if (sortedAsc.length >= 2 && start.date !== latest.date) {
     const days = Math.round((new Date(latest.date) - new Date(start.date)) / 86400000) + 1;
     const diff = round1_(latest.weight - start.weight);
@@ -3770,7 +3773,7 @@ function buildXShareText() {
     lines.push(`累計収支: ${totals.balance >= 0 ? "+" : "−"}${Math.abs(totals.balance).toLocaleString()}kcal (${totals.days}日)`);
   }
 
-  lines.push("#からだの記録");
+  lines.push(hashtag);
   const text = lines.join("\n");
   // Xの1投稿の上限(280文字相当)に収まらなくなった場合に備え、長くなりすぎたら
   // カロリー関連の行、それでも収まらなければ体組成の行も落として、体重の経過
