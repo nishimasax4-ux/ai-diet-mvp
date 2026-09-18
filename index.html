@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.1";
+const APP_VERSION = "v5.2";
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -1873,18 +1873,24 @@ function weightTrendColor_(diff, currentWeight, goalWeight) {
 function computeTargets(p, weight, goalWeight) {
   const age = Number(p.age), height = Number(p.height);
   if (!age || !height || !weight) return null;
-  // 体脂肪率が分かっていない場合の推定式(Mifflin-St Jeor)。身長・体重・年齢・性別だけを
-  // 使うため、同じ体格なら体脂肪率が何%でも同じ値になる。
-  const bmrMifflin = p.gender === "男性"
-    ? 10*weight + 6.25*height - 5*age + 5
-    : 10*weight + 6.25*height - 5*age - 161;
+  // 体脂肪率が分かっていない場合の推定式(v5.2で国立健康・栄養研究所の式に変更)。
+  // 身長・体重・年齢・性別だけを使うため、同じ体格なら体脂肪率が何%でも同じ値になる。
+  // 【v5.2でMifflin-St Jeor式から変更】従来はMifflin-St Jeor式(欧米人のデータがもとに
+  // なっている)を使っていたが、このアプリは日本語UIで日本の利用者を想定しているため、
+  // 日本人のデータから作られたこの式のほうが実態に近いと考え、乗り換えた。
+  // 参考: Ganpule et al. (2007)、「日本人の食事摂取基準」でも参照式として扱われている。
+  //   男性: (0.0481×体重kg + 0.0234×身長cm − 0.0138×年齢 − 0.4235) × 1000 ÷ 4.186
+  //   女性: (0.0481×体重kg + 0.0234×身長cm − 0.0138×年齢 − 0.9708) × 1000 ÷ 4.186
+  const bmrJp = p.gender === "男性"
+    ? (0.0481*weight + 0.0234*height - 0.0138*age - 0.4235) * 1000 / 4.186
+    : (0.0481*weight + 0.0234*height - 0.0138*age - 0.9708) * 1000 / 4.186;
   // 体脂肪率を記録している場合は、除脂肪体重から求めるKatch-McArdle式を使う(v41)。
   // 体組成が平均から離れているほど、こちらのほうが実態に近い値になる。
   const bodyFat = recentBodyFat_();
   const leanMass = bodyFat != null ? weight * (1 - bodyFat / 100) : null;
   const bmrKatch = leanMass != null ? 370 + 21.6 * leanMass : null;
-  const bmr = bmrKatch != null ? bmrKatch : bmrMifflin;
-  const bmrMethod = bmrKatch != null ? "katch" : "mifflin";
+  const bmr = bmrKatch != null ? bmrKatch : bmrJp;
+  const bmrMethod = bmrKatch != null ? "katch" : "jp";
   // 運動ぶんを含まない土台(基礎代謝 × 日常生活の活動量)。運動の消費は記録から
   // 実測ぶんだけを別途上乗せする(LIFESTYLE_FACTOR の説明を参照)。
   const tdee = bmr * (LIFESTYLE_FACTOR[p.lifestyle] || LIFESTYLE_FACTOR[DEFAULT_LIFESTYLE]);
@@ -1950,7 +1956,7 @@ function computeTargets(p, weight, goalWeight) {
     bmrMethod, bodyFat,
     leanMass: leanMass != null ? Math.round(leanMass * 10) / 10 : null,
     fatMass: leanMass != null ? Math.round((weight - leanMass) * 10) / 10 : null,
-    bmrMifflin: Math.round(bmrMifflin),
+    bmrJp: Math.round(bmrJp),
   };
 }
 // BMIチェック(v46.5)。プロフィールの身長と直近の体重から計算する。入力の手間を
@@ -2157,10 +2163,10 @@ function calorieTargetBreakdownHtml(t) {
     <p class="section-title">🧮 目安カロリーの内訳</p>
     ${line("基礎代謝", `${t.bmr} kcal`, t.bmrMethod === "katch"
         ? `(Katch-McArdle式 / 体脂肪率${t.bodyFat}%・除脂肪体重${t.leanMass}kgから)`
-        : "(Mifflin-St Jeor式 / 体脂肪率は未記録)")}
-    ${t.bmrMethod === "katch" && t.bmr !== t.bmrMifflin
-        ? `<p class="muted" style="font-size:10.5px;margin:-2px 0 8px;line-height:1.6;">体脂肪率を使わない場合は${t.bmrMifflin}kcal(差 ${t.bmr - t.bmrMifflin > 0 ? "+" : ""}${t.bmr - t.bmrMifflin}kcal)。直近${BODYFAT_AVG_COUNT}件までの平均で計算しているため、1回の測定のブレで目標が揺れないようにしています。</p>`
-        : (t.bmrMethod === "mifflin"
+        : "(国立健康・栄養研究所の式 / 体脂肪率は未記録)")}
+    ${t.bmrMethod === "katch" && t.bmr !== t.bmrJp
+        ? `<p class="muted" style="font-size:10.5px;margin:-2px 0 8px;line-height:1.6;">体脂肪率を使わない場合は${t.bmrJp}kcal(差 ${t.bmr - t.bmrJp > 0 ? "+" : ""}${t.bmr - t.bmrJp}kcal)。直近${BODYFAT_AVG_COUNT}件までの平均で計算しているため、1回の測定のブレで目標が揺れないようにしています。</p>`
+        : (t.bmrMethod === "jp"
         ? `<p class="muted" style="font-size:10.5px;margin:-2px 0 8px;line-height:1.6;">からだタブで体脂肪率も記録すると、体組成から計算する式に切り替わります。</p>` : "")}
     ${line("基礎消費", `${t.tdee} kcal`, "(基礎代謝 × 日常生活の活動量)")}
     ${t.needDeficit !== 0 ? line(
