@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.6";
+const APP_VERSION = "v5.7";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -290,6 +290,40 @@ const CARDIO_OPTIONS = ["ランニング","ジョギング","バイク","ウォ�
 // 買い物は歩行+荷物の出し入れが混ざる軽めの活動として、Compendiumの
 // "shopping, general"目安(2.3〜3.0)の中間あたり、3.0とした(v5.4)。
 const CARDIO_MET = { "ランニング":8, "ジョギング":7, "バイク":7, "ウォーキング":3.5, "クロストレーナー":5, "リカベントバイク":4.5, "買い物":3, "その他":5 };
+// ランニング・ウォーキングの距離換算に使う目安値(v5.7)。
+// 歩幅(1歩で進む距離)は「身長(cm) × 係数」という経験則の概算で、ウォーキングは0.45、
+// ランニングは歩幅が伸びるぶん0.7を使う(いずれも一般的な目安で、個人差があります)。
+// 平均ペース(km/h)は、時間入力から距離を逆算したり、歩数・距離入力から所要時間
+// (=カロリー計算に使うminutes)を逆算したりする際の目安として使う。
+const CARDIO_DISTANCE_EXERCISES = ["ランニング", "ウォーキング"]; // 歩数・距離入力に対応する種目
+const STRIDE_FACTOR = { "ランニング": 0.7, "ウォーキング": 0.45 }; // 歩幅 ≒ 身長(cm) × 係数 ÷ 100(m)
+const CARDIO_SPEED_KMH = { "ランニング": 8, "ウォーキング": 4.5 }; // 平均ペースの目安(km/h)
+function supportsDistanceInput(exercise) {
+  return CARDIO_DISTANCE_EXERCISES.includes(exercise);
+}
+// 歩数 → 距離(km)。身長が未設定だと歩幅が出せないためnullを返す。
+function distanceFromSteps(exercise, steps) {
+  const h = profile ? Number(profile.height) : NaN;
+  if (!Number.isFinite(h) || h <= 0 || !steps || steps <= 0) return null;
+  const strideM = (h / 100) * (STRIDE_FACTOR[exercise] || 0.5);
+  return (steps * strideM) / 1000;
+}
+// 時間(分) → 距離(km)の目安。
+function distanceFromMinutes(exercise, minutes) {
+  const speed = CARDIO_SPEED_KMH[exercise];
+  if (!speed || !minutes || minutes <= 0) return null;
+  return (minutes / 60) * speed;
+}
+// 距離(km) → 所要時間(分)の目安。歩数・距離を直接入力したときも、カロリー計算に
+// 使うminutesを一貫して求められるようにするための逆算。
+function minutesFromDistance(exercise, distanceKm) {
+  const speed = CARDIO_SPEED_KMH[exercise];
+  if (!speed || !distanceKm || distanceKm <= 0) return null;
+  return (distanceKm / speed) * 60;
+}
+function formatDistanceKm(km) {
+  return km == null ? null : Math.round(km * 100) / 100;
+}
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
 const MINUTE_QUICK_OPTIONS = [15,30,45,60]; // 有酸素の時間のワンタップ候補(分)。これ以外の時間は入力欄に直接入力できます
@@ -457,6 +491,7 @@ let activeTab = "today"; // today | meals | weight | training | stretch | settin
 let trainingSubTab = "strength"; // strength | cardio
 let selectedPart = "胸";
 let selectedCardio = "ランニング";
+let cardioInputMode = "time"; // "time" | "steps" | "distance" — ランニング・ウォーキングのときだけ使う(v5.7)
 let selectedMealType = "朝食";
 let masterExercisePart = "胸"; // which part's tab is active in the master-data editor
 let historyView = "list";
@@ -480,6 +515,9 @@ let gasConfigRevealed = false;
 // 運動・食事の履歴(リスト表示)で、どの日付をアコーディオン展開中か(v44.8)。
 // 初期状態はすべて閉じておき、見たい日だけタップして開く(要望⑥)。
 let trainingHistoryOpenDates = new Set();
+let distanceHistoryShowAll = false; // v5.7: 移動距離一覧の「もっと見る」展開状態
+let trainingHistoryShowAll = false; // v5.7: 運動履歴(10日より前)の展開状態
+let mealHistoryShowAll = false; // v5.7: 食事履歴(10日より前)の展開状態
 let mealHistoryOpenDates = new Set();
 let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedCalDate = null;
@@ -569,6 +607,51 @@ function weekBuckets(n) {
     buckets.push({ start, label: `${start.getMonth()+1}/${start.getDate()}`, count });
   }
   return buckets;
+}
+// weekBuckets()と同じ週区切り(月曜始まり)で、ランニング・ウォーキングの合計距離(km)を
+// 集計する(v5.7)。「1週間ごとの運動距離」のグラフ用。
+function weekDistanceBuckets(n) {
+  const now = new Date();
+  const dow = now.getDay();
+  const diffToMonday = (dow === 0 ? 6 : dow - 1);
+  const thisMonday = new Date(now); thisMonday.setDate(now.getDate() - diffToMonday); thisMonday.setHours(0,0,0,0);
+  const distEntries = entries.filter(e => e.type === "cardio" && e.distance != null);
+  const buckets = [];
+  for (let w = n - 1; w >= 0; w--) {
+    const start = new Date(thisMonday); start.setDate(thisMonday.getDate() - w*7);
+    const end = new Date(start); end.setDate(start.getDate() + 7);
+    const startStr = localDateStr(start), endStr = localDateStr(end);
+    const km = distEntries
+      .filter(e => e.date >= startStr && e.date < endStr)
+      .reduce((s, e) => s + e.distance, 0);
+    buckets.push({ start, label: `${start.getMonth()+1}/${start.getDate()}`, km: formatDistanceKm(km) });
+  }
+  return buckets;
+}
+// weekDistanceBuckets()の結果を棒グラフで表示する。burnStackedBarSvgと同じく
+// y軸目盛り付きの単色棒グラフ(距離なので積み上げは不要)。
+function weeklyDistanceBarSvg(weeks) {
+  const w=300, h=110, padL=26, padR=8, padT=10, labelH=12;
+  const maxVal = Math.max(...weeks.map(x => x.km), 1);
+  if (maxVal <= 0) return '<p class="muted" style="font-size:12px;margin:0;">ランニング・ウォーキングを記録すると、週ごとの距離のグラフが表示されます。</p>';
+  const top = Math.max(Math.ceil((maxVal * 1.15) * 2) / 2, 1); // 0.5km単位で切り上げ
+  const plotH = h - padT - labelH;
+  const baseY = padT + plotH;
+  const yOf = v => baseY - (v / top) * plotH;
+  const slot = (w - padL - padR) / weeks.length;
+  const bw = Math.min(20, slot - 4);
+  const ticks = [0, top/2, top].map(v =>
+    `<line x1="${padL}" y1="${yOf(v)}" x2="${w-padR}" y2="${yOf(v)}" stroke="var(--line)" stroke-width="0.5"/>
+     <text x="${padL-3}" y="${yOf(v)+2.5}" font-size="7" fill="var(--ink-faint)" text-anchor="end">${v}</text>`).join("");
+  const bars = weeks.map((wk,i) => {
+    if (wk.km <= 0) return "";
+    const bx = padL + i*slot + slot/2 - bw/2;
+    const y = yOf(wk.km);
+    return `<rect x="${bx}" y="${y}" width="${bw}" height="${Math.max(baseY - y, 1)}" rx="2" fill="var(--slate)"/>`;
+  }).join("");
+  const labels = weeks.map((wk,i) =>
+    `<text x="${padL + i*slot + slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${wk.label}</text>`).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:120px;">${ticks}${bars}${labels}</svg>`;
 }
 // 今週(月曜始まり)がまだ何日残っているか。0 = 日曜(週が終わっている)。
 // 「週間トレーニング ○/○回」は今週まだ来ていない曜日を数えられないぶん自然と
@@ -3745,8 +3828,11 @@ function mealHistoryHtml() {
   const grouped = {};
   [...mealEntries].sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt)
     .forEach(m => { (grouped[m.date] = grouped[m.date] || []).push(m); });
-  const dates = Object.keys(grouped).sort((a,b) => a < b ? 1 : -1).slice(0, 14);
-  return dates.map(d => {
+  // v5.7: 直近10日ぶんだけを初期表示し、それより前は「もっと見る」で展開する
+  // (以前は「直近14日」を常に全部表示していたため、記録が増えるほどタブが縦に長くなっていた)。
+  const allDates = Object.keys(grouped).sort((a,b) => a < b ? 1 : -1);
+  const dates = mealHistoryShowAll ? allDates : allDates.slice(0, 10);
+  const rows = dates.map(d => {
     const dd = new Date(d + "T00:00:00");
     const dayTotal = grouped[d].reduce((s,m) => s + (m.calories||0), 0);
     const isOpen = mealHistoryOpenDates.has(d);
@@ -3774,6 +3860,10 @@ function mealHistoryHtml() {
       <div id="meal-history-items-${d}" class="${isOpen ? "" : "hidden"}" style="margin-top:6px;">${items}</div>
     </div>`;
   }).join("");
+  const moreBtn = allDates.length > 10
+    ? `<button type="button" class="chip" data-action="toggle-meal-history-show-all" style="margin-bottom:10px;">${mealHistoryShowAll ? "▲ 直近10日だけ表示" : `▶ 10日より前を見る(他${allDates.length-10}日ぶん)`}</button>`
+    : "";
+  return rows + moreBtn;
 }
 // 「📖 食事の履歴」だけを再描画する(アコーディオン開閉用)。食事タブ全体を
 // renderTabContent()で作り直すと、入力中の食事名などが消えてしまうため、
@@ -4078,9 +4168,24 @@ function trainingHtml() {
         <label class="label">種目</label>
         <div class="wrap" id="cardio-buttons" style="margin-bottom:8px;"></div>
         <input type="text" id="cardio-custom-input" placeholder="種目名を入力" class="hidden" style="margin-bottom:8px;">
-        <label class="label">時間 (分)</label>
-        <input type="number" id="minutes-input" placeholder="分" class="mono" style="margin-bottom:8px;">
-        <div class="wrap" id="minutes-quick-buttons" style="margin-bottom:10px;"></div>
+        <div id="cardio-mode-section" class="hidden" style="margin-bottom:8px;">
+          <label class="label">入力方法</label>
+          <div class="wrap" id="cardio-mode-buttons" style="margin-bottom:8px;"></div>
+        </div>
+        <div id="cardio-time-field">
+          <label class="label">時間 (分)</label>
+          <input type="number" id="minutes-input" placeholder="分" class="mono" style="margin-bottom:8px;">
+          <div class="wrap" id="minutes-quick-buttons" style="margin-bottom:8px;"></div>
+        </div>
+        <div id="cardio-steps-field" class="hidden">
+          <label class="label">歩数</label>
+          <input type="number" id="steps-input" placeholder="例: 6000" class="mono" style="margin-bottom:8px;">
+        </div>
+        <div id="cardio-distance-field" class="hidden">
+          <label class="label">距離 (km)</label>
+          <input type="number" step="0.01" id="distance-input" placeholder="例: 3.5" class="mono" style="margin-bottom:8px;">
+        </div>
+        <p id="cardio-distance-preview" class="muted" style="font-size:11px;margin:0 0 10px;line-height:1.6;"></p>
       </div>
       <button class="btn-primary" data-action="add-training">＋ 記録する</button>
     </div>
@@ -4111,7 +4216,11 @@ function trainingHtml() {
       <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
       ${weeklyBarSvg(weekBuckets(8), goals.weeklyFreq)}
       ${progressBurnHtml()}
+      <p class="label" style="margin:14px 0 4px;">週間の移動距離(ランニング・ウォーキング合計/直近8週)</p>
+      ${weeklyDistanceBarSvg(weekDistanceBuckets(8))}
     </div>
+
+    ${distanceHistoryHtml()}
 
     ${bodyPartStatusHtml()}
 
@@ -4199,13 +4308,51 @@ function trainingEntryRowHtml(e) {
   const burn = estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null);
   const detail = isStrength
     ? `<span style="font-weight:600;">[${esc(e.part)}]</span>${e.exercise ? " "+esc(e.exercise) : ""} <span class="mono" style="color:var(--sand);">${e.weight}kg × ${e.reps}</span>`
-    : `${esc(e.exercise)} <span class="mono" style="color:var(--sand);">${e.minutes}分</span>`;
+    : `${esc(e.exercise)} <span class="mono" style="color:var(--sand);">${e.minutes}分</span>${e.distance != null ? ` <span class="mono" style="color:var(--slate);">${e.distance}km</span>` : ""}`;
   return `<div class="entry-row">
     <div class="badge" style="background:${isStrength ? "var(--coral-soft)" : "var(--slate-soft)"};">${isStrength ? "🏋️" : "💨"}</div>
     <div style="flex:1;">${detail}${burn ? ` <span class="mono muted">(約${burn}kcal)</span>` : ""}</div>
     <button class="del-btn" data-action="relog-training" data-id="${e.id}" title="今日も記録する">🔁</button>
     <button class="del-btn" data-action="edit-training" data-id="${e.id}">✏️</button>
     <button class="del-btn" data-action="del-training" data-id="${e.id}">🗑️</button>
+  </div>`;
+}
+// ランニング・ウォーキングの移動距離だけを抜き出した一覧(v5.7)。通常の運動履歴には
+// 筋トレなど他の記録も混ざって距離が埋もれてしまうため、「今月どれだけ歩いた/走ったか」を
+// 振り返れる専用の一覧を用意した。新しい記録から10件だけ初期表示し、それより前は
+// 「もっと見る」で展開する。
+function distanceHistoryHtml() {
+  const distEntries = entries
+    .filter(e => e.type === "cardio" && e.distance != null)
+    .sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt);
+  if (!distEntries.length) {
+    return `<div class="card">
+      <p class="section-title">🏃 移動距離の記録</p>
+      <p class="muted" style="font-size:12px;margin:0;">ランニング・ウォーキングを記録すると、移動距離の一覧がここに表示されます。</p>
+    </div>`;
+  }
+  const totalKm = formatDistanceKm(distEntries.reduce((s,e) => s + e.distance, 0));
+  const visible = distanceHistoryShowAll ? distEntries : distEntries.slice(0, 10);
+  const rows = visible.map(e => {
+    const pace = e.distance > 0 ? formatDistanceKm(e.minutes / e.distance) : null;
+    return `<div class="entry-row">
+      <div class="badge" style="background:var(--slate-soft);">${e.exercise === "ランニング" ? "🏃" : "🚶"}</div>
+      <div style="flex:1;">
+        <div>${esc(e.date)} ${esc(e.exercise)} <span class="mono" style="color:var(--slate);">${e.distance}km</span></div>
+        <div class="muted" style="font-size:11px;">${e.minutes}分${pace ? `・ペース目安 ${pace}分/km` : ""}</div>
+      </div>
+    </div>`;
+  }).join("");
+  const moreBtn = distEntries.length > 10
+    ? `<button type="button" class="chip" data-action="toggle-distance-history-all" style="margin-top:6px;">${distanceHistoryShowAll ? "▲ 少なく表示" : `▶ もっと見る(他${distEntries.length-10}件)`}</button>`
+    : "";
+  return `<div class="card">
+    <div class="between" style="margin-bottom:8px;">
+      <p class="section-title" style="margin:0;">🏃 移動距離の記録</p>
+      <span class="muted mono" style="font-size:11px;">合計 ${totalKm}km</span>
+    </div>
+    ${rows}
+    ${moreBtn}
   </div>`;
 }
 // dayDetailHtml/renderHistory(リスト表示)で共通して使う、食事1件分の行。
@@ -4286,8 +4433,10 @@ function renderHistory() {
   if (historyView === "calendar") {
     body = `<p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.5;">印: 🔴運動 / 🟡体重 / 🔵食事。日付をタップするとその日の全記録が見られます。</p>${calendarGridHtml()}${dayDetailHtml(selectedCalDate)}`;
   } else {
-    const dates = [...new Set(entries.map(e => e.date))].sort((a,b) => a < b ? 1 : -1);
-    if (dates.length === 0) {
+    // v5.7: 直近10日ぶんだけを初期表示し、それより前は「もっと見る」で展開する。
+    const allDates = [...new Set(entries.map(e => e.date))].sort((a,b) => a < b ? 1 : -1);
+    const dates = trainingHistoryShowAll ? allDates : allDates.slice(0, 10);
+    if (allDates.length === 0) {
       body = '<p class="muted">まだ運動の記録がありません。今日のトレーニングを記録してみましょう。</p>';
     } else {
       const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
@@ -4311,6 +4460,9 @@ function renderHistory() {
           <div id="history-items-${d}" class="${isOpen ? "" : "hidden"}" style="margin-top:6px;">${items}</div>
         </div>`;
       }).join("");
+      if (allDates.length > 10) {
+        body += `<button type="button" class="chip" data-action="toggle-training-history-show-all" style="margin-bottom:10px;">${trainingHistoryShowAll ? "▲ 直近10日だけ表示" : `▶ 10日より前を見る(他${allDates.length-10}日ぶん)`}</button>`;
+      }
       body += '<p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.5;">体重は「からだ」タブ、食事は「食事」タブの「📖 食事の履歴」で確認できます。カレンダー表示なら、その日の全記録をまとめて見られます。</p>';
     }
   }
@@ -4391,6 +4543,55 @@ function renderTrainingFormOptions() {
     minutesQuickEl.innerHTML = MINUTE_QUICK_OPTIONS.map(m =>
       `<button type="button" class="chip ${String(m)===String(currentMinutes)?"active-b":""}" data-action="select-minutes" data-val="${m}">${m}分</button>`).join("");
   }
+
+  // 距離換算(v5.7): ランニング・ウォーキングのときだけ「入力方法(時間/歩数/距離)」を
+  // 出し、どれで入力しても残り2つを目安として逆算して見せる。それ以外の種目は
+  // これまで通り時間の入力欄だけを表示する。
+  const supportsDist = supportsDistanceInput(selectedCardio);
+  const modeSection = document.getElementById("cardio-mode-section");
+  const timeField = document.getElementById("cardio-time-field");
+  const stepsField = document.getElementById("cardio-steps-field");
+  const distanceField = document.getElementById("cardio-distance-field");
+  if (modeSection) modeSection.classList.toggle("hidden", !supportsDist);
+  if (timeField) timeField.classList.toggle("hidden", supportsDist && cardioInputMode !== "time");
+  if (stepsField) stepsField.classList.toggle("hidden", !(supportsDist && cardioInputMode === "steps"));
+  if (distanceField) distanceField.classList.toggle("hidden", !(supportsDist && cardioInputMode === "distance"));
+  const modeBtnsEl = document.getElementById("cardio-mode-buttons");
+  if (modeBtnsEl) {
+    modeBtnsEl.innerHTML = [["time","時間"],["steps","歩数"],["distance","距離"]].map(([val,label]) =>
+      `<button type="button" class="chip ${cardioInputMode===val?"active-b":""}" data-action="select-cardio-mode" data-val="${val}">${label}</button>`).join("");
+  }
+  updateCardioDistancePreview();
+}
+// 入力方法(時間/歩数/距離)のどれかに値が入るたびに呼び、残り2つの目安を
+// プレビュー表示する。全体再描画はせず、このp要素だけを直接書き換える。
+function updateCardioDistancePreview() {
+  const previewEl = document.getElementById("cardio-distance-preview");
+  if (!previewEl) return;
+  if (!supportsDistanceInput(selectedCardio)) { previewEl.textContent = ""; return; }
+  if (cardioInputMode === "steps" && !(profile && Number(profile.height) > 0)) {
+    previewEl.textContent = "身長が未設定のため、歩数から距離を計算できません。設定タブのプロフィールで身長を入力してください。";
+    return;
+  }
+  const minutesVal = Number(document.getElementById("minutes-input") && document.getElementById("minutes-input").value) || 0;
+  const stepsVal = Number(document.getElementById("steps-input") && document.getElementById("steps-input").value) || 0;
+  const distanceVal = Number(document.getElementById("distance-input") && document.getElementById("distance-input").value) || 0;
+  let distanceKm = null, minutes = null;
+  if (cardioInputMode === "steps") {
+    distanceKm = distanceFromSteps(selectedCardio, stepsVal);
+    minutes = minutesFromDistance(selectedCardio, distanceKm);
+  } else if (cardioInputMode === "distance") {
+    distanceKm = distanceVal || null;
+    minutes = minutesFromDistance(selectedCardio, distanceKm);
+  } else {
+    minutes = minutesVal || null;
+    distanceKm = distanceFromMinutes(selectedCardio, minutes);
+  }
+  if (distanceKm == null) { previewEl.textContent = "入力すると、距離・時間の目安がここに表示されます。"; return; }
+  const distStr = formatDistanceKm(distanceKm);
+  previewEl.textContent = cardioInputMode === "time"
+    ? `推定距離: 約${distStr}km`
+    : `推定距離: 約${distStr}km(所要時間の目安: 約${minutes != null ? Math.round(minutes) : "-"}分)`;
 }
 
 // ============ SETTINGS TAB ============
@@ -4813,6 +5014,11 @@ function handleEditSave() {
       if (ex) e.exercise = ex;
       const minutes = Number(document.getElementById("edit-minutes").value);
       if (minutes > 0) e.minutes = minutes;
+      // v5.7: 編集画面は時間(分)の入力だけなので、距離は時間から目安を再計算して
+      // 揃えておく(ランニング・ウォーキング以外、または逆算できない場合は距離を外す)。
+      const recalculated = distanceFromMinutes(e.exercise, e.minutes);
+      if (recalculated != null) e.distance = formatDistanceKm(recalculated);
+      else delete e.distance;
     }
   } else if (editing.kind === "weight") {
     const w = weightEntries.find(x => x.date === editing.date);
@@ -4898,17 +5104,38 @@ function handleAddTraining() {
     // 次回この種目(または部位)を選んだときに、今回の回数・負荷を提案できるよう覚えておく。
     lastStrengthByExercise[exercise || `(${selectedPart})`] = { reps: Number(reps), weight };
   } else {
-    const minutes = document.getElementById("minutes-input").value;
-    if (!minutes) return;
     const customVal = document.getElementById("cardio-custom-input").value.trim();
     if (selectedCardio === "その他" && !customVal) return;
     const exercise = selectedCardio === "その他" ? customVal : selectedCardio;
-    entries.unshift({
-      id: uid(), date, type: "cardio", createdAt: Date.now(),
-      exercise, minutes: Number(minutes),
-    });
+    // v5.7: ランニング・ウォーキングは時間/歩数/距離のどれで入力してもよい。
+    // どの入力方法でも、カロリー計算に使うminutesと、一覧・グラフ用のdistanceの
+    // 両方を求めて保存する(片方だけ入力しても、もう片方は目安として逆算する)。
+    const distSupported = supportsDistanceInput(exercise);
+    const mode = distSupported ? cardioInputMode : "time";
+    let minutes = null, distanceKm = null;
+    if (mode === "steps") {
+      const steps = Number(document.getElementById("steps-input").value) || 0;
+      if (!steps) return;
+      distanceKm = distanceFromSteps(exercise, steps);
+      if (distanceKm == null) return; // 身長未設定などで逆算できない
+      minutes = minutesFromDistance(exercise, distanceKm);
+    } else if (mode === "distance") {
+      distanceKm = Number(document.getElementById("distance-input").value) || 0;
+      if (!distanceKm) return;
+      minutes = minutesFromDistance(exercise, distanceKm);
+    } else {
+      const minutesVal = document.getElementById("minutes-input").value;
+      if (!minutesVal) return;
+      minutes = Number(minutesVal);
+      distanceKm = distanceFromMinutes(exercise, minutes);
+    }
+    if (!minutes || minutes <= 0) return; // 逆算に失敗した場合は壊れたデータを残さない
+    minutes = Math.round(minutes * 10) / 10;
+    const entry = { id: uid(), date, type: "cardio", createdAt: Date.now(), exercise, minutes };
+    if (distanceKm != null) entry.distance = formatDistanceKm(distanceKm);
+    entries.unshift(entry);
     // 次回同じ種目を選んだときに、今回の時間を提案できるよう覚えておく。
-    lastCardioMinutes[selectedCardio === "その他" ? customVal : selectedCardio] = Number(minutes);
+    lastCardioMinutes[selectedCardio === "その他" ? customVal : selectedCardio] = minutes;
   }
   // 記録し終わったら、次に記録しそうな種目(=いちばん使っている種目)に戻しておく。
   selectedCardio = defaultCardio();
@@ -5286,6 +5513,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "select-part") { selectedPart = t.dataset.val; renderTrainingFormOptions(); }
   else if (action === "select-exercise") { document.getElementById("exercise-input").value = t.dataset.val; renderTrainingFormOptions(); }
   else if (action === "select-cardio") { selectedCardio = t.dataset.val; renderTrainingFormOptions(); }
+  else if (action === "select-cardio-mode") { cardioInputMode = t.dataset.val; renderTrainingFormOptions(); }
   else if (action === "weight-step") {
     const inp = document.getElementById("weight-input");
     if (!inp) return;
@@ -5552,11 +5780,14 @@ document.getElementById("app").addEventListener("click", (e) => {
     if (trainingHistoryOpenDates.has(d)) trainingHistoryOpenDates.delete(d); else trainingHistoryOpenDates.add(d);
     renderHistory();
   }
+  else if (action === "toggle-distance-history-all") { distanceHistoryShowAll = !distanceHistoryShowAll; renderTabContent(); }
+  else if (action === "toggle-training-history-show-all") { trainingHistoryShowAll = !trainingHistoryShowAll; renderHistory(); }
   else if (action === "toggle-meal-history-day") {
     const d = t.dataset.date;
     if (mealHistoryOpenDates.has(d)) mealHistoryOpenDates.delete(d); else mealHistoryOpenDates.add(d);
     renderMealHistory();
   }
+  else if (action === "toggle-meal-history-show-all") { mealHistoryShowAll = !mealHistoryShowAll; renderMealHistory(); }
   else if (action === "add-meal-master") {
     const nameInp = document.getElementById("master-meal-name-input");
     const name = nameInp.value.trim();
@@ -5620,7 +5851,11 @@ document.getElementById("app").addEventListener("input", (e) => {
       const el = document.getElementById("minutes-quick-buttons");
       if (el) el.innerHTML = MINUTE_QUICK_OPTIONS.map(m =>
         `<button type="button" class="chip ${String(m)===String(e.target.value)?"active-b":""}" data-action="select-minutes" data-val="${m}">${m}分</button>`).join("");
+      updateCardioDistancePreview();
     }
+  } else if (e.target.id === "steps-input" || e.target.id === "distance-input") {
+    // 歩数・距離を入力するたびに、距離/時間の目安プレビューをその場で更新する(v5.7)。
+    updateCardioDistancePreview();
   }
 });
 // 日付欄を変えたら、その日付を覚えておく(1件記録するたびに今日へ戻らないように)。
