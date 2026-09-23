@@ -209,7 +209,19 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.2";
+const APP_VERSION = "v5.4";
+
+// 「毎日のストレッチ」チェックリストの項目。デスクワークで座りっぱなしになりやすいこと、
+// ジムでの筋トレ後の回復ケアも兼ねることを踏まえて選んだ固定7項目(v5.3)。
+const STRETCH_ITEMS = [
+  { id: "chest",      label: "胸を開くストレッチ(肩甲骨寄せ)" },
+  { id: "hipflexor",  label: "股関節屈筋のストレッチ(前後開脚)" },
+  { id: "neckshoulder", label: "首・肩回し" },
+  { id: "quad",       label: "太もも前面(大腿四頭筋)" },
+  { id: "hamstring",  label: "ハムストリングス" },
+  { id: "calf",       label: "ふくらはぎ" },
+  { id: "backhip",    label: "腰・背中(膝抱えストレッチ)" },
+];
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
@@ -221,7 +233,7 @@ const EXERCISES_BY_PART = {
   "腕": ["アームカール","トライセップエクステンション","ハンマーカール"],
   "腹筋": ["クランチ","プランク","レッグレイズ"],
 };
-const CARDIO_OPTIONS = ["ランニング","ジョギング","バイク","ウォーキング","クロストレーナー","リカベントバイク","その他"];
+const CARDIO_OPTIONS = ["ランニング","ジョギング","バイク","ウォーキング","クロストレーナー","リカベントバイク","買い物","その他"];
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
 // MET値の目安(Compendium of Physical Activities等を参考にした概算・ふつうの強度)。
 // ジョギングはランニングよりゆっくりめのペースを想定し、7.0(Compendiumの
@@ -229,7 +241,9 @@ const CARDIO_OPTIONS = ["ランニング","ジョギング","バイク","ウォ�
 // 1〜2割ほど多く見積もることになるため、v44.7で項目を分けた。
 // クロストレーナー(エリプティカル)は中強度の有酸素運動として5.0。
 // リカベントバイクは背もたれ付きで負荷が軽めになりやすいため、通常のバイク(7.0)より低めの4.5。
-const CARDIO_MET = { "ランニング":8, "ジョギング":7, "バイク":7, "ウォーキング":3.5, "クロストレーナー":5, "リカベントバイク":4.5, "その他":5 };
+// 買い物は歩行+荷物の出し入れが混ざる軽めの活動として、Compendiumの
+// "shopping, general"目安(2.3〜3.0)の中間あたり、3.0とした(v5.4)。
+const CARDIO_MET = { "ランニング":8, "ジョギング":7, "バイク":7, "ウォーキング":3.5, "クロストレーナー":5, "リカベントバイク":4.5, "買い物":3, "その他":5 };
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
 const MINUTE_QUICK_OPTIONS = [15,30,45,60]; // 有酸素の時間のワンタップ候補(分)。これ以外の時間は入力欄に直接入力できます
@@ -387,6 +401,7 @@ let lastCardioMinutes = {}; // 有酸素の種目名 -> 直近の分数
 let routineMaster = []; // {id, name, items:[{type:"strength",part,exercise,weight,reps} | {type:"cardio",exercise,minutes}]}
                          // よく使う運動メニュー。複数種目をまとめて登録し、ワンタップで今日にまとめて記録できる
 let savingRoutine = false; // 「今日の内容をメニューとして保存」の名前入力欄を表示中か
+let stretchLog = {}; // "YYYY-MM-DD" -> [itemId, ...] その日にチェック済みのストレッチ項目ID一覧
 
 let activeTab = "today"; // today | meals | weight | training | settings
 let trainingSubTab = "strength"; // strength | cardio
@@ -1042,6 +1057,7 @@ function loadState() {
       lastStrengthByExercise = data.lastStrengthByExercise || {};
       lastCardioMinutes = data.lastCardioMinutes || {};
       routineMaster = data.routineMaster || [];
+      stretchLog = data.stretchLog || {};
     }
   } catch (e) {
     // 保存内容が壊れていた場合、ここで黙って初期状態に戻すと「まっさらな新規状態」として
@@ -1064,7 +1080,7 @@ function seedExerciseMasterIfEmpty() {
 }
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes, routineMaster }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries, weightEntries, mealEntries, goals, profile, moodByDate, exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes, routineMaster, stretchLog }));
     // 直前まで保存できていなかった場合は、復旧したことを警告表示にも反映する。
     if (storageWriteFailed) { storageWriteFailed = false; renderDataWarning(); }
   } catch (e) {
@@ -2782,7 +2798,7 @@ function exportJson() {
     const dump = {
       app: "training-log", version: APP_VERSION, exportedAt: new Date().toISOString(),
       entries, weightEntries, mealEntries, goals, profile, moodByDate,
-      exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes, routineMaster,
+      exerciseMaster, mealMaster, lastStrengthByExercise, lastCardioMinutes, routineMaster, stretchLog,
     };
     const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -2821,6 +2837,7 @@ function importJsonFile(file) {
       lastStrengthByExercise = data.lastStrengthByExercise || {};
       lastCardioMinutes = data.lastCardioMinutes || {};
       routineMaster = data.routineMaster || [];
+      stretchLog = data.stretchLog || {};
       seedExerciseMasterIfEmpty();
       selectedCardio = defaultCardio(); // 取り込んだ記録に合わせて初期選択を更新する(v38)
       saveState();
@@ -3964,6 +3981,8 @@ function trainingHtml() {
       </div>
     </div>
 
+    ${stretchChecklistHtml()}
+
     ${yesterdayHadTraining ? `
     <div class="card">
       <div class="between">
@@ -4938,6 +4957,56 @@ function applyRoutine(routineId) {
   saveState(); renderTabContent(); scheduleSync();
 }
 
+// ============ 毎日のストレッチ(チェックリスト) ============
+// STRETCH_ITEMS(固定7項目)を日付ごとにチェックできるようにする。運動の記録(entries)とは
+// 別に、その日チェック済みの項目IDだけをstretchLogに保存する(v5.3)。
+function toggleStretchItem(date, itemId) {
+  const done = new Set(stretchLog[date] || []);
+  if (done.has(itemId)) done.delete(itemId); else done.add(itemId);
+  stretchLog[date] = Array.from(done);
+  saveState();
+  renderTabContent();
+}
+// 「全項目チェック済みの日」が今日から何日連続で続いているか。今日がまだ未完了でも、
+// 昨日までの連続日数は途切れさせない(その日の終わりまでにチェックする猶予を持たせる)。
+function stretchStreak() {
+  let streak = 0;
+  let d = new Date();
+  const todayStr = localDateStr();
+  const todayDone = (stretchLog[todayStr] || []).length === STRETCH_ITEMS.length;
+  if (!todayDone) d.setDate(d.getDate() - 1); // 今日未完了なら昨日から数える
+  while (true) {
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const doneIds = stretchLog[key] || [];
+    if (doneIds.length !== STRETCH_ITEMS.length) break;
+    streak++;
+    d.setDate(d.getDate() - 1);
+  }
+  return streak;
+}
+function stretchChecklistHtml() {
+  const today = localDateStr();
+  const doneIds = new Set(stretchLog[today] || []);
+  const doneCount = doneIds.size;
+  const total = STRETCH_ITEMS.length;
+  const allDone = doneCount === total;
+  const streak = stretchStreak();
+  return `
+    <div class="card">
+      <div class="between" style="margin-bottom:8px;">
+        <p class="section-title" style="margin:0;">🧘 毎日のストレッチ</p>
+        <span class="muted" style="font-size:11.5px;">${doneCount}/${total}${allDone ? " ✅" : ""}</span>
+      </div>
+      ${streak > 0 ? `<p class="muted" style="font-size:11px;margin:0 0 8px;">🔥 全項目達成 ${streak}日連続</p>` : ""}
+      ${STRETCH_ITEMS.map(item => `
+        <label class="row" style="align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" data-action="toggle-stretch" data-id="${item.id}" ${doneIds.has(item.id) ? "checked" : ""} style="width:18px;height:18px;flex:0 0 auto;">
+          <span style="font-size:12.5px;${doneIds.has(item.id) ? "text-decoration:line-through;color:var(--ink-faint);" : ""}">${esc(item.label)}</span>
+        </label>`).join("")}
+    </div>
+`;
+}
+
 // ============ EVENTS (bound once; #app content is replaced via innerHTML, so delegation is required) ============
 document.getElementById("app").addEventListener("click", (e) => {
   const tabBtn = e.target.closest("[data-tab]");
@@ -5085,6 +5154,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "apply-routine") { applyRoutine(t.dataset.id); }
   else if (action === "del-routine") { routineMaster = routineMaster.filter(r => r.id !== t.dataset.id); saveState(); renderTabContent(); }
+  else if (action === "toggle-stretch") { toggleStretchItem(today, t.dataset.id); }
   else if (action === "set-pace") { goals.paceKgPerWeek = Number(t.dataset.val); saveState(); renderTabContent(); scheduleSync(); }
   else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderTabContent(); }
   else if (action === "set-activity") { profile.activity = t.dataset.val; saveState(); renderTabContent(); }
@@ -5283,6 +5353,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     lastStrengthByExercise = {}; lastCardioMinutes = {}; mealDetailOpen = false;
     entryDates = { meal: null, weight: null, training: null };
     routineMaster = []; savingRoutine = false;
+    stretchLog = {}; // v5.4: ここが抜けていると「すべてのデータを削除」してもストレッチの記録と連続日数だけ残ってしまうため追加
     nutritionCache = {}; saveNutritionCache();
     sentSheetSigs = {}; saveSentSigs();
     seedExerciseMasterIfEmpty();
