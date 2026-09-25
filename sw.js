@@ -21,7 +21,7 @@
  * Google Sheets(Apps Script)との通信はPOSTで、ここでは一切横取りしません。
  * 同期やAIの応答が控えに残ることはありません。
  */
-const VERSION = 'v5.7';
+const VERSION = 'v5.11';
 const CACHE = 'training-log-' + VERSION;
 // このサービスワーカーが置かれている場所(GitHub Pagesのサブフォルダでも動くよう相対で解決)。
 const HTML_URL = new URL('./index.html', self.registration.scope).href;
@@ -76,11 +76,18 @@ self.addEventListener('fetch', (event) => {
         return res;
       })
       .catch(() =>
-        caches.match(req).then((hit) => hit
+        caches.match(req).then((hit) => {
+          if (hit) return hit;
+          // 画像やアイコンなど、ページ以外の控えが無いときは素直に失敗させる
+          // (v5.11: 以前はindex.htmlの中身を返してしまっていた)。
+          if (!isPageLoad) return Response.error();
           // 「/」で開かれたときなど、リクエストが完全一致しない場合の受け皿。
-          || caches.match(HTML_URL)
-          || new Response('オフラインです。電波の届く場所で一度開くと、次からはオフラインでも起動できます。',
-               { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }))
+          // caches.match()は約束(Promise)を返すので、「||」でつなぐと常にそちらが選ばれ、
+          // 控えが無いときの下の案内文が一度も表示されていなかった(v5.11で修正)。
+          return caches.match(HTML_URL).then((page) => page
+            || new Response('オフラインです。電波の届く場所で一度開くと、次からはオフラインでも起動できます。',
+                 { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+        })
       )
   );
 });

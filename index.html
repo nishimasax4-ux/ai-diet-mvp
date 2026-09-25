@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.7";
+const APP_VERSION = "v5.11";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -323,6 +323,20 @@ function minutesFromDistance(exercise, distanceKm) {
 }
 function formatDistanceKm(km) {
   return km == null ? null : Math.round(km * 100) / 100;
+}
+// v5.7より前に記録したランニング・ウォーキングにはdistanceフィールドが無いため、
+// 起動時に一度だけ、当時のminutesから距離の目安を逆算して補う(v5.9)。実測ではなく、
+// v5.7で新規記録に使っているのと同じ平均ペースからの概算(時間入力時の自動計算と同じ式)。
+// 一度補ってsaveState()で保存すれば、次回以降はdistance != nullなので対象から外れる。
+function backfillCardioDistances_() {
+  let changed = false;
+  entries.forEach(e => {
+    if (e.type === "cardio" && e.distance == null && supportsDistanceInput(e.exercise) && e.minutes > 0) {
+      const d = distanceFromMinutes(e.exercise, e.minutes);
+      if (d != null) { e.distance = formatDistanceKm(d); changed = true; }
+    }
+  });
+  if (changed) saveState();
 }
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
@@ -518,6 +532,11 @@ let trainingHistoryOpenDates = new Set();
 let distanceHistoryShowAll = false; // v5.7: 移動距離一覧の「もっと見る」展開状態
 let trainingHistoryShowAll = false; // v5.7: 運動履歴(10日より前)の展開状態
 let mealHistoryShowAll = false; // v5.7: 食事履歴(10日より前)の展開状態
+let selectedShareVariant = "data"; // v5.9: SNS投稿文の選択中バリアント(v5.11: data/meal/exercise)
+let shareAsOf = "today"; // v5.11: SNS投稿文の集計の締め日("today"=今日まで / "yesterday"=昨日まで)
+let omronImportPreview = null; // v5.10: オムロンCSV取り込みの確認待ちプレビュー({rows, newCount, updateCount, skipped, fields})
+let omronImportMessage = null; // v5.10: オムロンCSV取り込みの結果メッセージ
+let omronImportError = false;
 let mealHistoryOpenDates = new Set();
 let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedCalDate = null;
@@ -552,6 +571,26 @@ function entryDateNoticeInner(kind) {
 }
 function entryDateNoticeHtml(kind) {
   return `<div id="entry-date-notice-${kind}">${entryDateNoticeInner(kind)}</div>`;
+}
+// 体重フォームの入力欄(体重・体脂肪率・腹囲・骨格筋量・骨格筋率)を、渡した記録の
+// 値で一括して差し替える(recがnullなら空欄)。v5.11: 以前は骨格筋量・骨格筋率だけ
+// 差し替え漏れがあり、過去の日付を選んで記録すると最新の値がその日に保存されていた。
+function fillWeightForm_(rec) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v != null ? v : ""; };
+  set("weight-value-input", rec ? rec.weight : null);
+  set("weight-bodyfat-input", rec ? rec.bodyFat : null);
+  set("weight-waist-input", rec ? rec.waist : null);
+  set("weight-muscle-input", rec ? rec.muscle : null);
+  set("weight-muscle-rate-input", rec ? rec.muscleRate : null);
+}
+// 体重フォームの初期値に使う記録。今日の日付なら直近の記録(毎日の入力の手間を減らすため)、
+// 過去の日付を選んでいるならその日の記録(無ければ空欄)にする。
+function weightFormSource_() {
+  const d = entryDate("weight");
+  const sameDay = weightEntries.find(w => w.date === d);
+  if (sameDay) return sameDay;
+  if (isPastEntryDate("weight")) return null;
+  return [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0] || null;
 }
 function updateEntryDateNotice(kind) {
   const el = document.getElementById(`entry-date-notice-${kind}`);
@@ -652,6 +691,48 @@ function weeklyDistanceBarSvg(weeks) {
   const labels = weeks.map((wk,i) =>
     `<text x="${padL + i*slot + slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${wk.label}</text>`).join("");
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:120px;">${ticks}${bars}${labels}</svg>`;
+}
+// weekBuckets()/weekDistanceBuckets()と同じ週区切り(月曜始まり)で、食事に記録した
+// たんぱく質・脂質・炭水化物(g)を週ごとに集計する(v5.9)。「週ごとのPFC摂取量」用。
+function weekMacroBuckets(n) {
+  const now = new Date();
+  const dow = now.getDay();
+  const diffToMonday = (dow === 0 ? 6 : dow - 1);
+  const thisMonday = new Date(now); thisMonday.setDate(now.getDate() - diffToMonday); thisMonday.setHours(0,0,0,0);
+  const buckets = [];
+  for (let w = n - 1; w >= 0; w--) {
+    const start = new Date(thisMonday); start.setDate(thisMonday.getDate() - w*7);
+    const end = new Date(start); end.setDate(start.getDate() + 7);
+    const startStr = localDateStr(start), endStr = localDateStr(end);
+    const weekMeals = mealEntries.filter(m => m.date >= startStr && m.date < endStr);
+    const protein = Math.round(weekMeals.reduce((s,m) => s + (m.protein||0), 0));
+    const fat = Math.round(weekMeals.reduce((s,m) => s + (m.fat||0), 0));
+    const carb = Math.round(weekMeals.reduce((s,m) => s + (m.carb||0), 0));
+    buckets.push({ start, label: `${start.getMonth()+1}/${start.getDate()}`, protein, fat, carb });
+  }
+  return buckets;
+}
+// weekMacroBuckets()の結果を棒グラフで表示する(v5.9)。weeklyBarSvgと似た作りだが、
+// 色を呼び出し側(栄養素ごと)で指定できるようにし、目標(target)が無いとき(プロフィール
+// 未入力など)は点線の目標ラインを省く。
+function weeklyMacroBarSvg(weeks, target, colorHex) {
+  const w=300, h=100, pad=8, labelH=12;
+  const maxVal = Math.max(...weeks.map(x=>x.value), target||0, 1);
+  const plotH = h-pad-labelH;
+  const slot = (w-pad*2)/weeks.length;
+  const bw = Math.min(24, slot-6);
+  const yFor = v => pad + plotH - (v/maxVal)*plotH;
+  const goalLine = target ? `<line x1="${pad}" y1="${yFor(target)}" x2="${w-pad}" y2="${yFor(target)}" stroke="var(--ink-faint)" stroke-dasharray="4 4" stroke-width="1"/>` : "";
+  const bars = weeks.map((wk,i) => {
+    if (wk.value <= 0) return "";
+    const slotX = pad + i*slot, x = slotX + (slot-bw)/2, y = yFor(wk.value), barH = (pad+plotH)-y;
+    return `<path d="${topRoundedPath(x,y,bw,Math.max(barH,1),4)}" fill="${colorHex}"/>`;
+  }).join("");
+  const labels = weeks.map((wk,i) => {
+    const slotX = pad + i*slot;
+    return `<text x="${slotX+slot/2}" y="${h-1}" font-size="7" fill="var(--ink-faint)" text-anchor="middle">${wk.label}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}${bars}${labels}</svg>`;
 }
 // 今週(月曜始まり)がまだ何日残っているか。0 = 日曜(週が終わっている)。
 // 「週間トレーニング ○/○回」は今週まだ来ていない曜日を数えられないぶん自然と
@@ -914,23 +995,6 @@ const AI_PROMPTS = {
     '- 記録が少ない日を責めない。前向きで落ち着いた口調で\n' +
     '- 見出しや箇条書きは使わず、地の文だけで書く\n\n' +
     '### 記録\n' + JSON.stringify(ctx),
-
-  mealplan: (ctx) =>
-    'あなたは日本の家庭料理に詳しい管理栄養士です。\n' +
-    '以下は利用者の「今日の状況」です(JSON)。今日の朝食と夕食の候補を提案してください。\n\n' +
-    '### 出力形式(JSONのみ。前置き・後書き・コードフェンスは不要)\n' +
-    '{"meals":[{"mealType":"朝食","comment":"一言","items":[' +
-    '{"name":"料理名","kcal":数値,"protein":数値,"fat":数値,"carb":数値}]}]}\n' +
-    '- mealTypeは "朝食" と "夕食" の2つ。それぞれ items を2件ずつ\n' +
-    '- name は「納豆ご飯と味噌汁」のように、1食ぶんの内容が分かる具体的な料理名\n' +
-    '- kcal は「区分ごとの目安kcal」に収める。protein/fat/carb はグラム、小数第1位まで\n' +
-    '- comment は40文字程度で、なぜその内容かを一言\n\n' +
-    '### 守ること\n' +
-    '- 「よく食べている朝食」「よく食べている夕食」に挙がっているものを1件は活かし、もう1件は違う料理を提案して変化をつける\n' +
-    '- 「今日まだ不足しているPFCg」で不足している栄養素(特にたんぱく質)を補える内容にする\n' +
-    '- 日本のスーパーやコンビニで手に入る、平日でも用意できる現実的なものにする\n' +
-    '- 断定的な医学的助言・診断はしない。極端な食事制限は勧めない。責める言い方をしない\n\n' +
-    '### 今日の状況\n' + JSON.stringify(ctx),
 
   // AIは料理を取り違えることがあり、そのたびに写真を撮り直すのは面倒なので、
   // 「違う料理の候補」を3件出させて、その場で選べるようにする(v44.2)。
@@ -1292,9 +1356,28 @@ function applyPayload(payload) {
     if (!r[0]) return;
     nextMeals.push({ id: uid(), date: String(r[0]).slice(0,10), mealType: r[1] || "朝食", text: r[2] || "", calories: Number(r[3]) || 0, protein: Number(r[4]) || 0, fat: Number(r[5]) || 0, carb: Number(r[6]) || 0, createdAt: Date.now() });
   });
+  // v5.11: シートに列が無い「この端末だけの項目」(骨格筋量・骨格筋率・有酸素の距離)は、
+  // 復元でシートの内容に置き換えると消えてしまい、どこにも控えが無いため二度と戻らなかった。
+  // 置き換える前の端末の記録から、同じ日(有酸素は同じ日・種目・時間)のものを引き継ぐ。
+  const oldWeightByDate = {};
+  weightEntries.forEach(w => { oldWeightByDate[w.date] = w; });
+  nextWeights.forEach(rec => {
+    const old = oldWeightByDate[rec.date];
+    if (!old) return;
+    if (old.muscle != null) rec.muscle = old.muscle;
+    if (old.muscleRate != null) rec.muscleRate = old.muscleRate;
+  });
+  const cardioKey = e => `${e.date}|${e.exercise}|${Number(e.minutes) || 0}`;
+  const oldDistance = {};
+  entries.forEach(e => { if (e.type === "cardio" && e.distance != null) oldDistance[cardioKey(e)] = e.distance; });
+  nextEntries.forEach(e => {
+    if (e.type === "cardio" && oldDistance[cardioKey(e)] != null) e.distance = oldDistance[cardioKey(e)];
+  });
   entries = nextEntries.sort((a,b) => a.date < b.date ? 1 : -1);
   weightEntries = nextWeights;
   mealEntries = nextMeals.sort((a,b) => a.date < b.date ? 1 : -1);
+  // 引き継げなかった有酸素の記録には、時間から距離の目安を補う(起動時と同じ処理)。
+  backfillCardioDistances_();
   selectedCardio = defaultCardio(); // 取り込んだ記録に合わせて初期選択を更新する(v38)
 }
 
@@ -1407,6 +1490,9 @@ const SYNC_DEBOUNCE_MS = 2500;
 let syncTimer = null;
 let syncInFlight = false;
 let syncPending = false;
+// v5.11: 送信中に「上書きして送信する」等(force)が押された場合、追いかけの送信にもforceを引き継ぐ。
+// 以前は引き継がれず、本人が上書きを選んだ直後なのに、また食い違いの警告で止まることがあった。
+let syncPendingForce = false;
 function scheduleSync() {
   if (!gasConfigured()) { syncStatus = "idle"; renderSyncStatus(); return; }
   syncPending = true;
@@ -1463,10 +1549,36 @@ function changedPayload_(full) {
   return { payload, sigs, skipped };
 }
 
+// 【安全弁2】(v5.11) 「シートの記録を守るために同期を止めています」と案内している
+// 状態では、記録が1件以上あっても送らない。以前は0件のときしか止めていなかったため、
+//  ・接続直後に「どちらを残すか」を選ぶ前に1件でも記録する
+//  ・保存内容が壊れて空で起動した後、初期設定で体重を1件入れる
+//  ・「端末だけ削除(シートは残す)」の後、初期設定で体重を1件入れる
+// のいずれでも、シートがその1件だけの内容で丸ごと上書きされてしまっていた。
+// forceでも素通りさせない。解除は本人が選ぶボタン(シートから復元/この端末の内容で再開)だけ。
+function syncHoldReason_() {
+  if (dataLoadFailed) return "load-failed";
+  if (connectSheetChoice) return "connect-choice";
+  return gasConfig.syncHold || null;
+}
+function setSyncHold_(reason) {
+  gasConfig.syncHold = reason || null;
+  if (!reason) delete gasConfig.syncHold;
+  saveConfig();
+}
 async function syncToSheet(force) {
   if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
   if (!gasConfigured()) { syncStatus = "idle"; renderSyncStatus(); return; }
-  if (syncInFlight) { syncPending = true; return; } // 走っている分が終わってから追いかける
+  if (syncHoldReason_()) {
+    if (syncInFlight) { syncPending = true; return; }
+    syncPending = false;
+    syncStatus = "blocked";
+    renderSyncStatus();
+    renderDataWarning();
+    if (activeTab === "settings") renderTabContent();
+    return;
+  }
+  if (syncInFlight) { syncPending = true; if (force) syncPendingForce = true; return; } // 走っている分が終わってから追いかける
   syncInFlight = true;
   syncPending = false;
   syncStatus = "syncing"; renderSyncStatus();
@@ -1545,7 +1657,12 @@ async function syncToSheet(force) {
   renderSyncStatus();
   // 送信中にさらに変更があった場合は、その分をもう一度だけ送る。
   // ただしconflict中は、ユーザーが解決するまで自動では再送しない(同じ警告を繰り返すだけになるため)。
-  if (syncPending && syncStatus !== "error" && syncStatus !== "conflict") { syncPending = false; syncToSheet(); return; }
+  if (syncPending && (syncPendingForce || (syncStatus !== "error" && syncStatus !== "conflict"))) {
+    const f = syncPendingForce;
+    syncPending = false; syncPendingForce = false;
+    syncToSheet(f); return;
+  }
+  syncPendingForce = false;
   // 設定タブを開いているときは、同期カードのエラー詳細表示も最新化する
   // (ヘッダーの☁️アイコンだけでなく、タップ後の結果がその場で見えるように)。
   if (activeTab === "settings") renderTabContent();
@@ -1562,7 +1679,18 @@ function dataWarningHtml() {
   if (dataLoadFailed) {
     blocks.push(`<p style="font-size:12.5px;margin:0 0 6px;font-weight:700;">⚠️ 保存されていた記録を読み込めませんでした</p>
       <p style="font-size:11.5px;margin:0 0 8px;line-height:1.7;">この端末の保存内容が壊れているため、記録が空の状態で起動しています。<b>Google Sheetsへの同期は安全のため止めてあります</b>(シートに残っている記録を、空の内容で上書きしてしまわないため)。設定タブの「☁️ シートから復元」で戻せます。</p>
-      <button class="chip" data-action="goto-restore">☁️ シートから復元する</button>`);
+      <div class="wrap">
+        <button class="chip" data-action="goto-restore">☁️ シートから復元する</button>
+        ${gasConfigured() ? `<button class="chip" data-action="resume-sync" style="color:var(--danger);">⚠️ この端末の内容で同期を再開</button>` : ""}
+      </div>`);
+  } else if (gasConfigured() && !connectSheetChoice && gasConfig.syncHold) {
+    // v5.11: シートの記録を守るために同期を止めている状態(端末だけ削除した後・接続直後の選択待ちのまま再読み込みした等)。
+    blocks.push(`<p style="font-size:12.5px;margin:0 0 6px;font-weight:700;">🛑 Google Sheetsへの同期を止めています</p>
+      <p style="font-size:11.5px;margin:0 0 8px;line-height:1.7;">${gasConfig.syncHold === "kept-sheet" ? "「端末だけ削除(シートは残す)」を選んだため、" : "シートとこの端末のどちらの記録を残すかがまだ決まっていないため、"}シートに残っている記録を上書きしないよう同期を止めています。シートの記録を戻す場合は「シートから復元」を、この端末の今の内容でシートを上書きしてよい場合は「この端末の内容で同期を再開」を押してください。</p>
+      <div class="wrap">
+        <button class="chip" data-action="goto-restore">☁️ シートから復元する</button>
+        <button class="chip" data-action="resume-sync" style="color:var(--danger);">⚠️ この端末の内容で同期を再開</button>
+      </div>`);
   } else if (emptySyncBlocked) {
     blocks.push(`<p style="font-size:12.5px;margin:0 0 6px;font-weight:700;">🛑 Google Sheetsへの同期を保留しています</p>
       <p style="font-size:11.5px;margin:0 0 8px;line-height:1.7;">この端末の記録が0件です。このまま同期すると<b>シートに入っている記録もすべて消えます</b>。機種変更などでシートの内容を取り戻したい場合は「シートから復元」を、シートの側も空にしてよい場合は下のボタンを押してください。</p>
@@ -1882,50 +2010,6 @@ async function diagnoseAiFailure_(baseMessage) {
   return baseMessage;
 }
 
-// 「おすすめの食事」のAI版(v39)。ルールベースの提案は常に表示したうえで、
-// 接続設定がある場合だけ、この関数でより具体的な献立を相談できる。
-// アドバイスと同じく、取得できたコメントはその日ぶんだけ端末に残す。
-const AI_MEALPLAN_KEY = "training-log-ai-mealplan";
-let aiMealPlan = null;          // {date, text}
-let aiMealPlanStatus = "idle";  // idle | loading | error
-let aiMealPlanError = null;
-function loadAiMealPlan() {
-  try {
-    const raw = localStorage.getItem(AI_MEALPLAN_KEY);
-    if (raw) aiMealPlan = JSON.parse(raw);
-  } catch (e) { aiMealPlan = null; }
-  if (aiMealPlan && aiMealPlan.date !== localDateStr()) aiMealPlan = null;
-}
-async function fetchAiMealPlan() {
-  if (aiMealPlanStatus === "loading") return; // 連打による二重問い合わせを防ぐ(無料枠の節約)
-  if (!gasConfigured()) {
-    aiMealPlanStatus = "error";
-    aiMealPlanError = "設定タブで接続先URLとトークンを登録すると、AIに献立を相談できます。";
-    renderTabContent();
-    return;
-  }
-  aiMealPlanStatus = "loading"; aiMealPlanError = null; renderTabContent();
-  try {
-    const data = await aiText_("mealplan", AI_PROMPTS.mealplan(buildMealPlanContext()), { json: true });
-    if (data && data.status === "ok" && data.text) {
-      // 文章としてだけでなく、JSONとして読めれば構造化した候補(plan)も取り出す。
-      // これがあれば、ルールベースの候補と同じ「タップして記録できる一覧」として表示でき、
-      // 「提案されている料理」と「一覧に出ている料理」が食い違わなくなる。
-      const parsed = parseAiJson_(data.text);
-      const plan = (parsed && parsed.meals && parsed.meals.length) ? parsed.meals : null;
-      aiMealPlan = { date: localDateStr(), text: String(data.text), plan };
-      try { localStorage.setItem(AI_MEALPLAN_KEY, JSON.stringify(aiMealPlan)); } catch (e) {}
-      aiMealPlanStatus = "idle";
-    } else {
-      aiMealPlanStatus = "error";
-      aiMealPlanError = friendlyAiError_(data && data.message);
-    }
-  } catch (e) {
-    aiMealPlanStatus = "error";
-    aiMealPlanError = await diagnoseAiFailure_(friendlySyncError_(e && e.message ? e.message : String(e)));
-  }
-  renderTabContent();
-}
 // 体脂肪率として受け付ける範囲。家庭用の体組成計で現実的にありうる値の外側は、
 // 入力ミス(29を2.9と打つ、%と小数を取り違える等)とみなして無視する。
 // 誤った値をそのまま基礎代謝の計算に使うと、目標カロリーが大きく狂うため。
@@ -1933,6 +2017,12 @@ const BODYFAT_MIN = 3, BODYFAT_MAX = 60;
 // 腹囲として受け付ける範囲(cm)。体脂肪率と同様、入力ミス(メジャーの目盛りの
 // 読み違い等)とみなせる極端な値は採用しない(v46.8)。
 const WAIST_MIN = 40, WAIST_MAX = 200;
+// 骨格筋量として受け付ける範囲(kg・v5.9)。体組成計で測れる現実的な範囲の外側は、
+// 体脂肪率・腹囲と同様に入力ミスとみなして無視する。
+const MUSCLE_MIN = 10, MUSCLE_MAX = 60;
+// 骨格筋率として受け付ける範囲(%・v5.10)。骨格筋量(kg)と同じ考え方で、
+// 現実的にありえない値は入力ミスとみなして無視する。
+const MUSCLE_RATE_MIN = 5, MUSCLE_RATE_MAX = 60;
 // 目標カロリーの計算に使う体脂肪率。1回の測定値をそのまま使わず、直近の平均で均す。
 // 家庭用の体組成計(BIA方式)は体内の水分量に強く影響され、時間帯・食事・入浴の前後で
 // 数%動くため、単発の値を使うと目標カロリーが日ごとに数十kcal揺れて使いにくくなる。
@@ -2151,9 +2241,10 @@ function bmiBlockHtml() {
 // からだタブの日付欄でその日を指定して体脂肪率つきで記録し直せば、その日が
 // 自動的に基準になる(同じ日付の記録は上書きされる仕組みのため、履歴の一覧に
 // 出てこない古い日付でも直接指定して追記・修正できる)。
-function computeBodyComposition_() {
+// untilDate(YYYY-MM-DD)を渡すと、その日までの記録だけで計算する(SNS投稿の「昨日まで」用・v5.11)。
+function computeBodyComposition_(untilDate) {
   const withBf = weightEntries
-    .filter(w => w.bodyFat != null && w.weight > 0)
+    .filter(w => w.bodyFat != null && w.weight > 0 && (!untilDate || w.date <= untilDate))
     .sort((a, b) => a.date < b.date ? -1 : 1);
   const comp = w => ({ date: w.date, weight: w.weight, bf: w.bodyFat,
     fat: Math.round(w.weight * w.bodyFat / 100 * 10) / 10,
@@ -2290,6 +2381,82 @@ function waistCardHtml() {
     <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">腹囲はメジャーを巻く位置(おへその高さが目安)や測るタイミングで数cm変わります。1回の値ではなく推移で見てください。</p>
   </div>`;
 }
+// 骨格筋量の推移(v5.9)。腹囲カードとほぼ同じ作りだが、骨格筋量は増えるほど
+// 良い指標なので、トレンドの色(増加=緑系/減少=赤系)は腹囲と逆にしてある。
+function muscleCardHtml() {
+  const withMuscle = weightEntries
+    .filter(w => w.muscle != null)
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!withMuscle.length) return "";
+  const last = withMuscle[withMuscle.length - 1];
+  const points = withMuscle.map(w => ({ date: w.date, value: w.muscle }));
+  const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
+  const chart = lineChartSvg(points, "var(--teal)", null, avg);
+  let trendBlock = "";
+  if (avg) {
+    const cur = avg[avg.length-1].value;
+    const weekAgoIdx = (() => {
+      const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
+      for (let i = avg.length-1; i >= 0; i--) if (new Date(avg[i].date).getTime() <= t) return i;
+      return 0;
+    })();
+    const diff = round1_(cur - avg[weekAgoIdx].value);
+    const trend = avg.length > weekAgoIdx + 1
+      ? `<span class="mono" style="color:${diff > 0 ? "var(--teal)" : diff < 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}kg</span> <span class="muted">/ 1週間</span>`
+      : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
+    trendBlock = `<div class="between" style="margin-top:6px;">
+      ${trendLegendHtml("var(--teal)")}
+      <span style="font-size:12px;">${trend}</span>
+    </div>`;
+  }
+  return `<div class="card">
+    <div class="between" style="margin-bottom:10px;">
+      <p class="section-title" style="margin:0;">💪 骨格筋量の推移</p>
+      <span class="muted">${last.date} 時点 ${last.muscle.toFixed(1)}kg</span>
+    </div>
+    ${chart}
+    ${trendBlock}
+    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">体組成計の測定値は水分量や測るタイミングで数百g単位で変わります。1回の値ではなく推移で見てください。この項目はGoogle Sheetsには同期されず、この端末の中だけに保存されます。</p>
+  </div>`;
+}
+// 骨格筋率(%)の推移カード(v5.10)。骨格筋量(kg)と同じ構成だが、単位が%なので
+// 別カードとして分けている(体組成計によって両方表示されるため、どちらも記録できるようにした)。
+function muscleRateCardHtml() {
+  const withRate = weightEntries
+    .filter(w => w.muscleRate != null)
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!withRate.length) return "";
+  const last = withRate[withRate.length - 1];
+  const points = withRate.map(w => ({ date: w.date, value: w.muscleRate }));
+  const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
+  const chart = lineChartSvg(points, "var(--sand)", null, avg);
+  let trendBlock = "";
+  if (avg) {
+    const cur = avg[avg.length-1].value;
+    const weekAgoIdx = (() => {
+      const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
+      for (let i = avg.length-1; i >= 0; i--) if (new Date(avg[i].date).getTime() <= t) return i;
+      return 0;
+    })();
+    const diff = round1_(cur - avg[weekAgoIdx].value);
+    const trend = avg.length > weekAgoIdx + 1
+      ? `<span class="mono" style="color:${diff > 0 ? "var(--sand)" : diff < 0 ? "var(--coral)" : "var(--ink-faint)"};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}%</span> <span class="muted">/ 1週間</span>`
+      : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
+    trendBlock = `<div class="between" style="margin-top:6px;">
+      ${trendLegendHtml("var(--sand)")}
+      <span style="font-size:12px;">${trend}</span>
+    </div>`;
+  }
+  return `<div class="card">
+    <div class="between" style="margin-bottom:10px;">
+      <p class="section-title" style="margin:0;">🦾 骨格筋率の推移</p>
+      <span class="muted">${last.date} 時点 ${last.muscleRate.toFixed(1)}%</span>
+    </div>
+    ${chart}
+    ${trendBlock}
+    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">体組成計の測定値は水分量や測るタイミングで変わります。1回の値ではなく推移で見てください。この項目はGoogle Sheetsには同期されず、この端末の中だけに保存されます。</p>
+  </div>`;
+}
 // 「なぜこの目標カロリーなのか」を隠さずに見せるカード(v40)。
 // 以前は目標値だけが出ていたため、下限で頭打ちになっていることに気づけなかった。
 function calorieTargetBreakdownHtml(t) {
@@ -2394,283 +2561,6 @@ function pickWorkout() {
   const pool = WORKOUTS[level];
   const w = pool[dayOfYear(new Date()) % pool.length];
   return resolveWorkoutSuggestion(w);
-}
-// ============ おすすめの食事(v39) ============
-// 「今日の体の状態・食事・運動の状況から、朝食と夕食を提案してほしい」というご要望への対応。
-// 外部AIに接続していなくても動くよう、まずはルールベースで組み立てる(Apps Scriptを
-// 設定している場合は、この結果を土台にAIへ相談するボタンも出す)。
-//
-// 1日の目安カロリーを食事区分ごとに割り振る比率。一般的な配分(朝を軽め、夕方をやや多め)で、
-// 合計が1.0になるようにしてある。間食を記録していない人でも辻褄が合うよう、
-// 実際の配分は「まだ食べていない区分」だけで按分し直す(mealBudgetsForToday_参照)。
-const MEAL_SHARE = { "朝食": 0.25, "昼食": 0.30, "夕食": 0.35, "間食": 0.10 };
-
-// 今日の各区分について「目安カロリー」と「すでに食べた量」を出す。
-// 目安の総量は getEffectiveCalorieTarget の effectiveTarget(=目標+その日の運動ぶん)。
-function mealBudgetsForToday_() {
-  const today = localDateStr();
-  const t = getEffectiveCalorieTarget(today);
-  if (!t) return null;
-  const eaten = {};
-  MEAL_TYPES.forEach(mt => { eaten[mt] = 0; });
-  let eatenTotal = 0;
-  mealEntries.filter(m => m.date === today).forEach(m => {
-    const c = m.calories || 0;
-    if (eaten[m.mealType] === undefined) eaten[m.mealType] = 0;
-    eaten[m.mealType] += c;
-    eatenTotal += c;
-  });
-  // まだ何も食べていない区分だけで、残りのカロリーを比率どおりに分け直す。
-  // (朝食をすでに済ませているなら、その分は差し引いて夕食側に回る)
-  const pending = MEAL_TYPES.filter(mt => eaten[mt] === 0);
-  const pendingShare = pending.reduce((s, mt) => s + MEAL_SHARE[mt], 0);
-  const remaining = Math.max(0, t.effectiveTarget - eatenTotal);
-  const budget = {};
-  MEAL_TYPES.forEach(mt => {
-    budget[mt] = (pending.indexOf(mt) === -1 || pendingShare <= 0)
-      ? 0
-      : Math.round(remaining * (MEAL_SHARE[mt] / pendingShare));
-  });
-  return { targets: t, eaten, eatenTotal, remaining, budget, pending };
-}
-
-// 今日すでに摂ったPFCと目標との差。マイナスが大きい栄養素ほど「まだ足りない」。
-function macroGapsForToday_() {
-  const today = localDateStr();
-  const t = getTargets();
-  if (!t) return null;
-  const todays = mealEntries.filter(m => m.date === today);
-  const sum = k => todays.reduce((s, m) => s + (m[k] || 0), 0);
-  return {
-    protein: round1_(t.targetProtein - sum("protein")),
-    fat: round1_(t.targetFat - sum("fat")),
-    carb: round1_(t.targetCarb - sum("carb")),
-  };
-}
-
-// 提案の候補になる食品を集める。利用者自身が登録した「よく食べるもの」を優先し、
-// 足りなければ内蔵の食品辞書から補う。カロリーが分からないものは、目安の計算に
-// 使えないので候補から外す。
-function mealCandidatePool_() {
-  const pool = [];
-  const seen = {};
-  mealMaster.forEach(m => {
-    if (!m.name || m.calories == null || m.calories <= 0) return;
-    if (seen[m.name]) return;
-    seen[m.name] = true;
-    pool.push({ name: m.name, kcal: m.calories, protein: m.protein || 0, fat: m.fat || 0, carb: m.carb || 0, own: true });
-  });
-  FOOD_CALORIE_DB.forEach(f => {
-    if (seen[f.name]) return;
-    seen[f.name] = true;
-    pool.push({ name: f.name, kcal: f.kcal, protein: f.protein || 0, fat: f.fat || 0, carb: f.carb || 0, own: false });
-  });
-  return pool;
-}
-
-// 「その食品を、どの区分で何回食べたか」の実績。朝食に何を食べる人なのかは
-// 人によって違うので、決め打ちのタグではなく実際の記録から学習する。
-function mealTypeUsageStats_() {
-  const stats = {};
-  mealEntries.forEach(m => {
-    if (!m.text) return;
-    const s = stats[m.text] || (stats[m.text] = { total: 0, byType: {} });
-    s.total++;
-    s.byType[m.mealType] = (s.byType[m.mealType] || 0) + 1;
-  });
-  return stats;
-}
-
-// ある区分(朝食/夕食)向けに、候補を点数付けして上位を返す。
-// ・その区分で実際に食べている食品ほど高得点(いちばん効く)
-// ・目安カロリーに近いほど高得点(大きく超えるものは強めに減点)
-// ・まだ足りていない栄養素、特にたんぱく質を多く含むものを加点
-function scoreCandidates_(pool, mealType, budgetKcal, gaps, stats) {
-  const proteinShort = gaps && gaps.protein > 0;
-  return pool.map(f => {
-    let score = 0;
-    const st = stats[f.name];
-    if (st) {
-      const here = st.byType[mealType] || 0;
-      score += here * 12;                       // その区分での実績(最重視)
-      score += Math.min(st.total, 10) * 2;      // よく食べているものは全体に少し優遇
-    }
-    if (f.own) score += 6;                      // 自分で登録した食品を優先する
-    // 目安カロリーとの近さ。超過は「食べ過ぎ」に直結するので、不足より重く減点する。
-    const ratio = f.kcal / budgetKcal;
-    score -= (ratio > 1 ? (ratio - 1) * 26 : (1 - ratio) * 12);
-    // 不足している栄養素の補充。たんぱく質は不足しがちなので、100kcalあたりの量で評価する。
-    if (proteinShort) score += Math.min(12, (f.protein / Math.max(1, f.kcal)) * 100 * 4);
-    if (gaps && gaps.fat < 0) score -= Math.min(8, (f.fat / Math.max(1, f.kcal)) * 100 * 2);   // 脂質が超過気味なら控える
-    if (gaps && gaps.carb < 0) score -= Math.min(8, (f.carb / Math.max(1, f.kcal)) * 100 * 1); // 炭水化物が超過気味なら控える
-    return { ...f, score };
-  }).sort((a, b) => (b.score - a.score) || (a.name < b.name ? -1 : 1));
-}
-// ある区分(朝食/夕食)向けの候補を、2種類に分けて返す(v42)。
-//   familiar … その区分で実際に食べたことがあるもの・自分で登録したもの(=いつもの)
-//   fresh    … まだその区分で記録していないもの(=新しく試す候補)
-// 以前は1本のリストで、実績のあるものが強く優遇される設計だったため、
-// 結果的に「登録済みのメニューばかり並ぶ」状態になっていた。
-// 新しい候補は日替わりで入れ替わるようにして、毎日同じ提案にならないようにする。
-function suggestionsForMealType_(mealType, budgetKcal, gaps) {
-  if (!budgetKcal || budgetKcal <= 0) return { familiar: [], fresh: [] };
-  const stats = mealTypeUsageStats_();
-  const pool = mealCandidatePool_();
-  const isKnown = f => {
-    const st = stats[f.name];
-    return f.own || (st && (st.byType[mealType] || 0) > 0);
-  };
-  const familiar = scoreCandidates_(pool.filter(isKnown), mealType, budgetKcal, gaps, stats).slice(0, 2);
-  // 新しい候補: その区分の実績がなく、自分の登録にもないものだけを対象にする。
-  const freshRanked = scoreCandidates_(pool.filter(f => !isKnown(f)), mealType, budgetKcal, gaps, stats)
-    .slice(0, 8);
-  // 上位8件から日替わりで2件選ぶ。毎日まったく同じ顔ぶれにならないようにするための回転。
-  const fresh = [];
-  if (freshRanked.length) {
-    const offset = (dayOfYear(new Date()) + (mealType === "夕食" ? 4 : 0)) % freshRanked.length;
-    for (let i = 0; i < Math.min(2, freshRanked.length); i++) {
-      fresh.push(freshRanked[(offset + i) % freshRanked.length]);
-    }
-  }
-  return { familiar, fresh };
-}
-// カード表示用にまとめる。プロフィール・体重が未入力で目安が出せない場合はnull。
-function buildMealSuggestions() {
-  const b = mealBudgetsForToday_();
-  if (!b) return null;
-  const gaps = macroGapsForToday_();
-  const result = { budgets: b, gaps, meals: [] };
-  ["朝食", "夕食"].forEach(mt => {
-    const sug = suggestionsForMealType_(mt, b.budget[mt], gaps);
-    result.meals.push({
-      mealType: mt,
-      alreadyEaten: b.eaten[mt] > 0,
-      eaten: b.eaten[mt],
-      budget: b.budget[mt],
-      familiar: sug.familiar,
-      fresh: sug.fresh,
-      // 既存の呼び出し元・テスト向けに、両方をつなげたものも持たせておく。
-      items: sug.familiar.concat(sug.fresh),
-    });
-  });
-  return result;
-}
-// AI(Apps Script経由)へ渡す要約。生の記録ではなく、判断に必要な数値だけを送る。
-function buildMealPlanContext() {
-  const b = mealBudgetsForToday_();
-  const gaps = macroGapsForToday_();
-  const t = getTargets();
-  const latestWeight = [...weightEntries].sort((a,b2) => a.date < b2.date ? 1 : -1)[0];
-  const today = localDateStr();
-  const recentBurn = computeBurnHistory(7).reduce((s,d) => s + d.total, 0);
-  const stats = mealTypeUsageStats_();
-  const favByType = {};
-  ["朝食","夕食"].forEach(mt => {
-    favByType[mt] = Object.keys(stats)
-      .map(name => ({ name, n: stats[name].byType[mt] || 0 }))
-      .filter(x => x.n > 0)
-      .sort((a,b2) => b2.n - a.n)
-      .slice(0, 6)
-      .map(x => x.name);
-  });
-  return {
-    体重kg: latestWeight ? latestWeight.weight : null,
-    目標体重kg: goals.weight,
-    年齢: profile ? Number(profile.age) : null,
-    性別: profile ? profile.gender : null,
-    身長cm: profile ? Number(profile.height) : null,
-    今日の目安カロリー: b ? b.targets.effectiveTarget : null,
-    今日すでに摂取したkcal: b ? b.eatenTotal : 0,
-    残りkcal: b ? b.remaining : null,
-    区分ごとの目安kcal: b ? b.budget : null,
-    今日まだ不足しているPFCg: gaps,
-    一日の目標PFCg: t ? { protein: t.targetProtein, fat: t.targetFat, carb: t.targetCarb } : null,
-    直近7日の運動による消費kcal合計: recentBurn,
-    今日の運動による消費kcal: b ? b.targets.exerciseBurn : 0,
-    よく食べている朝食: favByType["朝食"],
-    よく食べている夕食: favByType["夕食"],
-    登録済みのよく食べるもの: mealMaster.slice(0, 20).map(m => m.name),
-  };
-}
-// 「今日のおすすめ食事」カード。ルールベースの提案を常に表示し、Apps Scriptを
-// 設定している場合だけAIへの相談ボタンも出す。
-function mealSuggestionCardHtml() {
-  const s = buildMealSuggestions();
-  if (!s) {
-    return `<div class="card">
-      <p class="section-title">🍳 今日のおすすめ食事</p>
-      <p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィール(年齢・身長など)を入力し、体重を記録すると、目標カロリーに合わせた朝食・夕食のおすすめが表示されます。</p>
-    </div>`;
-  }
-  const g = s.gaps;
-  const gapLine = g
-    ? `<p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">今日の残り <span class="mono">${s.budgets.remaining}</span>kcal ／ あと たんぱく質 <span class="mono">${g.protein > 0 ? g.protein.toFixed(1) : 0}</span>g・脂質 <span class="mono">${g.fat > 0 ? g.fat.toFixed(1) : 0}</span>g・炭水化物 <span class="mono">${g.carb > 0 ? g.carb.toFixed(1) : 0}</span>g${g.protein > 0 ? "(たんぱく質が多めのものを優先して選んでいます)" : ""}</p>`
-    : "";
-
-  // AIが返した構造化候補を、区分ごとに引けるようにしておく。
-  const aiByType = {};
-  if (aiMealPlan && Array.isArray(aiMealPlan.plan)) {
-    aiMealPlan.plan.forEach(p => { if (p && p.mealType) aiByType[p.mealType] = p; });
-  }
-  // 候補1件ぶんの行。タップすると食事タブの入力欄に入る(記録はされない)。
-  const itemRow = (f, mealType, badge) => `
-      <button type="button" class="entry-row" style="width:100%;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:8px;margin-bottom:6px;padding:8px 10px;"
-              data-action="use-meal-suggestion" data-name="${esc(f.name)}" data-kcal="${Math.round(f.kcal)||0}" data-protein="${round1_(f.protein)}" data-fat="${round1_(f.fat)}" data-carb="${round1_(f.carb)}" data-mealtype="${mealType}">
-        <div style="flex:1;">
-          <div style="font-size:12.5px;">${esc(f.name)}${badge || ""}</div>
-          <div class="muted mono" style="font-size:10.5px;">${Math.round(f.kcal)||0}kcal ／ P${round1_(f.protein)} F${round1_(f.fat)} C${round1_(f.carb)}</div>
-        </div>
-        <span class="muted" style="font-size:11px;">記録する ›</span>
-      </button>`;
-  const groupLabel = t => `<p class="muted" style="font-size:10.5px;margin:6px 0 4px;font-weight:700;">${t}</p>`;
-
-  const blocks = s.meals.map(m => {
-    if (m.alreadyEaten) {
-      return `<div style="margin-bottom:14px;">
-        <div class="between" style="margin-bottom:4px;">
-          <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
-          <span class="muted" style="font-size:11px;">記録済み(${m.eaten}kcal)</span>
-        </div>
-        <p class="muted" style="font-size:11px;margin:0;">今日の${m.mealType}はすでに記録されています。</p>
-      </div>`;
-    }
-    const ai = aiByType[m.mealType];
-    const aiItems = (ai && Array.isArray(ai.items)) ? ai.items.filter(x => x && x.name) : [];
-    if (!m.familiar.length && !m.fresh.length && !aiItems.length) {
-      return `<div style="margin-bottom:14px;">
-        <div class="between" style="margin-bottom:4px;">
-          <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
-          <span class="muted mono" style="font-size:11px;">目安 ${m.budget}kcal</span>
-        </div>
-        <p class="muted" style="font-size:11px;margin:0;">${m.budget > 0 ? "候補を出せませんでした。" : "今日の目安カロリーはすでに使い切っています。無理に食べる必要はありません。"}</p>
-      </div>`;
-    }
-    return `<div style="margin-bottom:14px;">
-      <div class="between" style="margin-bottom:2px;">
-        <span style="font-size:12.5px;font-weight:700;">${m.mealType}</span>
-        <span class="muted mono" style="font-size:11px;">目安 ${m.budget}kcal</span>
-      </div>
-      ${aiItems.length ? groupLabel("🤖 AIの提案") + aiItems.map(f => itemRow(f, m.mealType, "")).join("")
-        + (ai.comment ? `<p class="muted" style="font-size:10.5px;margin:0 0 6px;line-height:1.6;">${esc(String(ai.comment))}</p>` : "") : ""}
-      ${m.familiar.length ? groupLabel("いつもの") + m.familiar.map(f => itemRow(f, m.mealType, f.own ? ' <span class="muted" style="font-size:10px;">📌登録済み</span>' : "")).join("") : ""}
-      ${m.fresh.length ? groupLabel("新しく試すなら") + m.fresh.map(f => itemRow(f, m.mealType, "")).join("") : ""}
-    </div>`;
-  }).join("");
-
-  const aiBlock = gasConfigured() ? `
-    <div style="border-top:1px solid var(--line);padding-top:10px;margin-top:2px;">
-      ${aiMealPlan && !aiMealPlan.plan ? `<p style="font-size:12.5px;line-height:1.8;margin:0 0 8px;white-space:pre-wrap;">${esc(aiMealPlan.text)}</p>` : ""}
-      ${aiMealPlanStatus === "error" && aiMealPlanError ? `<p style="font-size:11px;margin:0 0 8px;color:var(--coral);line-height:1.6;">${esc(aiMealPlanError)}</p>` : ""}
-      <button type="button" class="chip" data-action="fetch-ai-mealplan" ${aiMealPlanStatus === "loading" ? "disabled" : ""}>${aiMealPlanStatus === "loading" ? "相談中…" : (aiMealPlan ? "🤖 もう一度AIに相談する" : "🤖 AIに献立を相談する")}</button>
-    </div>` : "";
-
-  return `<div class="card">
-    <p class="section-title">🍳 今日のおすすめ食事</p>
-    ${gapLine}
-    ${blocks}
-    ${aiBlock}
-    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">目標カロリーと、これまでにその区分で記録した内容をもとにした提案です(カロリー・栄養素はいずれも目安)。体調や持病に関わる食事制限がある場合は、医師・管理栄養士の指示を優先してください。</p>
-  </div>`;
 }
 // 「AIのひとこと」カードの既定コメント(外部AIに未接続、または問い合わせる前に
 // 表示するルールベースの一言)。以前は「今日の調子」ボタンの自己申告に応じて
@@ -2804,7 +2694,8 @@ function exerciseTargetNoteText_(t) {
 // 食べているのに基礎消費ぶん(1日あたり2000kcal前後)がまるごと赤字として積み上がり、
 // 累計が実態から大きく外れてしまうため(収支グラフ・平均アドバイスと同じ考え方)。
 // 何日ぶんを集計したかも返し、画面に併記して誤解が生じないようにする。
-function computeCalorieTotals() {
+// untilDate(YYYY-MM-DD)を渡すと、その日までの記録だけを集計する(SNS投稿の「昨日まで」用・v5.11)。
+function computeCalorieTotals(untilDate) {
   const targets = getTargets();
   if (!targets) return null;
   const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
@@ -2815,6 +2706,7 @@ function computeCalorieTotals() {
   mealEntries.forEach(m => {
     const c = m.calories || 0;
     if (c <= 0) return;
+    if (untilDate && m.date > untilDate) return;
     intakeByDate[m.date] = (intakeByDate[m.date] || 0) + c;
   });
   const dayList = Object.keys(intakeByDate).sort();
@@ -2972,6 +2864,7 @@ function importJsonFile(file) {
       routineMaster = data.routineMaster || [];
       stretchLog = data.stretchLog || {};
       seedExerciseMasterIfEmpty();
+      backfillCardioDistances_(); // v5.11: v5.7より前の書き出しファイルでも距離の目安を補う
       selectedCardio = defaultCardio(); // 取り込んだ記録に合わせて初期選択を更新する(v38)
       saveState();
       dataOpMessage = `復元しました(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)`;
@@ -2988,6 +2881,175 @@ function importJsonFile(file) {
     dataOpMessage = "ファイルを読み込めませんでした"; dataOpError = true; renderTabContent();
   };
   reader.readAsText(file);
+}
+
+// ============ オムロン体組成計CSV 取り込み(v5.10) ============
+// オムロン connectアプリの「データエクスポート」で書き出されるCSVを取り込み、
+// 骨格筋率(%)・骨格筋量(kg)・体重・体脂肪率をまとめて記録できるようにする。
+// (骨格筋率は毎回手入力するには手間な項目なので、まとめて読み込めることに意味がある)
+// ダブルクォート囲み・カンマ区切りの簡易CSVパーサ。オムロンのエクスポートは値を
+// すべて""で囲んでいるが、念のため""でのエスケープ(RFC4180)にも対応しておく。
+function parseCsvText_(text) {
+  const rows = [];
+  let row = [], cell = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i+1] === '"') { cell += '"'; i++; } else { inQuotes = false; }
+      } else cell += c;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      row.push(cell); cell = "";
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i+1] === '\n') i++;
+      row.push(cell); cell = "";
+      if (row.length > 1 || row[0] !== "") rows.push(row);
+      row = [];
+    } else cell += c;
+  }
+  if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+// "2026/03/05 07:29" → { date: "2026-03-05", time: "07:29" }。日付部分だけの
+// 表記("2026/03/05")にも対応する。解釈できなければnullを返す。
+function parseOmronDateTime_(raw) {
+  const s = String(raw || "").trim();
+  const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (!m) return null;
+  const y = m[1], mo = m[2].padStart(2,"0"), d = m[3].padStart(2,"0");
+  const time = m[4] != null ? `${m[4].padStart(2,"0")}:${m[5]}` : "00:00";
+  return { date: `${y}-${mo}-${d}`, time };
+}
+// ヘッダー行から必要な列の位置を探す。表記ゆれ(「骨格筋率」表記の機種がある等)に
+// ある程度耐えられるよう、キーワードでゆるく判定する。
+function detectOmronColumns_(header) {
+  const idx = { date: -1, weight: -1, bodyFat: -1, muscle: -1, muscleRate: -1 };
+  header.forEach((h, i) => {
+    const s = String(h || "");
+    if (idx.date < 0 && (s.includes("測定日") || s.includes("日付"))) idx.date = i;
+    else if (idx.weight < 0 && s.includes("体重")) idx.weight = i;
+    else if (idx.bodyFat < 0 && s.includes("体脂肪") && s.includes("%") && !s.includes("量")) idx.bodyFat = i;
+    else if ((s.includes("骨格筋") || s.includes("筋肉")) && s.includes("kg") && idx.muscle < 0) idx.muscle = i;
+    else if ((s.includes("骨格筋") || s.includes("筋肉")) && s.includes("%") && idx.muscleRate < 0) idx.muscleRate = i;
+  });
+  return idx;
+}
+// CSV本文を解析し、日付ごとの記録候補(1日に複数回測っていれば最後の測定を採用)に
+// まとめる。列が見つからない・データ行が無い場合はエラーを投げる。
+function parseOmronCsv_(text) {
+  const clean = text.replace(/^﻿/, "");
+  const table = parseCsvText_(clean).filter(r => r.some(c => String(c).trim() !== ""));
+  if (table.length < 2) throw new Error("データの行が見つかりませんでした");
+  const header = table[0];
+  const cols = detectOmronColumns_(header);
+  if (cols.date < 0) throw new Error("「測定日」の列が見つかりませんでした。オムロンconnectアプリから書き出したCSVか確認してください");
+  if (cols.muscleRate < 0 && cols.muscle < 0) throw new Error("骨格筋率・骨格筋量の列が見つかりませんでした");
+  const byDate = new Map(); // date -> { date, time, weight, bodyFat, muscle, muscleRate }
+  let skipped = 0;
+  for (let i = 1; i < table.length; i++) {
+    const r = table[i];
+    const dt = parseOmronDateTime_(r[cols.date]);
+    if (!dt) { skipped++; continue; }
+    const rec = { date: dt.date, time: dt.time };
+    const w = cols.weight >= 0 ? parseFloat(r[cols.weight]) : NaN;
+    const bf = cols.bodyFat >= 0 ? parseFloat(r[cols.bodyFat]) : NaN;
+    const mu = cols.muscle >= 0 ? parseFloat(r[cols.muscle]) : NaN;
+    const mr = cols.muscleRate >= 0 ? parseFloat(r[cols.muscleRate]) : NaN;
+    if (Number.isFinite(w) && w > 0) rec.weight = Math.round(w * 10) / 10;
+    if (Number.isFinite(bf) && bf >= BODYFAT_MIN && bf <= BODYFAT_MAX) rec.bodyFat = Math.round(bf * 10) / 10;
+    if (Number.isFinite(mu) && mu >= MUSCLE_MIN && mu <= MUSCLE_MAX) rec.muscle = Math.round(mu * 10) / 10;
+    if (Number.isFinite(mr) && mr >= MUSCLE_RATE_MIN && mr <= MUSCLE_RATE_MAX) rec.muscleRate = Math.round(mr * 10) / 10;
+    // 同じ日に複数回の測定があれば、最後(時刻が遅い方)を採用する。
+    const existing = byDate.get(rec.date);
+    if (!existing || rec.time >= existing.time) byDate.set(rec.date, rec);
+  }
+  const rows = [...byDate.values()].sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!rows.length) throw new Error("取り込めるデータがありませんでした");
+  return { rows, skipped, hasWeight: cols.weight >= 0, hasBodyFat: cols.bodyFat >= 0, hasMuscle: cols.muscle >= 0, hasMuscleRate: cols.muscleRate >= 0 };
+}
+// 取り込み内容をまだ反映せず、件数(新規/更新)だけ確認できるプレビューを作る。
+// v5.11: 体重が空欄の行は、その日の記録がまだ無ければ作れない(体重は必須項目)ため、
+// プレビューの時点で除外して件数に含めない。以前は件数に含めたまま実際には捨てていたので、
+// 「取り込みました」と表示されるのに何も入っていないことがあった。
+function buildOmronImportPreview_(parsed) {
+  const existingDates = new Set(weightEntries.map(w => w.date));
+  const usable = parsed.rows.filter(r =>
+    (r.weight != null || existingDates.has(r.date)) &&
+    (r.weight != null || r.bodyFat != null || r.muscle != null || r.muscleRate != null));
+  const noWeight = parsed.rows.length - usable.length;
+  if (!usable.length) throw new Error("体重の値が入っている行が無いため、取り込めるデータがありませんでした");
+  const newCount = usable.filter(r => !existingDates.has(r.date)).length;
+  const updateCount = usable.length - newCount;
+  return { ...parsed, rows: usable, noWeight, newCount, updateCount };
+}
+function handleOmronCsvFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = parseOmronCsv_(String(reader.result));
+      omronImportPreview = buildOmronImportPreview_(parsed);
+      omronImportMessage = null; omronImportError = false;
+    } catch (e) {
+      omronImportPreview = null;
+      omronImportMessage = "読み込みに失敗しました: " + (e && e.message ? e.message : String(e));
+      omronImportError = true;
+    }
+    renderTabContent();
+  };
+  reader.onerror = () => {
+    omronImportPreview = null;
+    omronImportMessage = "ファイルを読み込めませんでした"; omronImportError = true;
+    renderTabContent();
+  };
+  reader.readAsText(file);
+}
+// プレビュー内容をweightEntriesに反映する。既存の記録がある日は、CSVに含まれる
+// 項目(体重・体脂肪率・骨格筋量・骨格筋率)だけを上書きし、腹囲など他の項目は残す。
+function applyOmronImport_() {
+  if (!omronImportPreview) return;
+  let newCount = 0, updateCount = 0;
+  omronImportPreview.rows.forEach(r => {
+    const existing = weightEntries.find(w => w.date === r.date);
+    const rec = existing ? { ...existing } : { date: r.date };
+    if (r.weight != null) rec.weight = r.weight;
+    if (r.bodyFat != null) rec.bodyFat = r.bodyFat;
+    if (r.muscle != null) rec.muscle = r.muscle;
+    if (r.muscleRate != null) rec.muscleRate = r.muscleRate;
+    if (rec.weight == null) return; // 体重が無い記録は作れない(プレビューで除外済みだが念のため)
+    weightEntries = weightEntries.filter(w => w.date !== r.date);
+    weightEntries.push(rec);
+    if (existing) updateCount++; else newCount++;
+  });
+  const count = newCount + updateCount;
+  omronImportPreview = null;
+  omronImportMessage = `取り込みました(${count}日ぶん: 新規${newCount}件・更新${updateCount}件)`;
+  omronImportError = false;
+  saveState(); renderTabContent(); scheduleSync();
+}
+function cancelOmronImport_() {
+  omronImportPreview = null; omronImportMessage = null; omronImportError = false;
+  renderTabContent();
+}
+function omronImportCardHtml() {
+  const p = omronImportPreview;
+  const preview = p ? `
+    <p class="muted" style="font-size:11.5px;margin:0 0 8px;line-height:1.6;">
+      ${p.rows[0].date} 〜 ${p.rows[p.rows.length-1].date} の ${p.rows.length}日ぶん(新規${p.newCount}件・更新${p.updateCount}件)を取り込みます。${p.skipped ? `※${p.skipped}行は日付を認識できず除外しました。` : ""}${p.noWeight ? `※${p.noWeight}日ぶんは体重が空欄のため除外しました。` : ""}
+    </p>
+    <div class="row" style="margin-bottom:4px;">
+      <button class="btn-primary" data-action="omron-import-confirm" style="flex:1;">この内容で取り込む</button>
+      <button class="btn-icon" style="background:var(--ink-faint);" data-action="omron-import-cancel">キャンセル</button>
+    </div>` : "";
+  return `<div class="card">
+    <p class="section-title">📥 オムロン体組成計CSVを取り込む</p>
+    <p class="muted" style="font-size:11px;margin:0 0 10px;line-height:1.6;">オムロン connectアプリの「データエクスポート」で書き出したCSVから、体重・体脂肪率・骨格筋量・骨格筋率をまとめて取り込めます。同じ日の記録が既にある場合は、CSVの値で上書きされます(腹囲など他の項目は残ります)。</p>
+    <input type="file" id="omron-csv-input" accept=".csv,text/csv" class="hidden">
+    <button class="chip" data-action="omron-import-pick">📄 CSVファイルを選ぶ</button>
+    ${preview}
+    ${omronImportMessage ? `<p style="font-size:11px;margin:8px 0 0;color:${omronImportError ? "var(--coral)" : "var(--ink)"};line-height:1.5;">${esc(omronImportMessage)}</p>` : ""}
+  </div>`;
 }
 // 接続設定を保存した直後に呼ぶ(v44.9)。こちらの内容を送るのではなく、
 // 「シートに何が入っているか」をまず見に行くだけの処理。
@@ -3010,10 +3072,12 @@ async function inspectSheetAfterConnect_() {
     if (sheetCount > 0) {
       // シートに記録がある。こちらの内容で勝手に上書きせず、必ず本人に選ばせる。
       connectSheetChoice = { sheetCount, localCount };
-      syncStatus = localCount === 0 ? "blocked" : "idle";
+      setSyncHold_("connect-choice"); // 選ぶ前に再読み込みしても同期が止まったままになるよう保存しておく(v5.11)
+      syncStatus = "blocked";
       if (localCount === 0) emptySyncBlocked = true;
     } else {
       connectSheetChoice = null;
+      setSyncHold_(null);
       syncStatus = "idle";
       scheduleSync();
     }
@@ -3052,6 +3116,7 @@ async function restoreFromSheet() {
     if (syncStatus === "conflict" || syncStatus === "blocked") syncStatus = "idle";
     // 記録が戻ったので、0件を理由に止めていた保留と、読み込み失敗の警告は解除する(v44.9)。
     emptySyncBlocked = false; dataLoadFailed = false; connectSheetChoice = null;
+    setSyncHold_(null);
     dataOpMessage = `シートから復元しました(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)`;
     dataOpError = false;
     renderApp();
@@ -3514,6 +3579,9 @@ function switchTab(tab) {
   if (tab === "meals") autoSelectMealTypeByTime();
   renderTabContent();
   updateTabbarActive();
+  // タブを切り替えたら、前のタブでのスクロール位置を引き継がず、必ず一番上から
+  // 見られるようにする(以前は途中までスクロールした状態のまま次のタブに切り替わっていた)。
+  window.scrollTo(0, 0);
 }
 
 // ============ TODAY TAB ============
@@ -3643,6 +3711,55 @@ function todayHtml() {
 }
 
 // ============ MEALS TAB ============
+// 週ごとのPFC摂取量と、目標に対する不足量を見せるカード(v5.9)。
+// 「今日」だけでなく「週単位でどれくらい摂れているか・足りていないか」を振り返れるように、
+// たんぱく質・脂質・炭水化物それぞれを週合計(g)の棒グラフにし、点線で週間の目標量
+// (1日の目標量 × 7日、目標カロリー計算に使っている現在の目標をそのまま用いる)を示す。
+// プロフィール・体重が未記録で目標を計算できない場合は、グラフだけ(目標ラインなし)を出す。
+function weeklyPfcCardHtml() {
+  const weeks = weekMacroBuckets(8);
+  const anyData = weeks.some(w => w.protein > 0 || w.fat > 0 || w.carb > 0);
+  if (!anyData) {
+    return `<div class="card">
+      <p class="section-title">📊 週ごとのPFC摂取量</p>
+      <p class="muted" style="font-size:11px;margin:0;">食事に栄養素(たんぱく質・脂質・炭水化物)を記録すると、週ごとの推移と不足量が表示されます。</p>
+    </div>`;
+  }
+  const targets = getTargets();
+  const wt = targets ? {
+    protein: targets.targetProtein * 7,
+    fat: targets.targetFat * 7,
+    carb: targets.targetCarb * 7,
+  } : null;
+  const current = weeks[weeks.length - 1];
+  const gapLine = (label, actual, target, colorHex) => {
+    if (!target) return "";
+    const gap = Math.round(target - actual);
+    const status = gap > 0
+      ? `<span style="color:var(--coral);">不足 ${gap}g</span>`
+      : `<span style="color:var(--teal);">達成(+${Math.abs(gap)}g)</span>`;
+    return `<div class="between" style="margin:2px 0;">
+      <span style="font-size:11.5px;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${colorHex};margin-right:5px;"></span>${label}</span>
+      <span class="mono" style="font-size:11px;">${actual}g / ${target}g ${status}</span>
+    </div>`;
+  };
+  return `<div class="card">
+    <p class="section-title">📊 週ごとのPFC摂取量</p>
+    <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">月曜始まりの週ごとの合計です。${wt ? "点線は週間の目標量(1日の目標量 × 7日)。" : "設定タブでプロフィールと体重を入力すると、目標に対する不足量も表示されます。"}</p>
+    <p class="label" style="margin-bottom:4px;">たんぱく質(g/週)</p>
+    ${weeklyMacroBarSvg(weeks.map(w => ({label: w.label, value: w.protein})), wt ? wt.protein : null, "var(--coral)")}
+    <p class="label" style="margin:10px 0 4px;">脂質(g/週)</p>
+    ${weeklyMacroBarSvg(weeks.map(w => ({label: w.label, value: w.fat})), wt ? wt.fat : null, "var(--sand)")}
+    <p class="label" style="margin:10px 0 4px;">炭水化物(g/週)</p>
+    ${weeklyMacroBarSvg(weeks.map(w => ({label: w.label, value: w.carb})), wt ? wt.carb : null, "var(--slate)")}
+    ${wt ? `<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px;">
+      <p class="muted" style="font-size:10.5px;margin:0 0 4px;">今週(${current.label}〜)の不足量</p>
+      ${gapLine("たんぱく質", current.protein, Math.round(wt.protein), "var(--coral)")}
+      ${gapLine("脂質", current.fat, Math.round(wt.fat), "var(--sand)")}
+      ${gapLine("炭水化物", current.carb, Math.round(wt.carb), "var(--slate)")}
+    </div>` : ""}
+  </div>`;
+}
 function mealsHtml() {
   const today = localDateStr();
   const todayMeals = mealEntries.filter(m => m.date === today);
@@ -3655,9 +3772,6 @@ function mealsHtml() {
   // 「今日の状況」「収支グラフ」「このグラフ」の3か所で数字が食い違うことはない。
   const intakeHistory = computeCalorieBalanceHistory(14);
   const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
-  // 昨日の食事をそのままコピーしたいという要望向け(v44.8。以前は「今日」タブに
-  // 運動とまとめて出ていたが、食事を触るのは食事タブなのでこちらに移した)。
-  const yesterdayMealTypes = yesterdayMealTypesAvailable();
 
   return `
     <div class="kpi-grid">
@@ -3722,16 +3836,6 @@ function mealsHtml() {
 
     ${photoCardHtml()}
 
-    ${yesterdayMealTypes.length ? `
-    <div class="card">
-      <p class="section-title" style="margin:0 0 8px;">📋 昨日の食事をコピー</p>
-      <p class="muted" style="font-size:11px;margin:0 0 6px;">区分ごとにコピーできます</p>
-      <div class="wrap" style="margin-bottom:8px;">
-        ${yesterdayMealTypes.map(t => `<button class="chip" data-action="copy-yesterday-meal" data-val="${t}">${t}</button>`).join("")}
-      </div>
-      <button class="chip" data-action="copy-yesterday-meals-all" style="width:100%;text-align:center;">まとめてコピー</button>
-    </div>` : ""}
-
     <div class="card">
       <p class="section-title">🍽️ 今日の食事</p>
       ${targets ? `
@@ -3745,7 +3849,7 @@ function mealsHtml() {
         </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
     </div>
 
-    ${mealSuggestionCardHtml()}
+    ${weeklyPfcCardHtml()}
 
     <div class="card">
       <p class="section-title">📊 摂取カロリーと消費カロリー(直近14日)</p>
@@ -3884,8 +3988,33 @@ function renderMealHistory() {
 // 投稿文は「開始体重→現在の体重とその差分・記録日数」を自動生成する。体重の記録が
 // 1件しかない(まだ経過と呼べるほどのデータがない)場合は、差分の代わりに現在値と
 // 目標値だけを出す。
-function buildXShareText() {
-  const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
+// v5.9で「3種類の投稿文から選べるようにしてほしい」というご要望に対応するため、
+// タイトル・ハッシュタグなど各バリアントで共通して使う部分をbuildXShareBase_()に
+// 切り出した。
+// v5.11で3種類の中身を見直し、①データ重視(従来どおり)②体重×食事の分析
+// ③体重×運動の分析 にした。また「今日まで/昨日まで」を選べるようにし、朝の投稿など
+// 今日の記録がまだ揃っていないときでも、昨日までのデータで文章を作れるようにした。
+// 日付文字列(YYYY-MM-DD)をn日ずらす。タイムゾーンのずれを避けるため、
+// ローカル時刻の正午を基準に計算する。
+function shiftDateStr_(dateStr, n) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d, 12);
+  dt.setDate(dt.getDate() + n);
+  return localDateStr(dt);
+}
+// "2026-09-25" → "9/25"
+function shortMD_(dateStr) {
+  const [, m, d] = dateStr.split("-").map(Number);
+  return `${m}/${d}`;
+}
+function shareUntilDate_() {
+  return shareAsOf === "yesterday" ? yesterdayDateStr() : localDateStr();
+}
+function buildXShareBase_(untilDate) {
+  const until = untilDate || localDateStr();
+  const sortedAsc = weightEntries
+    .filter(w => w.date <= until && w.weight > 0)
+    .sort((a,b) => a.date < b.date ? -1 : 1);
   if (sortedAsc.length === 0) return null;
   const start = sortedAsc[0], latest = sortedAsc[sortedAsc.length - 1];
   // v46.14で見出しを「からだの記録」に統一したが、減量中の利用者からは
@@ -3898,6 +4027,40 @@ function buildXShareText() {
     : (goals.weight ? latest.weight - goals.weight : 0);
   const title = trendDiff < 0 ? "ダイエット経過 📉" : trendDiff > 0 ? "増量記録 📈" : "からだの記録 📊";
   const hashtag = trendDiff < 0 ? "#ダイエット記録" : trendDiff > 0 ? "#増量記録" : "#からだの記録";
+  const isToday = until === localDateStr();
+  // 分析系(②③)の集計期間: 締め日を含む直近7日間。
+  const periodStart = shiftDateStr_(until, -6);
+  return { sortedAsc, start, latest, trendDiff, title, hashtag,
+    until, isToday, dayLabel: isToday ? "今日" : "昨日", periodStart,
+    periodLabel: `${shortMD_(periodStart)}〜${shortMD_(until)}` };
+}
+// 直近7日間の体重の変化(②③で共通)。7日前以前の最後の記録を基準にし、無ければ
+// 期間内の最初の記録を基準にする。比べられる記録が無ければ diff は null。
+function shareWeekWeight_(base) {
+  const { sortedAsc, latest, until } = base;
+  const weekAgo = shiftDateStr_(until, -7);
+  let baseline = [...sortedAsc].reverse().find(w => w.date <= weekAgo);
+  if (!baseline) baseline = sortedAsc.find(w => w.date > weekAgo);
+  if (!baseline || baseline.date === latest.date) return { baseline: null, latest, diff: null };
+  return { baseline, latest, diff: round1_(latest.weight - baseline.weight) };
+}
+function shareWeightLine_(ww) {
+  if (ww.diff == null) return `体重: ${ww.latest.weight}kg`;
+  const diffStr = (ww.diff > 0 ? "+" : ww.diff < 0 ? "−" : "±") + Math.abs(ww.diff).toFixed(1);
+  return `体重: ${ww.baseline.weight}kg → ${ww.latest.weight}kg (${diffStr}kg)`;
+}
+// 体重の動きを、目標(減量/増量)に照らして一言で表す。
+function shareWeightPhrase_(ww) {
+  if (ww.diff == null) return "";
+  const wantLose = goals.weight ? goals.weight < ww.latest.weight : true;
+  if (Math.abs(ww.diff) < 0.2) return "体重は横ばい";
+  if (ww.diff < 0) return wantLose ? "体重は順調に減少中" : "体重は減少傾向";
+  return wantLose ? "体重はやや増加" : "体重は順調に増加中";
+}
+// データ重視バリアント(従来のbuildXShareTextと同じ内容): 体重の差分・体組成・
+// カロリー収支まで含めた詳しい内容。v5.11から締め日(今日/昨日)を指定できる。
+function buildXShareTextData_(base) {
+  const { sortedAsc, start, latest, title, hashtag, until, dayLabel } = base;
   const lines = [title];
   if (sortedAsc.length >= 2 && start.date !== latest.date) {
     const days = Math.round((new Date(latest.date) - new Date(start.date)) / 86400000) + 1;
@@ -3913,7 +4076,7 @@ function buildXShareText() {
   // 体組成(体脂肪量)の内訳(v46)。開始時点(手入力の基準、なければ体脂肪率を
   // 記録した最初の1件)と直近を比べられるときだけ差分つきで、体脂肪率しか
   // まだないときは直近の値だけを添える。
-  const bodyComp = computeBodyComposition_();
+  const bodyComp = computeBodyComposition_(until);
   if (bodyComp.first && bodyComp.last && bodyComp.first.date !== bodyComp.last.date) {
     const dFat = round1_(bodyComp.last.fat - bodyComp.first.fat);
     const dFatStr = (dFat > 0 ? "+" : "") + dFat.toFixed(1);
@@ -3922,21 +4085,20 @@ function buildXShareText() {
     lines.push(`体脂肪率: ${bodyComp.last.bf.toFixed(1)}%`);
   }
 
-  // カロリーの内訳(v38)。その日の摂取・消費とその差に加えて、記録開始からの
+  // カロリーの内訳(v38)。締め日の摂取・消費とその差に加えて、記録開始からの
   // 累計収支も添える。プロフィール未入力などで消費カロリーを計算できない場合は、
   // この2行だけを省いて従来どおりの文面になる。
-  const today = localDateStr();
-  const todayIntake = mealEntries
-    .filter(m => m.date === today)
+  const dayIntake = mealEntries
+    .filter(m => m.date === until)
     .reduce((s,m) => s + (m.calories||0), 0);
   const targets = getTargets();
   const weightKg = latest ? latest.weight : null;
-  if (targets && weightKg && todayIntake > 0) {
-    const todayBurn = Math.round(targets.tdee + estimateExerciseBurnForDate(today, weightKg));
-    const todayDiff = Math.round(todayIntake - todayBurn);
-    lines.push(`今日: 摂取${Math.round(todayIntake).toLocaleString()} / 消費${todayBurn.toLocaleString()}kcal (${todayDiff >= 0 ? "+" : "−"}${Math.abs(todayDiff).toLocaleString()})`);
+  if (targets && weightKg && dayIntake > 0) {
+    const dayBurn = Math.round(targets.tdee + estimateExerciseBurnForDate(until, weightKg));
+    const dayDiff = Math.round(dayIntake - dayBurn);
+    lines.push(`${dayLabel}: 摂取${Math.round(dayIntake).toLocaleString()} / 消費${dayBurn.toLocaleString()}kcal (${dayDiff >= 0 ? "+" : "−"}${Math.abs(dayDiff).toLocaleString()})`);
   }
-  const totals = computeCalorieTotals();
+  const totals = computeCalorieTotals(until);
   if (totals) {
     lines.push(`累計収支: ${totals.balance >= 0 ? "+" : "−"}${Math.abs(totals.balance).toLocaleString()}kcal (${totals.days}日)`);
   }
@@ -3945,19 +4107,129 @@ function buildXShareText() {
   const text = lines.join("\n");
   // Xの1投稿の上限(280文字相当)に収まらなくなった場合に備え、長くなりすぎたら
   // カロリー関連の行、それでも収まらなければ体組成の行も落として、体重の経過
-  // だけの従来の文面に戻す(Bluesky側は300文字までとXより余裕があるので、
+  // だけの文面に戻す(Bluesky側は300文字までとXより余裕があるので、
   // ここで作った文章をそのまま使い回せる)。
   if (text.length > 260) {
-    let trimmed = lines.filter(l => !/^今日: |^累計収支: /.test(l)).join("\n");
+    let trimmed = lines.filter(l => !/^(今日|昨日): |^累計収支: /.test(l)).join("\n");
     if (trimmed.length > 260) {
-      trimmed = lines.filter(l => !/^今日: |^累計収支: |^体脂肪/.test(l)).join("\n");
+      trimmed = lines.filter(l => !/^(今日|昨日): |^累計収支: |^体脂肪/.test(l)).join("\n");
     }
     return trimmed;
   }
   return text;
 }
-function openXShare() {
-  const text = buildXShareText();
+// 体重×食事の分析バリアント(v5.11): 締め日までの7日間の食事記録から、
+// 1日あたりの平均摂取カロリーとPFCを目標と比べ、体重の動きと合わせて一言で評価する。
+// 食事を記録していない日まで「0kcal」として平均に含めると実態より少なく出るため、
+// 平均は食事を記録した日だけで割る(累計収支と同じ考え方)。
+function buildXShareTextMeal_(base) {
+  const { until, periodStart, periodLabel, hashtag } = base;
+  const ww = shareWeekWeight_(base);
+  const lines = [`体重×食事の振り返り 🍽️ (${periodLabel})`, shareWeightLine_(ww)];
+  const byDate = {};
+  mealEntries.filter(m => m.date >= periodStart && m.date <= until).forEach(m => {
+    const d = byDate[m.date] || (byDate[m.date] = { cal: 0, p: 0, f: 0, c: 0 });
+    d.cal += Number(m.calories) || 0;
+    d.p += Number(m.protein) || 0;
+    d.f += Number(m.fat) || 0;
+    d.c += Number(m.carb) || 0;
+  });
+  const days = Object.keys(byDate);
+  const phrases = [];
+  if (!days.length) {
+    lines.push("この7日間は食事の記録がありません");
+  } else {
+    const n = days.length;
+    const sum = k => days.reduce((s, d) => s + byDate[d][k], 0);
+    const avg = { cal: Math.round(sum("cal") / n), p: Math.round(sum("p") / n), f: Math.round(sum("f") / n), c: Math.round(sum("c") / n) };
+    const t = getTargets();
+    lines.push(`食事の記録: ${n}日 / 7日`);
+    if (avg.cal > 0) lines.push(`平均摂取: ${avg.cal.toLocaleString()}kcal${t ? ` (目標${Math.round(t.targetCalories).toLocaleString()})` : ""}`);
+    const hasPfc = avg.p + avg.f + avg.c > 0;
+    if (hasPfc) {
+      const pct = (v, target) => target ? `(${Math.round(v / target * 100)}%)` : "";
+      lines.push(t
+        ? `P ${avg.p}g${pct(avg.p, t.targetProtein)} / F ${avg.f}g${pct(avg.f, t.targetFat)} / C ${avg.c}g${pct(avg.c, t.targetCarb)}`
+        : `P ${avg.p}g / F ${avg.f}g / C ${avg.c}g`);
+    }
+    if (t) {
+      if (avg.cal > 0) {
+        const r = avg.cal / t.targetCalories;
+        phrases.push(r < 0.9 ? "摂取は目標より控えめ" : r > 1.1 ? "摂取は目標よりやや多め" : "摂取カロリーはほぼ目標どおり");
+      }
+      if (hasPfc) {
+        const ratios = [
+          { name: "たんぱく質", r: t.targetProtein ? avg.p / t.targetProtein : 1 },
+          { name: "脂質", r: t.targetFat ? avg.f / t.targetFat : 1 },
+          { name: "炭水化物", r: t.targetCarb ? avg.c / t.targetCarb : 1 },
+        ];
+        // いちばん目標から離れている栄養素を1つだけ挙げる(全部並べると長くなるため)。
+        const worst = ratios.sort((a, b) => Math.abs(b.r - 1) - Math.abs(a.r - 1))[0];
+        if (worst.r < 0.85) phrases.push(`${worst.name}がやや不足`);
+        else if (worst.r > 1.2) phrases.push(`${worst.name}がやや多め`);
+        else phrases.push("PFCバランスは良好");
+      }
+    }
+  }
+  const wp = shareWeightPhrase_(ww);
+  if (wp) phrases.push(wp);
+  if (phrases.length) lines.push(`分析: ${phrases.join("、")}`);
+  lines.push(hashtag);
+  return lines.join("\n");
+}
+// 体重×運動の分析バリアント(v5.11): 締め日までの7日間の運動記録(運動した日数・
+// 筋トレのセット数と部位・有酸素の時間と距離・概算の消費カロリー)を、体重の動きと
+// 合わせてまとめる。週の運動回数の目標に届いたかどうかも一言添える。
+function buildXShareTextExercise_(base) {
+  const { until, periodStart, periodLabel, hashtag, latest } = base;
+  const ww = shareWeekWeight_(base);
+  const lines = [`体重×運動の振り返り 🏋️ (${periodLabel})`, shareWeightLine_(ww)];
+  const inPeriod = entries.filter(e => e.date >= periodStart && e.date <= until);
+  const activeDays = new Set(inPeriod.map(e => e.date)).size;
+  const phrases = [];
+  if (!inPeriod.length) {
+    lines.push("この7日間は運動の記録がありません");
+  } else {
+    lines.push(`運動した日: ${activeDays}日 / 7日`);
+    const strength = inPeriod.filter(e => e.type === "strength");
+    if (strength.length) {
+      const partCount = {};
+      strength.forEach(e => { if (e.part) partCount[e.part] = (partCount[e.part] || 0) + 1; });
+      const parts = Object.keys(partCount).sort((a, b) => partCount[b] - partCount[a]).slice(0, 4);
+      lines.push(`筋トレ: ${strength.length}セット${parts.length ? `(${parts.join("・")})` : ""}`);
+    }
+    const cardio = inPeriod.filter(e => e.type === "cardio");
+    if (cardio.length) {
+      const minutes = cardio.reduce((s, e) => s + (Number(e.minutes) || 0), 0);
+      const km = cardio.reduce((s, e) => s + (Number(e.distance) || 0), 0);
+      lines.push(`有酸素: ${Math.round(minutes)}分${km > 0 ? `・${round1_(km)}km` : ""}`);
+    }
+    let burn = 0;
+    for (let i = 0; i < 7; i++) burn += estimateExerciseBurnForDate(shiftDateStr_(until, -i), latest.weight);
+    if (burn > 0) lines.push(`運動の消費: 約${Math.round(burn).toLocaleString()}kcal`);
+    const freq = Number(goals.weeklyFreq) || 0;
+    if (freq > 0) phrases.push(activeDays >= freq ? `週${freq}日の目標を達成` : `週${freq}日の目標まであと${freq - activeDays}日`);
+    // 締め日にまだ運動していなくても連続記録が途切れて見えないよう、その場合は前日から数える
+    // (今日タブの🔥表示と同じ考え方)。
+    const streak = calcStreak(entries, entries.some(e => e.date === until) ? until : shiftDateStr_(until, -1));
+    if (streak >= 3) phrases.push(`${streak}日連続で継続中`);
+  }
+  const wp = shareWeightPhrase_(ww);
+  if (wp) phrases.push(wp);
+  if (phrases.length) lines.push(`分析: ${phrases.join("、")}`);
+  lines.push(hashtag);
+  return lines.join("\n");
+}
+function buildXShareTextVariants(untilDate) {
+  const base = buildXShareBase_(untilDate || shareUntilDate_());
+  if (!base) return null;
+  return [
+    { id: "data", label: "データ重視", text: buildXShareTextData_(base) },
+    { id: "meal", label: "体重×食事", text: buildXShareTextMeal_(base) },
+    { id: "exercise", label: "体重×運動", text: buildXShareTextExercise_(base) },
+  ];
+}
+function openXShare(text) {
   if (!text) return;
   window.open("https://x.com/intent/tweet?text=" + encodeURIComponent(text), "_blank");
 }
@@ -3965,9 +4237,8 @@ function openXShare() {
 // (https://bsky.app/intent/compose?text=...)を使う。APIキーやアプリ登録は
 // 不要で、リンクを開くとログイン済みのBlueskyの投稿画面に文章が入力された
 // 状態で遷移する。Blueskyの投稿上限は300文字とXより余裕があるため、
-// buildXShareText()が作る文章(260文字以内に収めてある)をそのまま使い回せる。
-function openBlueskyShare() {
-  const text = buildXShareText();
+// データ重視バリアントの文章(260文字以内に収めてある)を含め、そのまま使い回せる。
+function openBlueskyShare(text) {
   if (!text) return;
   window.open("https://bsky.app/intent/compose?text=" + encodeURIComponent(text), "_blank");
 }
@@ -3977,13 +4248,15 @@ function weightHtml() {
   const sortedAsc = [...weightEntries].sort((a,b) => a.date < b.date ? -1 : 1);
   const sortedDesc = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1);
   const latest = sortedDesc[0];
+  const formSrc = weightFormSource_(); // v5.11: 過去の日付を選んでいるときは、その日の記録で入力欄を埋める
   const remaining = latest ? weightGoalRemaining_(latest.weight, goals.weight) : null;
   const points = sortedAsc.map(w => ({ date: w.date, value: w.weight }));
-  const xShareText = buildXShareText();
+  const shareVariants = buildXShareTextVariants();
+  const activeShareVariant = shareVariants ? (shareVariants.find(v => v.id === selectedShareVariant) || shareVariants[0]) : null;
   const list = sortedDesc.slice(0,8).map(w => `
     <div class="entry-row">
       <span class="mono muted" style="flex:1;">${w.date}</span>
-      <span class="mono">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}</span>
+      <span class="mono">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${w.muscle != null ? ` <span class="muted">筋量${w.muscle}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</span>
       <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
       <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
     </div>`).join("");
@@ -4017,6 +4290,16 @@ function weightHtml() {
         <div class="kpi-v">${latest && latest.waist != null ? latest.waist : "−"}<span>cm</span></div>
         <div class="kpi-d neutral">${latest && latest.waist != null ? latest.date : "任意項目"}</div>
       </div>
+      <div class="kpi">
+        <div class="kpi-l">骨格筋量</div>
+        <div class="kpi-v">${latest && latest.muscle != null ? latest.muscle : "−"}<span>kg</span></div>
+        <div class="kpi-d neutral">${latest && latest.muscle != null ? latest.date : "任意項目"}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">骨格筋率</div>
+        <div class="kpi-v">${latest && latest.muscleRate != null ? latest.muscleRate : "−"}<span>%</span></div>
+        <div class="kpi-d neutral">${latest && latest.muscleRate != null ? latest.date : "任意項目"}</div>
+      </div>
       ${bmiTile}
     </div>
 
@@ -4029,22 +4312,32 @@ function weightHtml() {
       <div class="field-row" style="margin-bottom:10px;">
         <div class="f-val">
           <label class="label">体重 (kg)</label>
-          <input type="number" step="0.1" id="weight-value-input" placeholder="例: 65.0" class="mono" value="${latest ? latest.weight : ""}">
+          <input type="number" step="0.1" id="weight-value-input" placeholder="例: 65.0" class="mono" value="${formSrc ? formSrc.weight : ""}">
         </div>
         <div class="f-val">
           <label class="label">体脂肪率 (%・任意)</label>
-          <input type="number" step="0.1" id="weight-bodyfat-input" placeholder="例: 29.0" class="mono" value="${latest && latest.bodyFat != null ? latest.bodyFat : ""}">
+          <input type="number" step="0.1" id="weight-bodyfat-input" placeholder="例: 29.0" class="mono" value="${formSrc && formSrc.bodyFat != null ? formSrc.bodyFat : ""}">
         </div>
         <div class="f-val">
           <label class="label">腹囲 (cm・任意)</label>
-          <input type="number" step="0.1" id="weight-waist-input" placeholder="例: 82.0" class="mono" value="${latest && latest.waist != null ? latest.waist : ""}">
+          <input type="number" step="0.1" id="weight-waist-input" placeholder="例: 82.0" class="mono" value="${formSrc && formSrc.waist != null ? formSrc.waist : ""}">
+        </div>
+        <div class="f-val">
+          <label class="label">骨格筋量 (kg・任意)</label>
+          <input type="number" step="0.1" id="weight-muscle-input" placeholder="例: 28.0" class="mono" value="${formSrc && formSrc.muscle != null ? formSrc.muscle : ""}">
+        </div>
+        <div class="f-val">
+          <label class="label">骨格筋率 (%・任意)</label>
+          <input type="number" step="0.1" id="weight-muscle-rate-input" placeholder="例: 29.0" class="mono" value="${formSrc && formSrc.muscleRate != null ? formSrc.muscleRate : ""}">
         </div>
       </div>
-      <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">体脂肪率は任意です。記録すると、基礎代謝を体組成から計算する式(Katch-McArdle)に自動で切り替わり、目標カロリーとたんぱく質の目安がより実態に近づきます。腹囲も任意で、記録するとAIのひとことコメントで体重・体脂肪率とあわせて参照されます。</p>
+      <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">体脂肪率は任意です。記録すると、基礎代謝を体組成から計算する式(Katch-McArdle)に自動で切り替わり、目標カロリーとたんぱく質の目安がより実態に近づきます。腹囲・骨格筋量・骨格筋率も任意で、体組成計の表示値をそのまま記録できます(骨格筋量・骨格筋率はこの端末の中だけに保存され、Google Sheetsへの同期対象には含まれません)。</p>
       ${entryDateNoticeHtml("weight")}
       <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
       ${list}
     </div>
+
+    ${omronImportCardHtml()}
 
     <div class="card">
       <div class="between" style="margin-bottom:8px;">
@@ -4083,29 +4376,36 @@ function weightHtml() {
 
     ${bodyCompositionCardHtml()}
     ${waistCardHtml()}
+    ${muscleCardHtml()}
+    ${muscleRateCardHtml()}
 
     <div class="card">
       <p class="section-title">📤 SNSに経過をポスト</p>
-      ${xShareText ? `
-      <textarea id="x-share-text" readonly rows="4" style="margin-bottom:8px;" onclick="this.select()">${esc(xShareText)}</textarea>
+      <p class="label" style="margin:0 0 4px;">集計の範囲</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        <button type="button" class="chip ${shareAsOf==="today"?"active-b":""}" data-action="select-share-asof" data-val="today">今日まで</button>
+        <button type="button" class="chip ${shareAsOf==="yesterday"?"active-b":""}" data-action="select-share-asof" data-val="yesterday">昨日まで</button>
+      </div>
+      ${activeShareVariant ? `
+      <p class="label" style="margin:0 0 4px;">投稿の内容</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        ${shareVariants.map(v => `<button type="button" class="chip ${selectedShareVariant===v.id?"active-b":""}" data-action="select-share-variant" data-val="${v.id}">${v.label}</button>`).join("")}
+      </div>
+      <textarea id="x-share-text" readonly rows="9" style="margin-bottom:8px;" onclick="this.select()">${esc(activeShareVariant.text)}</textarea>
       <div class="row" style="margin-bottom:8px;">
         <button type="button" class="btn-primary" data-action="open-x-share" style="flex:1;">🐦 Xの投稿画面を開く</button>
         <button type="button" class="btn-primary" data-action="open-bluesky-share" style="flex:1;">🦋 Blueskyの投稿画面を開く</button>
       </div>
       <button type="button" class="chip" data-action="copy-x-share" style="width:100%;">📋 文章だけコピー</button>
       <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
-      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">タップすると投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
-      ` : `<p class="muted" style="font-size:11.5px;margin:0;">体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。</p>`}
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">「データ重視」は記録開始からの経過、「体重×食事」「体重×運動」は締め日までの直近7日間を分析した内容です。朝のうちに投稿するなど、今日の記録がまだ揃っていないときは「昨日まで」を選ぶと、昨日までのデータで文章を作れます。タップすると投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
+      ` : `<p class="muted" style="font-size:11.5px;margin:0;">${shareAsOf === "yesterday" && weightEntries.length ? "昨日までの体重の記録がありません。「今日まで」に切り替えると、今日の記録を含めて作成できます。" : "体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。"}</p>`}
     </div>`;
 }
 
 // ============ TRAINING TAB(筋トレ・有酸素の記録 + 進捗 + 履歴) ============
 function trainingHtml() {
   const todayHasTraining = entries.some(e => e.date === localDateStr());
-  // 昨日と同じ内容を運動しているだけ、というのはよくあるので、昨日のトレーニング
-  // 記録があるときだけワンタップでコピーできるようにする(v44.8。以前は「今日」
-  // タブに食事とまとめて出ていたが、運動を触るのは運動タブなのでこちらに移した)。
-  const yesterdayHadTraining = entries.some(e => e.date === yesterdayDateStr());
   // v46.13: 冒頭のKPIパネル用。今週の頻度は進捗カードと同じweekBuckets(1)、
   // 消費カロリーは進捗カードのグラフ(progressBurnHtml)と同じcomputeBurnHistory(14)を使う。
   const thisWeekTraining = weekBuckets(1)[0];
@@ -4126,13 +4426,7 @@ function trainingHtml() {
       </div>
     </div>
 
-    ${yesterdayHadTraining ? `
-    <div class="card">
-      <div class="between">
-        <span style="font-size:12.5px;">📋 昨日の運動をコピー</span>
-        <button class="chip active-b" data-action="copy-yesterday-training">コピー</button>
-      </div>
-    </div>` : ""}
+    ${strengthPlanCardHtml()}
 
     <div class="card">
       <div class="row" style="margin-bottom:14px;">
@@ -4259,6 +4553,78 @@ function bodyPartStatusHtml() {
     <p class="section-title">📋 部位ごとの実施状況</p>
     <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">しばらくやっていない部位が上に来るように並んでいます。14日以上空いている部位は赤で示しています。</p>
     ${rows.map(rowHtml).join("")}
+  </div>`;
+}
+// ---- 本日の筋トレプラン(v5.9) ----
+// 「過去の運動履歴から、今日の筋トレプランを4種類提示してほしい」というご要望への対応。
+// bodyPartStatusHtmlと同じく「部位ごとの最終実施日」を材料に、性格の異なる4パターンを
+// 組み立てる。各種目は、ユーザーが種目マスタに登録した種目 or 既定のおすすめ種目から
+// pickExerciseForPart()で選び、重量・回数はlastStrengthByExercise(前回その種目を記録した
+// ときの値)があればそれを、無ければ初回向けの控えめな既定値(10回・重量は本人が判断)を使う。
+function partStalenessDays_() {
+  const strengthEntries = entries.filter(e => e.type === "strength");
+  const nowMs = new Date(localDateStr()).getTime();
+  const map = {};
+  PARTS.forEach(part => {
+    const partEntries = strengthEntries.filter(e => e.part === part);
+    if (!partEntries.length) { map[part] = Infinity; return; }
+    const last = partEntries.reduce((max, e) => e.date > max ? e.date : max, partEntries[0].date);
+    map[part] = Math.round((nowMs - new Date(last).getTime()) / 86400000);
+  });
+  return map;
+}
+function suggestedSetForPart_(part) {
+  const exercise = pickExerciseForPart(part);
+  const remembered = (exercise && lastStrengthByExercise[exercise]) || lastStrengthByExercise[`(${part})`];
+  return {
+    part, exercise,
+    weight: remembered ? remembered.weight : null,
+    reps: remembered ? remembered.reps : 10,
+  };
+}
+function buildStrengthPlans_() {
+  const staleness = partStalenessDays_();
+  const rankedParts = [...PARTS].sort((a, b) => {
+    const av = staleness[a] === Infinity ? 99999 : staleness[a];
+    const bv = staleness[b] === Infinity ? 99999 : staleness[b];
+    return bv - av;
+  });
+  const plans = [
+    { id: "priority", icon: "🔥", label: "優先ケア", note: "しばらくやっていない部位を中心に", parts: rankedParts.slice(0, 3) },
+    { id: "upper",    icon: "💪", label: "上半身の日", note: "胸・背中・肩を中心に", parts: ["胸","背中","肩"] },
+    { id: "lower",    icon: "🦵", label: "下半身・体幹の日", note: "脚・腹筋を中心に", parts: ["脚","腹筋"] },
+    { id: "full",     icon: "⚖️", label: "全身バランス", note: "全身から1種目ずつまんべんなく", parts: ["胸","背中","脚","腹筋"] },
+  ];
+  return plans.map(p => ({ ...p, items: p.parts.map(suggestedSetForPart_) }));
+}
+function applyStrengthPlan(planId) {
+  const plan = buildStrengthPlans_().find(p => p.id === planId);
+  if (!plan) return;
+  const today = localDateStr();
+  plan.items.forEach(it => {
+    entries.unshift({
+      id: uid(), type: "strength", date: today, part: it.part,
+      exercise: it.exercise || "", weight: it.weight != null ? it.weight : 0, reps: it.reps,
+      createdAt: Date.now(),
+    });
+  });
+  saveState(); renderTabContent(); scheduleSync();
+}
+function strengthPlanCardHtml() {
+  const plans = buildStrengthPlans_();
+  const planItemLine = (it) => `<div class="muted" style="font-size:11.5px;margin:2px 0;line-height:1.6;">・${esc(it.part)}${it.exercise ? `: ${esc(it.exercise)}` : ""} <span class="mono">${it.weight != null ? it.weight + "kg × " : ""}${it.reps}回</span></div>`;
+  const planCard = (p) => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;">
+    <div class="between" style="margin-bottom:2px;">
+      <span style="font-weight:700;font-size:13px;">${p.icon} ${p.label}</span>
+      <button type="button" class="chip active-b" data-action="apply-strength-plan" data-plan="${p.id}">▶️ このプランで記録</button>
+    </div>
+    <p class="muted" style="font-size:10.5px;margin:0 0 6px;">${p.note}</p>
+    ${p.items.map(planItemLine).join("")}
+  </div>`;
+  return `<div class="card">
+    <p class="section-title">🧭 本日の筋トレプラン</p>
+    <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">これまでの記録(部位ごとの実施状況・種目ごとの前回の重量)をもとにした4つの候補です。タップするとまとめて記録され、あとから✏️で内容を調整できます。重量が空欄の種目は、まだ記録が無いため無理のない重さから始めてください。</p>
+    ${plans.map(planCard).join("")}
   </div>`;
 }
 // 運動による概算消費カロリーの推移(筋トレ+有酸素の合計)。
@@ -4885,7 +5251,7 @@ function openEdit(kind, key) {
   } else if (kind === "weight") {
     const w = weightEntries.find(x => x.date === key);
     if (!w) return;
-    editing = { kind, date: key, draftWeight: w.weight, draftBodyFat: w.bodyFat, draftWaist: w.waist, draftDate: w.date };
+    editing = { kind, date: key, draftWeight: w.weight, draftBodyFat: w.bodyFat, draftWaist: w.waist, draftMuscle: w.muscle, draftMuscleRate: w.muscleRate, draftDate: w.date };
   } else if (kind === "meal") {
     const m = mealEntries.find(x => x.id === key);
     if (!m) return;
@@ -4950,7 +5316,9 @@ function renderEditModal() {
       <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:10px;">
       <label class="label">体重(kg)</label><input type="number" step="0.1" id="edit-weight" value="${editing.draftWeight}" class="mono" style="margin-bottom:10px;">
       <label class="label">体脂肪率(%・任意)</label><input type="number" step="0.1" id="edit-bodyfat" value="${editing.draftBodyFat != null ? editing.draftBodyFat : ""}" placeholder="例: 29.0" class="mono" style="margin-bottom:10px;">
-      <label class="label">腹囲(cm・任意)</label><input type="number" step="0.1" id="edit-waist" value="${editing.draftWaist != null ? editing.draftWaist : ""}" placeholder="例: 82.0" class="mono" style="margin-bottom:14px;">`;
+      <label class="label">腹囲(cm・任意)</label><input type="number" step="0.1" id="edit-waist" value="${editing.draftWaist != null ? editing.draftWaist : ""}" placeholder="例: 82.0" class="mono" style="margin-bottom:10px;">
+      <label class="label">骨格筋量(kg・任意)</label><input type="number" step="0.1" id="edit-muscle" value="${editing.draftMuscle != null ? editing.draftMuscle : ""}" placeholder="例: 28.0" class="mono" style="margin-bottom:10px;">
+      <label class="label">骨格筋率(%・任意)</label><input type="number" step="0.1" id="edit-muscle-rate" value="${editing.draftMuscleRate != null ? editing.draftMuscleRate : ""}" placeholder="例: 29.0" class="mono" style="margin-bottom:14px;">`;
   } else if (editing.kind === "meal") {
     body = `
       <label class="label">区分</label>
@@ -5029,10 +5397,16 @@ function handleEditSave() {
       const bfRaw = bfEl ? parseFloat(bfEl.value) : NaN;
       const waistEl = document.getElementById("edit-waist");
       const waistRaw = waistEl ? parseFloat(waistEl.value) : NaN;
+      const muscleEl = document.getElementById("edit-muscle");
+      const muscleRaw = muscleEl ? parseFloat(muscleEl.value) : NaN;
+      const muscleRateEl = document.getElementById("edit-muscle-rate");
+      const muscleRateRaw = muscleRateEl ? parseFloat(muscleRateEl.value) : NaN;
       weightEntries = weightEntries.filter(x => x.date !== editing.date && x.date !== newDate);
       const rec = { date: newDate, weight: newVal };
       if (Number.isFinite(bfRaw) && bfRaw >= BODYFAT_MIN && bfRaw <= BODYFAT_MAX) rec.bodyFat = Math.round(bfRaw * 10) / 10;
       if (Number.isFinite(waistRaw) && waistRaw >= WAIST_MIN && waistRaw <= WAIST_MAX) rec.waist = Math.round(waistRaw * 10) / 10;
+      if (Number.isFinite(muscleRaw) && muscleRaw >= MUSCLE_MIN && muscleRaw <= MUSCLE_MAX) rec.muscle = Math.round(muscleRaw * 10) / 10;
+      if (Number.isFinite(muscleRateRaw) && muscleRateRaw >= MUSCLE_RATE_MIN && muscleRateRaw <= MUSCLE_RATE_MAX) rec.muscleRate = Math.round(muscleRateRaw * 10) / 10;
       weightEntries.unshift(rec);
     }
   } else if (editing.kind === "meal") {
@@ -5149,6 +5523,10 @@ function handleAddWeight() {
   const bfRaw = bfEl ? parseFloat(bfEl.value) : NaN;
   const waistEl = document.getElementById("weight-waist-input");
   const waistRaw = waistEl ? parseFloat(waistEl.value) : NaN;
+  const muscleEl = document.getElementById("weight-muscle-input");
+  const muscleRaw = muscleEl ? parseFloat(muscleEl.value) : NaN;
+  const muscleRateEl = document.getElementById("weight-muscle-rate-input");
+  const muscleRateRaw = muscleRateEl ? parseFloat(muscleRateEl.value) : NaN;
   weightEntries = weightEntries.filter(w => w.date !== date);
   const rec = { date, weight: val };
   // 体脂肪率は任意。入力ミス(2.9%や290%など)がそのまま目標カロリーを狂わせないよう、
@@ -5156,6 +5534,10 @@ function handleAddWeight() {
   if (Number.isFinite(bfRaw) && bfRaw >= BODYFAT_MIN && bfRaw <= BODYFAT_MAX) rec.bodyFat = Math.round(bfRaw * 10) / 10;
   // 腹囲も任意。同様に、明らかな入力ミスとみなせる範囲外の値は採用しない(v46.8)。
   if (Number.isFinite(waistRaw) && waistRaw >= WAIST_MIN && waistRaw <= WAIST_MAX) rec.waist = Math.round(waistRaw * 10) / 10;
+  // 骨格筋量も任意(v5.9)。同様に明らかな入力ミスは採用しない。
+  if (Number.isFinite(muscleRaw) && muscleRaw >= MUSCLE_MIN && muscleRaw <= MUSCLE_MAX) rec.muscle = Math.round(muscleRaw * 10) / 10;
+  // 骨格筋率も任意(v5.10)。
+  if (Number.isFinite(muscleRateRaw) && muscleRateRaw >= MUSCLE_RATE_MIN && muscleRateRaw <= MUSCLE_RATE_MAX) rec.muscleRate = Math.round(muscleRateRaw * 10) / 10;
   weightEntries.unshift(rec);
   saveState(); renderTabContent(); scheduleSync();
 }
@@ -5191,29 +5573,6 @@ function relogMeal(id) {
   saveState(); renderTabContent(); scheduleSync();
 }
 function yesterdayDateStr() { return localDateStr(new Date(Date.now() - 86400000)); }
-// 運動だけ/食事区分(朝食・昼食・夕食・間食)だけ、を個別にコピーしたいという要望向け。
-// v44.8で「今日」タブの合同カードは廃止し、運動タブ(コピー)・食事タブ(区分ごと・
-// まとめて)にそれぞれ分けたので、運動と食事をまとめて一度にコピーする関数はもう無い。
-function copyYesterdayTraining() {
-  const y = yesterdayDateStr(), today = localDateStr();
-  entries.filter(e => e.date === y).forEach(e => entries.unshift({ ...e, id: uid(), date: today, createdAt: Date.now() }));
-  saveState(); renderTabContent(); scheduleSync();
-}
-function copyYesterdayMealType(mealType) {
-  const y = yesterdayDateStr(), today = localDateStr();
-  mealEntries.filter(m => m.date === y && m.mealType === mealType).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
-  saveState(); renderTabContent(); scheduleSync();
-}
-// 食事タブの「まとめてコピー」: 昨日の食事(区分を問わずすべて)をコピーする。
-function copyYesterdayAllMeals() {
-  const y = yesterdayDateStr(), today = localDateStr();
-  mealEntries.filter(m => m.date === y).forEach(m => mealEntries.unshift({ ...m, id: uid(), date: today, createdAt: Date.now() }));
-  saveState(); renderTabContent(); scheduleSync();
-}
-function yesterdayMealTypesAvailable() {
-  const y = yesterdayDateStr();
-  return MEAL_TYPES.filter(t => mealEntries.some(m => m.date === y && m.mealType === t));
-}
 // 「よく使う運動メニュー」: 今日すでに記録した筋トレ・有酸素の内容を、名前を付けて
 // テンプレートとして保存する。次回はワンタップでまとめて記録できる。
 function saveTodayAsRoutine(name) {
@@ -5232,7 +5591,13 @@ function applyRoutine(routineId) {
   const today = localDateStr();
   r.items.forEach(it => {
     if (it.type === "strength") entries.unshift({ id: uid(), type:"strength", date: today, part: it.part, exercise: it.exercise, weight: it.weight, reps: it.reps, createdAt: Date.now() });
-    else entries.unshift({ id: uid(), type:"cardio", date: today, exercise: it.exercise, minutes: it.minutes, createdAt: Date.now() });
+    else {
+      // v5.11: 距離の目安も付けておく(付けないと移動距離の一覧・グラフに次回起動まで出なかった)。
+      const rec = { id: uid(), type:"cardio", date: today, exercise: it.exercise, minutes: it.minutes, createdAt: Date.now() };
+      const km = distanceFromMinutes(it.exercise, it.minutes);
+      if (km != null) rec.distance = formatDistanceKm(km);
+      entries.unshift(rec);
+    }
   });
   saveState(); renderTabContent(); scheduleSync();
 }
@@ -5536,7 +5901,11 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTrainingFormOptions();
   }
   else if (action === "add-training") { handleAddTraining(); }
-  else if (action === "reset-entry-date") { entryDates[t.dataset.kind] = null; updateEntryDateNotice(t.dataset.kind); }
+  else if (action === "reset-entry-date") {
+    entryDates[t.dataset.kind] = null; updateEntryDateNotice(t.dataset.kind);
+    // 体重フォームは、日付を今日に戻したら入力欄の値も今日向けに差し替える(v5.11)。
+    if (t.dataset.kind === "weight") fillWeightForm_(weightFormSource_());
+  }
   else if (action === "view-list") { historyView = "list"; renderHistory(); }
   else if (action === "view-calendar") { historyView = "calendar"; renderHistory(); }
   else if (action === "cal-prev") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderHistory(); }
@@ -5582,10 +5951,19 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
-  else if (action === "open-x-share") { openXShare(); }
-  else if (action === "open-bluesky-share") { openBlueskyShare(); }
+  else if (action === "select-share-variant") { selectedShareVariant = t.dataset.val; renderTabContent(); }
+  else if (action === "select-share-asof") { shareAsOf = t.dataset.val === "yesterday" ? "yesterday" : "today"; renderTabContent(); }
+  else if (action === "open-x-share") {
+    const el = document.getElementById("x-share-text");
+    openXShare(el ? el.value : null);
+  }
+  else if (action === "open-bluesky-share") {
+    const el = document.getElementById("x-share-text");
+    openBlueskyShare(el ? el.value : null);
+  }
   else if (action === "copy-x-share") {
-    const text = buildXShareText();
+    const textEl = document.getElementById("x-share-text");
+    const text = textEl ? textEl.value : null;
     const statusEl = document.getElementById("x-share-status");
     if (!text) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -5604,9 +5982,6 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "del-meal") { mealEntries = mealEntries.filter(m => m.id !== t.dataset.id); saveState(); renderTabContent(); scheduleSync(); }
   else if (action === "relog-training") { relogTraining(t.dataset.id); }
   else if (action === "relog-meal") { relogMeal(t.dataset.id); }
-  else if (action === "copy-yesterday-meals-all") { copyYesterdayAllMeals(); }
-  else if (action === "copy-yesterday-training") { copyYesterdayTraining(); }
-  else if (action === "copy-yesterday-meal") { copyYesterdayMealType(t.dataset.val); }
   else if (action === "save-routine-start") { savingRoutine = true; renderTabContent(); }
   else if (action === "save-routine-cancel") { savingRoutine = false; renderTabContent(); }
   else if (action === "save-routine-confirm") {
@@ -5618,6 +5993,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTabContent();
   }
   else if (action === "apply-routine") { applyRoutine(t.dataset.id); }
+  else if (action === "apply-strength-plan") { applyStrengthPlan(t.dataset.plan); }
   else if (action === "del-routine") { routineMaster = routineMaster.filter(r => r.id !== t.dataset.id); saveState(); renderTabContent(); }
   else if (action === "toggle-stretch") { toggleStretchItem(today, t.dataset.id); }
   else if (action === "start-stretch-timer") { startStretchTimer(t.dataset.id); }
@@ -5648,6 +6024,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     allowEmptySync = true;
     emptySyncBlocked = false;
     connectSheetChoice = null;
+    setSyncHold_(null);
     renderDataWarning();
     scheduleSync();
   }
@@ -5661,6 +6038,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   }
   else if (action === "connect-use-local") {
     connectSheetChoice = null;
+    setSyncHold_(null);
     emptySyncBlocked = false;
     allowEmptySync = true;   // 本人が「この端末の内容で上書きする」と明示的に選んだ
     renderDataWarning();
@@ -5668,6 +6046,15 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTabContent();
   }
   else if (action === "force-sync") { syncToSheet(true); }
+  // v5.11: 同期を止めている状態から、本人の判断で「この端末の内容でシートを上書き」して再開する。
+  else if (action === "resume-sync") {
+    dataLoadFailed = false; connectSheetChoice = null; emptySyncBlocked = false;
+    allowEmptySync = true;
+    setSyncHold_(null);
+    renderDataWarning();
+    syncToSheet(true);
+    renderTabContent();
+  }
   else if (action === "dismiss-sync-conflict") {
     // 警告を消すだけで、データの送信はしない。ローカルの記録はそのまま端末に残っているので、
     // これによって何かが消えることはない。あとで「今すぐ同期を試す」や「シートから復元」で
@@ -5677,8 +6064,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTabContent();
   }
   else if (action === "fetch-ai-advice") { fetchAiAdvice(); }
-  else if (action === "fetch-ai-mealplan") { fetchAiMealPlan(); }
-  // おすすめ食事の候補をタップ: 食事タブへ移動し、その内容を入力欄に入れておく
+  // 写真判定の候補をタップ: 食事タブへ移動し、その内容を入力欄に入れておく
   // (記録そのものは、本人が内容を確認して「＋ 記録する」を押したときだけ行う)。
   else if (action === "use-meal-suggestion") {
     const d = t.dataset;
@@ -5738,6 +6124,12 @@ document.getElementById("app").addEventListener("click", (e) => {
   // 確認ステップを挟む(confirmResetの「すべて削除」と同じ二段階確認パターン)。
   else if (action === "import-json") { confirmRestore = "file"; renderTabContent(); }
   else if (action === "restore-from-sheet") { confirmRestore = "sheet"; renderTabContent(); }
+  else if (action === "omron-import-pick") {
+    const fileEl = document.getElementById("omron-csv-input");
+    if (fileEl) fileEl.click();
+  }
+  else if (action === "omron-import-confirm") { applyOmronImport_(); }
+  else if (action === "omron-import-cancel") { cancelOmronImport_(); }
   else if (action === "restore-confirm-no") { confirmRestore = null; renderTabContent(); }
   else if (action === "restore-confirm-yes") {
     const kind = confirmRestore;
@@ -5828,10 +6220,20 @@ document.getElementById("app").addEventListener("click", (e) => {
     stretchLog = {}; // v5.4: ここが抜けていると「すべてのデータを削除」してもストレッチの記録と連続日数だけ残ってしまうため追加
     nutritionCache = {}; saveNutritionCache();
     sentSheetSigs = {}; saveSentSigs();
+    // v5.11: 消したはずの記録にもとづくAIのひとこと・写真の解析結果・CSV取り込みの
+    // 確認待ちなどが画面に残らないよう、一時的な状態もあわせて初期化する。
+    aiAdvice = null; aiAdviceStatus = "idle"; aiAdviceError = null;
+    try { localStorage.removeItem(AI_ADVICE_KEY); } catch (e) {}
+    photoStatus = "idle"; photoError = null; photoResults = null;
+    omronImportPreview = null; omronImportMessage = null; omronImportError = false;
+    dataOpMessage = null; dataOpError = false; confirmRestore = null;
     seedExerciseMasterIfEmpty();
     onboardDraft = { age:"", gender:"男性", height:"", weight:"", goalWeight:"", activity:"週1-2回", timeAvail:"10-15分", weeklyFreq:"" };
     // 本人の意思で消したので、壊れて読めなかった場合の警告は取り下げる。
     dataLoadFailed = false; emptySyncBlocked = false; connectSheetChoice = null;
+    // v5.11: シートを残すと選んだ場合は、初期設定で体重を1件入れた直後などに
+    // シートがその内容で上書きされないよう、本人が選ぶまで同期を止めておく。
+    setSyncHold_(action === "reset-yes-keep-sheet" && gasConfigured() ? "kept-sheet" : null);
     saveState();
     // シートも消すと決めた場合だけ、その場で空の内容を送る(安全弁は上で解除済み)。
     if (allowEmptySync && gasConfigured()) syncToSheet(true);
@@ -5873,13 +6275,7 @@ document.getElementById("app").addEventListener("change", (e) => {
   // 誤って無関係な値を保存してしまわないようにする。
   if (kind === "weight") {
     const d = e.target.value || localDateStr();
-    const existing = weightEntries.find(w => w.date === d);
-    const valEl = document.getElementById("weight-value-input");
-    const bfEl = document.getElementById("weight-bodyfat-input");
-    const waistEl = document.getElementById("weight-waist-input");
-    if (valEl) valEl.value = existing ? existing.weight : "";
-    if (bfEl) bfEl.value = existing && existing.bodyFat != null ? existing.bodyFat : "";
-    if (waistEl) waistEl.value = existing && existing.waist != null ? existing.waist : "";
+    fillWeightForm_(weightEntries.find(w => w.date === d) || null);
   }
 });
 document.getElementById("app").addEventListener("change", (e) => {
@@ -5904,6 +6300,10 @@ document.getElementById("app").addEventListener("change", (e) => {
   }
   if (e.target.id === "import-file-input" && e.target.files && e.target.files[0]) {
     importJsonFile(e.target.files[0]);
+    e.target.value = "";
+  }
+  if (e.target.id === "omron-csv-input" && e.target.files && e.target.files[0]) {
+    handleOmronCsvFile(e.target.files[0]);
     e.target.value = "";
   }
 });
@@ -5947,8 +6347,8 @@ loadState();
 // (loadStateより前に決めると、まだ記録が無い状態で判定してしまうためこの位置)。
 selectedCardio = defaultCardio();
 loadAiAdvice();
-loadAiMealPlan();
 loadNutritionCache();
+backfillCardioDistances_();
 // 電波が届かない場所(地下のジム・機内モード)でもアプリを起動できるようにする(v44)。
 // sw.js は index.html と同じ場所に置いてください。
 // ファイルをそのまま開いた場合(file://)やHTTPS以外では登録できないので、その時は何もしない。
