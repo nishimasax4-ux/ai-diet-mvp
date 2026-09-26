@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.12";
+const APP_VERSION = "v5.13";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -514,7 +514,6 @@ let selectedCardio = "ランニング";
 let cardioInputMode = "time"; // "time" | "steps" | "distance" — ランニング・ウォーキングのときだけ使う(v5.7)
 let selectedMealType = "朝食";
 let masterExercisePart = "胸"; // which part's tab is active in the master-data editor
-let historyView = "list";
 // ---- 記録が消えてしまう事故を防ぐための状態(v44.9) ----
 // このアプリは「端末のlocalStorageが正」で、その内容をまるごとシートへ書き写す方式のため、
 // 端末側が空になった瞬間に同期するとシート(唯一のバックアップ)まで空になってしまう。
@@ -3551,6 +3550,7 @@ function renderApp() {
       <button class="tab-item" data-tab="weight"><span class="ic">⚖️</span>からだ</button>
       <button class="tab-item" data-tab="training"><span class="ic">🏋️</span>運動</button>
       <button class="tab-item" data-tab="stretch"><span class="ic">🧘</span>ストレッチ</button>
+      <button class="tab-item" data-tab="calendar"><span class="ic">📅</span>カレンダー</button>
       <button class="tab-item" data-tab="settings"><span class="ic">⚙️</span>設定</button>
     </div>`;
   renderSyncStatus();
@@ -3568,6 +3568,7 @@ function renderTabContent() {
   else if (activeTab === "weight") el.innerHTML = weightHtml();
   else if (activeTab === "training") el.innerHTML = trainingHtml();
   else if (activeTab === "stretch") el.innerHTML = stretchHtml();
+  else if (activeTab === "calendar") el.innerHTML = calendarTabHtml();
   else if (activeTab === "settings") el.innerHTML = settingsHtml();
   bindTrainingFormWidgets();
   bindSettingsWidgets();
@@ -4753,6 +4754,9 @@ function calendarGridHtml() {
   const trainedDates = new Set(entries.map(e => e.date));
   const weightDates = new Set(weightEntries.map(w => w.date));
   const mealDates = new Set(mealEntries.map(m => m.date));
+  // v5.13: ストレッチの記録日も、他の3項目と同じ印でカレンダーに出す(カレンダータブが
+  // 「全てのデータ」を見る場所になったため)。
+  const stretchDates = new Set(Object.keys(stretchLog).filter(d => (stretchLog[d] || []).length > 0));
   let cells = "";
   for (let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell" style="visibility:hidden;"></div>`;
   for (let d = 1; d <= daysInMonth; d++) {
@@ -4761,6 +4765,7 @@ function calendarGridHtml() {
     if (trainedDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--coral);"></div>');
     if (weightDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--sand);"></div>');
     if (mealDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--teal);"></div>');
+    if (stretchDates.has(dateStr)) dots.push('<div class="cal-dot" style="background:var(--slate);"></div>');
     cells += `<div class="cal-cell ${dateStr===todayStr?"today":""} ${dateStr===selectedCalDate?"selected":""}" data-action="select-day" data-date="${dateStr}">
       <span>${d}</span><div class="cal-dots">${dots.join("")}</div>
     </div>`;
@@ -4775,44 +4780,101 @@ function calendarGridHtml() {
     <div class="cal-grid" style="margin-bottom:4px;">${weekHead}</div>
     <div class="cal-grid">${cells}</div>`;
 }
-function dayDetailHtml(dateStr) {
-  const dd = new Date(dateStr + "T00:00:00");
-  const dayEntries = entries.filter(e => e.date === dateStr);
-  const dayWeight = weightEntries.find(w => w.date === dateStr);
-  const dayMeals = mealEntries.filter(m => m.date === dateStr);
-  const header = `<p class="mono" style="font-weight:700;font-size:13px;margin:14px 0 6px;">${dateStr}(${WEEKDAY[dd.getDay()]})</p>`;
-  if (dayEntries.length === 0 && !dayWeight && dayMeals.length === 0) {
-    return header + '<p class="muted" style="font-size:12px;">この日の記録はありません。</p>';
+
+// ============ カレンダータブ(v5.13) ============
+// 「全ての記録をカレンダーからボタン一つで見られるようにしてほしい」「項目ごとの履歴を
+// 7日間まとめて見たい」というご要望に対応。以前は運動タブの履歴に「カレンダー」表示が
+// 埋もれていて、しかも日付をタップしても運動・体重・食事がまとめて1日ぶん出るだけだった。
+// 独立したタブにしたうえで、日付をタップすると「その日を含む直近7日間」を、運動・食事・
+// からだ・ストレッチの項目ごとに分けて個別表示するようにした(ストレッチも新たにカレンダーの
+// 印の対象に加えた)。
+// dateStr(YYYY-MM-DD)を末日として、そこから遡った7日ぶんの日付配列(古い→新しい順)を返す。
+function last7DatesEnding_(dateStr) {
+  const end = new Date(dateStr + "T00:00:00");
+  const list = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(end); d.setDate(d.getDate() - i);
+    list.push(localDateStr(d));
   }
-  const trainingRows = dayEntries.map(trainingEntryRowHtml).join("");
-  const weightRow = dayWeight ? `<div class="entry-row">
-      <div class="badge" style="background:var(--sand-soft);">⚖️</div>
-      <div style="flex:1;">体重 <span class="mono" style="color:var(--sand);">${dayWeight.weight}kg</span></div>
-      <button class="del-btn" data-action="edit-weight" data-date="${dayWeight.date}">✏️</button>
-      <button class="del-btn" data-action="del-weight" data-date="${dayWeight.date}">🗑️</button>
-    </div>` : "";
-  const mealRows = dayMeals.map(mealEntryRowHtml).join("");
-  return header + trainingRows + weightRow + mealRows;
+  return list;
 }
+// 項目ごとの7日間カードで共通して使う、1日ぶんの見出し+中身のラッパー。
+function calendarDayBlockHtml_(dateStr, innerHtml) {
+  const dd = new Date(dateStr + "T00:00:00");
+  const isToday = dateStr === localDateStr();
+  return `<div style="margin-bottom:10px;">
+    <p class="mono" style="font-size:11px;font-weight:700;margin:0 0 4px;color:${isToday ? "var(--slate)" : "var(--ink-faint)"};">${dateStr}(${WEEKDAY[dd.getDay()]})${isToday ? " ・今日" : ""}</p>
+    ${innerHtml}
+  </div>`;
+}
+function calendarTrainingWeekHtml_(dates) {
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  const body = dates.map(d => {
+    const dayItems = entries.filter(e => e.date === d);
+    if (!dayItems.length) return calendarDayBlockHtml_(d, `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`);
+    const dayBurn = dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
+    return calendarDayBlockHtml_(d, `${dayItems.map(trainingEntryRowHtml).join("")}${dayBurn ? `<p class="muted mono" style="font-size:10.5px;margin:2px 0 0;">計約${dayBurn}kcal</p>` : ""}`);
+  }).join("");
+  return `<div class="card"><p class="section-title">🏋️ 運動(直近7日間)</p>${body}</div>`;
+}
+function calendarMealsWeekHtml_(dates) {
+  const body = dates.map(d => {
+    const dayMeals = mealEntries.filter(m => m.date === d);
+    return calendarDayBlockHtml_(d, dayMeals.length ? dayMeals.map(mealEntryRowHtml).join("") : `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`);
+  }).join("");
+  return `<div class="card"><p class="section-title">🍽️ 食事(直近7日間)</p>${body}</div>`;
+}
+function calendarWeightWeekHtml_(dates) {
+  const body = dates.map(d => {
+    const w = weightEntries.find(x => x.date === d);
+    const inner = w
+      ? `<div class="entry-row">
+          <div class="badge" style="background:var(--sand-soft);">⚖️</div>
+          <div style="flex:1;">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${w.muscle != null ? ` <span class="muted">筋量${w.muscle}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</div>
+          <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
+          <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
+        </div>`
+      : `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`;
+    return calendarDayBlockHtml_(d, inner);
+  }).join("");
+  return `<div class="card"><p class="section-title">⚖️ からだ(直近7日間)</p>${body}</div>`;
+}
+function calendarStretchWeekHtml_(dates) {
+  const body = dates.map(d => {
+    const doneIds = stretchLog[d] || [];
+    const coreDone = CORE_STRETCH_IDS.filter(id => doneIds.includes(id)).length;
+    const inner = doneIds.length
+      ? `<p style="font-size:11.5px;margin:0;">基本セット ${coreDone}/${CORE_STRETCH_IDS.length}${doneIds.length > coreDone ? `・おすすめ含め計${doneIds.length}件` : ""}${coreDone === CORE_STRETCH_IDS.length ? " ✅" : ""}</p>`
+      : `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`;
+    return calendarDayBlockHtml_(d, inner);
+  }).join("");
+  return `<div class="card"><p class="section-title">🧘 ストレッチ(直近7日間)</p>${body}</div>`;
+}
+function calendarTabHtml() {
+  const selected = (selectedCalDate && selectedCalDate <= localDateStr()) ? selectedCalDate : localDateStr();
+  const dates = last7DatesEnding_(selected);
+  return `
+    <div class="card">
+      <p class="section-title">📅 カレンダー</p>
+      <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">印: 🔴運動 / 🟡からだ / 🔵食事 / 🔷ストレッチ。日付をタップすると、その日を含む直近7日間の記録を項目ごとに見られます。</p>
+      ${calendarGridHtml()}
+    </div>
+    ${calendarTrainingWeekHtml_(dates)}
+    ${calendarMealsWeekHtml_(dates)}
+    ${calendarWeightWeekHtml_(dates)}
+    ${calendarStretchWeekHtml_(dates)}`;
+}
+
 function renderHistory() {
   // 「運動」タブの履歴なので、リスト表示は運動の記録だけを見せる。
   // (以前はここに体重・食事の記録も混ざって表示されており、「運動の履歴なのに
   //  食事が出てくる」と分かりづらい状態だった。体重は「からだ」タブ、食事は
   //  「食事」タブの「📖 食事の履歴」にそれぞれ専用の一覧がある。)
-  // 一方カレンダー表示は「その日に何をしたか」を一目で見るためのものなので、
-  // 運動・体重・食事の3色の印と、日付をタップしたときの全記録表示はそのまま残す。
-  const toggle = `
-    <div class="between" style="margin-bottom:8px;">
-      <p class="section-title" style="margin:0;">${historyView === "calendar" ? "カレンダー(全記録)" : "運動の履歴"}</p>
-      <div class="row" style="gap:4px;width:auto;">
-        <button class="chip ${historyView==="list"?"active":""}" data-action="view-list">リスト</button>
-        <button class="chip ${historyView==="calendar"?"active":""}" data-action="view-calendar">カレンダー</button>
-      </div>
-    </div>`;
+  // カレンダー表示(全記録を日付から見る)は、v5.13から独立した「📅 カレンダー」
+  // タブに移した(運動タブに埋もれていて気づきにくかったため)。
+  const toggle = `<p class="section-title" style="margin:0 0 8px;">運動の履歴</p>`;
   let body;
-  if (historyView === "calendar") {
-    body = `<p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.5;">印: 🔴運動 / 🟡体重 / 🔵食事。日付をタップするとその日の全記録が見られます。</p>${calendarGridHtml()}${dayDetailHtml(selectedCalDate)}`;
-  } else {
+  {
     // v5.7: 直近10日ぶんだけを初期表示し、それより前は「もっと見る」で展開する。
     const allDates = [...new Set(entries.map(e => e.date))].sort((a,b) => a < b ? 1 : -1);
     const dates = trainingHistoryShowAll ? allDates : allDates.slice(0, 10);
@@ -4843,7 +4905,7 @@ function renderHistory() {
       if (allDates.length > 10) {
         body += `<button type="button" class="chip" data-action="toggle-training-history-show-all" style="margin-bottom:10px;">${trainingHistoryShowAll ? "▲ 直近10日だけ表示" : `▶ 10日より前を見る(他${allDates.length-10}日ぶん)`}</button>`;
       }
-      body += '<p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.5;">体重は「からだ」タブ、食事は「食事」タブの「📖 食事の履歴」で確認できます。カレンダー表示なら、その日の全記録をまとめて見られます。</p>';
+      body += '<p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.5;">体重は「からだ」タブ、食事は「食事」タブの「📖 食事の履歴」で確認できます。「📅 カレンダー」タブなら、日付をタップして全項目の記録をまとめて見られます。</p>';
     }
   }
   const el = document.getElementById("history-section");
@@ -5930,11 +5992,10 @@ document.getElementById("app").addEventListener("click", (e) => {
     // 体重フォームは、日付を今日に戻したら入力欄の値も今日向けに差し替える(v5.11)。
     if (t.dataset.kind === "weight") fillWeightForm_(weightFormSource_());
   }
-  else if (action === "view-list") { historyView = "list"; renderHistory(); }
-  else if (action === "view-calendar") { historyView = "calendar"; renderHistory(); }
-  else if (action === "cal-prev") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderHistory(); }
-  else if (action === "cal-next") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); renderHistory(); }
-  else if (action === "select-day") { selectedCalDate = t.dataset.date; renderHistory(); }
+  // v5.13: カレンダーは独立タブになったので、月送り・日付選択はタブ全体を再描画する。
+  else if (action === "cal-prev") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderTabContent(); }
+  else if (action === "cal-next") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); renderTabContent(); }
+  else if (action === "select-day") { selectedCalDate = t.dataset.date; renderTabContent(); }
   else if (action === "select-meal-type") {
     selectedMealType = t.dataset.val;
     document.querySelectorAll("#meal-type-buttons .chip").forEach(c => c.classList.toggle("active", c.dataset.val === t.dataset.val));
