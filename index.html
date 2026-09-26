@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.18";
+const APP_VERSION = "v5.19";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -4891,6 +4891,12 @@ function calendarDayKpiHtml_(d) {
   const w = weightEntries.find(x => x.date === d);
   const dayTarget = targets ? targets.effectiveTarget : null;
   const balance = (targets && hasMealData) ? Math.round(intake - (targets.tdee + exerciseBurn)) : null;
+  // 「摂取カロリー」は減量ペース込みの目標カロリー(TDEEより低め)、「カロリー収支」は
+  // 実際の消費カロリー(TDEE)を基準にしており、意図的に別の基準で判定している。
+  // 目標より少し多く食べても実際にはまだ消費の範囲内、ということが起こり得るため、
+  // 「摂取は超過なのに収支は赤字(またはその逆)」に見える日だけ注記を出して補足する。
+  const overIntake = hasMealData && dayTarget != null && intake > dayTarget;
+  const mismatch = balance != null && ((overIntake && balance <= 0) || (!overIntake && hasMealData && balance > 0 && dayTarget != null && intake <= dayTarget));
   return `
     <div class="kpi-grid">
       <div class="kpi">
@@ -4914,7 +4920,8 @@ function calendarDayKpiHtml_(d) {
         <div class="kpi-d neutral">${exerciseBurn ? `${dayItems.length}件` : "記録なし"}</div>
       </div>
     </div>
-    ${exerciseBurn > 0 && dayTarget != null ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">摂取カロリーの目標には、この日の運動による消費(${Math.round(exerciseBurn)}kcal)をそのまま上乗せしています。</p>` : ""}`;
+    ${exerciseBurn > 0 && dayTarget != null ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">摂取カロリーの目標には、この日の運動による消費(${Math.round(exerciseBurn)}kcal)をそのまま上乗せしています。</p>` : ""}
+    ${mismatch ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">⚠️ 「摂取カロリー」は減量ペースを踏まえた<b>目標カロリー</b>が基準、「カロリー収支」は実際の<b>消費カロリー(基礎代謝+活動量)</b>が基準のため、判定が食い違って見えることがあります。目標より少し多めに食べても、消費の範囲内であれば収支は赤字のままです。</p>` : ""}`;
 }
 function calendarTabHtml() {
   const selected = (selectedCalDate && selectedCalDate <= localDateStr()) ? selectedCalDate : localDateStr();
