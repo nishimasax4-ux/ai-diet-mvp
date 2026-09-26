@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.17";
+const APP_VERSION = "v5.18";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -2564,7 +2564,7 @@ function calorieTargetBreakdownHtml(t) {
     </div>
     ${t.gapByExercise > 0 ? `
     <div style="background:#FDF1E7;border-radius:8px;padding:10px;margin-top:10px;">
-      <p style="font-size:11.5px;margin:0;line-height:1.7;">⚠️ 安全のため、目安カロリーが<b>基礎代謝(${t.bmr}kcal)を下回らないところで止めています。</b>そのため食事だけで作れる赤字は <span class="mono">${t.actualDeficit}</span>kcal/日で、目標ペースには <b><span class="mono">${t.gapByExercise}</span>kcal/日ぶん足りません</b>。この分は運動で補う想定です(運動した日は、その消費がまずこの不足分の穴埋めに使われ、<b><span class="mono">${t.gapByExercise}</span>kcalを超えたぶんだけ</b>目標カロリーに上乗せされます)。ペースを「ゆっくり」に変えると、食事だけでも届くようになります。</p>
+      <p style="font-size:11.5px;margin:0;line-height:1.7;">⚠️ 安全のため、目安カロリーが<b>基礎代謝(${t.bmr}kcal)を下回らないところで止めています。</b>そのため食事だけで作れる赤字は <span class="mono">${t.actualDeficit}</span>kcal/日で、目標ペースには <b><span class="mono">${t.gapByExercise}</span>kcal/日ぶん足りません</b>。この分は運動で補う想定です(運動した日は、その消費ぶんがそのまま目標カロリーに上乗せされます)。ペースを「ゆっくり」に変えると、食事だけでも届くようになります。</p>
     </div>` : `
     <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.6;">食事だけで目標ペースに必要な${t.direction === "gain" ? "黒字" : "赤字"}(${Math.abs(t.actualDeficit)}kcal/日)を作れる計算です。運動した日は、その消費ぶんが目標カロリーに上乗せされます。</p>`}
 
@@ -2676,9 +2676,7 @@ function generateDailyAdvice() {
       else if (remaining > targets.effectiveTarget * 0.5) parts.push("まだ食事の記録が少なめです。しっかり栄養を摂りましょう。");
     }
     if (targets.exerciseBurn > 0) {
-      parts.push(targets.exerciseBonus > 0
-        ? `今日の運動で約${targets.exerciseBurn}kcal消費しているので、${targets.exerciseBonus}kcalぶん目標カロリーを上乗せしています。`
-        : `今日の運動で約${targets.exerciseBurn}kcal消費しています。食事だけでは足りない赤字の穴埋めに充てているので、目標カロリーは据え置きです。`);
+      parts.push(`今日の運動で約${targets.exerciseBurn}kcal消費しているので、目標カロリーにそのまま上乗せしています。`);
     }
   }
   return parts.join(" ");
@@ -2721,42 +2719,29 @@ function computeBurnHistory(days) {
 // その日の「摂取カロリー目標(TDEE±体重目標での増減) + その日の運動で消費した分」を返す。
 // トレーニングした日ほど、表示上の目標カロリーがその分だけ上乗せされる(=たくさん動いた日は
 // その分多く食べてよい、という考え方)。今日の状況・食事タブの表示に使う。
+// v5.18: 「摂取カロリーの基準額を、カレンダータブのカロリー収支と合うように」というご要望を
+// 受けて、運動ぶんの扱いを単純化した。以前(v44.9〜v5.17)は「目安カロリーは安全のため
+// 基礎代謝より下げないので、ペースによっては食事だけでは目標ペースに届かない分
+// (gapByExercise)が残る → 運動の消費はまずこの不足分の穴埋めに使い、それを超えたぶんだけ
+// 目標カロリーに上乗せする」という計算だったため、運動した日でも目標カロリーが動かない
+// ことがあり、カレンダータブの「カロリー収支」(摂取−(基礎代謝+運動))の考え方とズレて
+// 見えていた。今回から、運動した日はその消費をそのまま全額、目標カロリーに上乗せする
+// (＝カレンダータブと同じ考え方)。gapByExercise自体(食事だけでは目標ペースに届かない分の
+// 警告)は設定タブの内訳表示にそのまま残る。
 function getEffectiveCalorieTarget(dateStr) {
   const targets = getTargets();
   if (!targets) return null;
   const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
   const weightKg = latestWeight ? latestWeight.weight : null;
   const exerciseBurn = weightKg ? estimateExerciseBurnForDate(dateStr, weightKg) : 0;
-  // 運動ぶんの扱い(v44.9で修正)。
-  // 目安カロリーは安全のため基礎代謝より下げないので、ペースによっては
-  // 「食事だけでは目標ペースに足りない分」(gapByExercise)が残る。画面では
-  // それを『この分は運動で補う想定です』と案内している。
-  // ところが以前は、運動の消費をまるごと目標カロリーに上乗せしていたため、
-  // 運動しても不足分がそのまま残り続け(消費した分だけ食べてよいことになるので)、
-  // 「補う想定」が永久に果たされないという自己矛盾があった。
-  //   例) 必要な赤字514・食事だけの赤字331・不足183 のとき、
-  //       60分走って672kcal消費しても、実際の赤字は331のまま変わらなかった。
-  // そこで、運動の消費はまずこの不足分の穴埋めに使い、それを超えたぶんだけを
-  // 目標カロリーに上乗せする。上の例なら 672−183=489 を上乗せし、
-  // 実際の赤字は514(=目標ペースちょうど)になる。
-  // 不足が無い場合(gapByExercise=0)は、これまでどおり消費がそのまま上乗せされる。
-  const gap = targets.gapByExercise || 0;
-  const gapCoveredByExercise = Math.min(exerciseBurn, gap);
-  const exerciseBonus = Math.max(0, exerciseBurn - gap);
-  const effectiveTarget = Math.round(targets.targetCalories + exerciseBonus);
-  return { ...targets, exerciseBurn, gapCoveredByExercise, exerciseBonus, effectiveTarget };
+  const effectiveTarget = Math.round(targets.targetCalories + exerciseBurn);
+  return { ...targets, exerciseBurn, effectiveTarget };
 }
-// 「今日の目標カロリーに運動ぶんがどう反映されているか」の説明文(v44.9)。
-// 3か所で同じ説明を出しているので、食い違わないようここで一本化する。
+// 「今日の目標カロリーに運動ぶんがどう反映されているか」の説明文。
+// 複数箇所で同じ説明を出しているので、食い違わないようここで一本化する。
 function exerciseTargetNoteText_(t) {
   if (!t || !t.exerciseBurn) return "";
-  if (t.exerciseBonus <= 0) {
-    return `今日の運動 ${t.exerciseBurn}kcal は、食事だけでは足りない赤字(${t.gapByExercise}kcal/日)の穴埋めに使っています`;
-  }
-  if (t.gapCoveredByExercise > 0) {
-    return `今日の運動 ${t.exerciseBurn}kcal のうち ${t.gapCoveredByExercise}kcal を不足分の穴埋めに使い、残り ${t.exerciseBonus}kcal を目標に加算しています`;
-  }
-  return `基礎消費 ${t.tdee}kcal + 今日の運動 ${t.exerciseBurn}kcal を目標に加算しています`;
+  return `今日の運動 ${t.exerciseBurn}kcal を、そのまま目標カロリーに上乗せしています`;
 }
 // 記録開始からの累計(摂取・消費・その差)(v38)。集計の対象は「カロリーを1kcal以上
 // 入力した日」だけに限る。カロリーを入れていない日まで摂取0kcalとして数えると、実際には
@@ -3682,8 +3667,6 @@ function todayHtml() {
       : Math.round(Math.min(100, Math.max(0, (latestW.weight - startW.weight) / (goals.weight - startW.weight) * 100)));
   }
   const thisWeek = weekBuckets(1)[0];
-  const targets = getEffectiveCalorieTarget(today);
-  const todayCal = mealEntries.filter(m => m.date === today).reduce((s,m) => s + (m.calories||0), 0);
   const balanceHistory = computeCalorieBalanceHistory(14);
   const balanceAdvice = balanceHistory ? generateBalanceAdvice(balanceHistory) : null;
   // v46.13: 冒頭のKPIパネル用に、直近7日の平均カロリー収支を出す。考え方は
@@ -3692,7 +3675,7 @@ function todayHtml() {
   const avgBalance7 = balanceWithData.length ? Math.round(balanceWithData.slice(-7).reduce((s,x) => s + x.balance, 0) / Math.min(7, balanceWithData.length)) : null;
 
   return `
-    <div class="kpi-grid">
+    <div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr);">
       <div class="kpi">
         <div class="kpi-l">体重目標</div>
         <div class="kpi-v">${weightPct != null ? weightPct : "−"}<span>%</span></div>
@@ -3702,11 +3685,6 @@ function todayHtml() {
         <div class="kpi-l">週間トレーニング</div>
         <div class="kpi-v">${thisWeek.count}<span>/${goals.weeklyFreq}回</span></div>
         <div class="kpi-d ${thisWeek.count >= goals.weeklyFreq ? "good" : "neutral"}">${thisWeek.count >= goals.weeklyFreq ? "達成" : `残り${daysLeftInWeek()}日`}</div>
-      </div>
-      <div class="kpi">
-        <div class="kpi-l">今日のカロリー</div>
-        <div class="kpi-v">${todayCal}<span>${targets ? `/${targets.effectiveTarget}` : ""}kcal</span></div>
-        <div class="kpi-d ${targets ? (todayCal <= targets.effectiveTarget ? "good" : "bad") : "neutral"}">${targets ? (todayCal <= targets.effectiveTarget ? `残り${targets.effectiveTarget - todayCal}kcal` : `超過${todayCal - targets.effectiveTarget}kcal`) : "未設定"}</div>
       </div>
       <div class="kpi">
         <div class="kpi-l">収支(7日平均)</div>
@@ -3755,17 +3733,12 @@ function todayHtml() {
         <div class="between" style="margin-bottom:4px;"><span class="muted">体重目標</span><span class="mono" style="font-size:12px;">${weightPct!=null?weightPct+"%":"未記録"}</span></div>
         ${weightPct!=null ? meterHtml(weightPct, 100, "var(--sand)") : ""}
       </div>
-      <div style="margin-bottom:12px;">
+      <div>
         <div class="between" style="margin-bottom:4px;"><span class="muted">週間トレーニング</span><span class="mono" style="font-size:12px;">${thisWeek.count}/${goals.weeklyFreq}回</span></div>
         ${meterHtml(thisWeek.count, goals.weeklyFreq, "var(--coral)")}
         ${(() => { const dl = daysLeftInWeek(); return dl > 0 && thisWeek.count < goals.weeklyFreq
           ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">今週(月曜始まり)はあと${dl}日あります。まだ来ていない曜日は数えられないため、週の途中は分母より小さく出ます</p>`
           : ""; })()}
-      </div>
-      <div>
-        <div class="between" style="margin-bottom:4px;"><span class="muted">今日のカロリー</span><span class="mono" style="font-size:12px;">${targets ? `${todayCal}/${targets.effectiveTarget}kcal` : "未設定"}</span></div>
-        ${targets ? meterHtml(todayCal, targets.effectiveTarget, "var(--teal)") : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールを入力すると計算されます</p>'}
-        ${targets && targets.exerciseBurn > 0 ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">${exerciseTargetNoteText_(targets)}</p>` : ""}
       </div>
     </div>
 
@@ -4800,7 +4773,10 @@ function distanceHistoryHtml() {
 function mealEntryRowHtml(m) {
   return `<div class="entry-row">
       <div class="badge" style="background:var(--teal-soft);">🍽️</div>
-      <div style="flex:1;">[${esc(m.mealType)}] ${esc(m.text)}${m.calories ? ` <span class="mono muted">(${m.calories}kcal)</span>` : ""}</div>
+      <div style="flex:1;">
+        <div>[${esc(m.mealType)}] ${esc(m.text)}${m.calories ? ` <span class="mono muted">(${m.calories}kcal)</span>` : ""}</div>
+        ${(m.protein||m.fat||m.carb) ? `<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>` : ""}
+      </div>
       <button class="del-btn" data-action="relog-meal" data-id="${m.id}" title="今日も記録する">🔁</button>
       <button class="del-btn" data-action="edit-meal" data-id="${m.id}">✏️</button>
       <button class="del-btn" data-action="del-meal" data-id="${m.id}">🗑️</button>
@@ -4870,7 +4846,12 @@ function calendarTrainingDayHtml_(d) {
 }
 function calendarMealsDayHtml_(d) {
   const dayMeals = mealEntries.filter(m => m.date === d);
-  return calendarItemCardHtml_("🍽️", "食事", dayMeals.map(mealEntryRowHtml).join(""));
+  // v5.18: 「カレンダータブの食事にもPFCを表示して」というご要望に対応。日合計のPFC
+  // (目標に対する進捗メーター、食事タブの履歴と同じdayPfcHtml_を再利用)を上に、
+  // 各食事ごとのP/F/C(g)をその下の一覧に表示する。
+  const pfcSummary = dayPfcHtml_(d);
+  const rows = dayMeals.map(mealEntryRowHtml).join("");
+  return calendarItemCardHtml_("🍽️", "食事", pfcSummary + rows);
 }
 function calendarWeightDayHtml_(d) {
   const w = weightEntries.find(x => x.date === d);
@@ -4894,21 +4875,21 @@ function calendarStretchDayHtml_(d) {
 // 「今日」タブのKPIタイルと同じ見た目(.kpi-grid)で、摂取カロリー・カロリー収支・体重・
 // 運動の消費カロリーの4つを、選択した日を基準に計算し直して表示する。下の項目ごとの
 // カード(運動・食事・からだ・ストレッチ)はこれまでどおり残し、その上に追加する。
+// v5.18: 摂取カロリーの目標は、getEffectiveCalorieTarget()(アプリ全体で共通の計算。
+// v5.18からその日の運動消費をそのまま全額上乗せする)をそのまま使うようにし、独自の
+// 計算を重複して持たないようにした(食事タブ・AIのひとことと必ず同じ数字になる)。
 function calendarDayKpiHtml_(d) {
-  const targets = getTargets();
+  const targets = getEffectiveCalorieTarget(d);
   const dayMeals = mealEntries.filter(m => m.date === d);
   const intake = dayMeals.reduce((s,m) => s + (m.calories||0), 0);
   const hasMealData = dayMeals.some(m => (m.calories||0) > 0);
-  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
   const dayItems = entries.filter(e => e.date === d);
-  const exerciseBurn = dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
+  const exerciseBurn = targets ? targets.exerciseBurn : (() => {
+    const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+    return dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
+  })();
   const w = weightEntries.find(x => x.date === d);
-  // v5.17: 目標カロリーは、その日の運動消費をそのまま上乗せした「基礎代謝+生活活動+運動」を
-  // 基準にする(「今日」タブの目安カロリーは、目標ペースに対する不足分の穴埋めを優先し、
-  // それを超えたぶんだけ上乗せする計算のため、運動した日でも目標が動かないことがある。
-  // この日次サマリーでは「運動した日は、そのぶんだけ多く食べてよい」という分かりやすさを
-  // 優先し、単純に全額を加算している)。
-  const dayTarget = targets ? Math.round(targets.targetCalories + exerciseBurn) : null;
+  const dayTarget = targets ? targets.effectiveTarget : null;
   const balance = (targets && hasMealData) ? Math.round(intake - (targets.tdee + exerciseBurn)) : null;
   return `
     <div class="kpi-grid">
