@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.16";
+const APP_VERSION = "v5.17";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -4852,6 +4852,11 @@ function calendarGridHtml() {
 // v5.15: 選択した日のKPIサマリー(ダッシュボード)を追加し(calendarDayKpiHtml_)、
 // ストレッチタブ専用だった月めくりカレンダーは廃止した(「カレンダーはカレンダータブ
 // だけでいい」というご要望により、カレンダー機能をこのタブに一本化)。
+// v5.17: 「カロリーの基準が運動分を含んでいない」というご指摘を受けて修正。摂取カロリーの
+// 目標は、getEffectiveCalorieTarget()のeffectiveTarget(「今日」タブの目安。目標ペースの
+// 不足分の穴埋めを優先し、それを超えたぶんだけ運動消費を上乗せする計算のため、運動した日
+// でも目標が動かないことがある)ではなく、その日の運動消費をそのまま全額上乗せした値を使う
+// ようにした。カロリー収支の計算はv5.15の時点から運動消費を含んでいたため変更していない。
 // 項目ごとのカードで共通して使う、見出し+中身+「記録が無いとき」のラッパー。
 function calendarItemCardHtml_(icon, title, innerHtml) {
   return `<div class="card"><p class="section-title">${icon} ${title}</p>${innerHtml || `<p class="muted" style="font-size:11.5px;margin:0;">この日の記録はありません。</p>`}</div>`;
@@ -4890,7 +4895,7 @@ function calendarStretchDayHtml_(d) {
 // 運動の消費カロリーの4つを、選択した日を基準に計算し直して表示する。下の項目ごとの
 // カード(運動・食事・からだ・ストレッチ)はこれまでどおり残し、その上に追加する。
 function calendarDayKpiHtml_(d) {
-  const targets = getEffectiveCalorieTarget(d);
+  const targets = getTargets();
   const dayMeals = mealEntries.filter(m => m.date === d);
   const intake = dayMeals.reduce((s,m) => s + (m.calories||0), 0);
   const hasMealData = dayMeals.some(m => (m.calories||0) > 0);
@@ -4898,13 +4903,19 @@ function calendarDayKpiHtml_(d) {
   const dayItems = entries.filter(e => e.date === d);
   const exerciseBurn = dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
   const w = weightEntries.find(x => x.date === d);
+  // v5.17: 目標カロリーは、その日の運動消費をそのまま上乗せした「基礎代謝+生活活動+運動」を
+  // 基準にする(「今日」タブの目安カロリーは、目標ペースに対する不足分の穴埋めを優先し、
+  // それを超えたぶんだけ上乗せする計算のため、運動した日でも目標が動かないことがある。
+  // この日次サマリーでは「運動した日は、そのぶんだけ多く食べてよい」という分かりやすさを
+  // 優先し、単純に全額を加算している)。
+  const dayTarget = targets ? Math.round(targets.targetCalories + exerciseBurn) : null;
   const balance = (targets && hasMealData) ? Math.round(intake - (targets.tdee + exerciseBurn)) : null;
   return `
     <div class="kpi-grid">
       <div class="kpi">
         <div class="kpi-l">摂取カロリー</div>
-        <div class="kpi-v">${hasMealData ? intake : "−"}<span>${targets ? `/${targets.effectiveTarget}kcal` : "kcal"}</span></div>
-        <div class="kpi-d ${!hasMealData ? "neutral" : !targets ? "neutral" : (intake <= targets.effectiveTarget ? "good" : "bad")}">${!hasMealData ? "未記録" : !targets ? "目標未設定" : (intake <= targets.effectiveTarget ? `残り${targets.effectiveTarget - intake}kcal` : `超過${intake - targets.effectiveTarget}kcal`)}</div>
+        <div class="kpi-v">${hasMealData ? intake : "−"}<span>${dayTarget != null ? `/${dayTarget}kcal` : "kcal"}</span></div>
+        <div class="kpi-d ${!hasMealData ? "neutral" : dayTarget == null ? "neutral" : (intake <= dayTarget ? "good" : "bad")}">${!hasMealData ? "未記録" : dayTarget == null ? "目標未設定" : (intake <= dayTarget ? `残り${dayTarget - intake}kcal` : `超過${intake - dayTarget}kcal`)}</div>
       </div>
       <div class="kpi">
         <div class="kpi-l">カロリー収支</div>
@@ -4921,7 +4932,8 @@ function calendarDayKpiHtml_(d) {
         <div class="kpi-v">${exerciseBurn ? Math.round(exerciseBurn) : "−"}<span>kcal</span></div>
         <div class="kpi-d neutral">${exerciseBurn ? `${dayItems.length}件` : "記録なし"}</div>
       </div>
-    </div>`;
+    </div>
+    ${exerciseBurn > 0 && dayTarget != null ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">摂取カロリーの目標には、この日の運動による消費(${Math.round(exerciseBurn)}kcal)をそのまま上乗せしています。</p>` : ""}`;
 }
 function calendarTabHtml() {
   const selected = (selectedCalDate && selectedCalDate <= localDateStr()) ? selectedCalDate : localDateStr();
