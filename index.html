@@ -209,64 +209,122 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.13";
+const APP_VERSION = "v5.16";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
 // v5.5で、道具なし・1人でできる項目を追加して「おすすめ」セクションを設け(core:false)、
-// 全項目に「やり方」の説明を付けた。どの項目も器具や補助者を必要としません。
+// 全項目に「やり方」の説明を付けた。どの項目も器具や補助者を必要とせず、壁や机は
+// 身近な家具として使うだけです。
+//
+// v5.15: 「おすすめ」のグルーピングを、部位別(上半身/下半身/体幹・全身)から、
+// 「どんな姿勢でやるか」を基準にした4分類(STRETCH_CATEGORIES)に全面的に置き換えた。
+// あわせて項目数を約2倍に増やした(14→27項目)。旧「ハムストリングス」「足首回し・
+// アキレス腱のストレッチ」のように椅子/床、椅子/壁のどちらでもできると説明していた
+// 項目は、姿勢ごとの独立した項目に分けている(基本セット側のhamstringは互換性のため
+// 1項目のまま残し、代表の姿勢(椅子・ベンチ)に分類した)。
+// なお「腰・背中(膝抱えストレッチ)」は仰向けで行うため、床に座る項目と同じ
+// 「床に座って」に含めている(床の上で行うストレッチとしてまとめている)。
 //
 // 【互換性メモ】streakの判定(stretchStreak)は「core:trueの項目が全部そろっているか」で
 // 見ており、STRETCH_ITEMS全体の件数は見ていません。そのため今後この配列に項目を増やしても、
-// 過去に付けた連続記録が急に途切れて見えることはありません。
+// 過去に付けた連続記録が急に途切れて見えることはありません。core:trueの7項目のid・件数は
+// v5.15でも変更していません(「おすすめ」側だけを増やしています)。
 // timerSecは「⏱ タイマーで開始」ボタンを押したときのカウントダウン秒数(v5.6)。
 // howの説明文にある秒数の目安(片側ぶん)から代表値を1つ選んでいるだけで、厳密な
 // 処方ではありません。キャット&カウのように回数指定の項目も、目安として秒数を割り当てています。
+const STRETCH_CATEGORIES = ["床に座って", "椅子・ベンチに座って", "立って", "壁や机を支えにして"];
 const STRETCH_ITEMS = [
-  // --- 毎日の基本セット(v5.3から。streakの対象) ---
-  { id: "chest", core: true, category: "上半身", timerSec: 25,
+  // --- 毎日の基本セット(v5.3から。streakの対象。id・件数はv5.15でも変更なし) ---
+  { id: "chest", core: true, category: "立って", timerSec: 25,
     label: "胸を開くストレッチ(肩甲骨寄せ)",
     how: "両手を体の後ろで組み、肩甲骨を寄せながら腕をゆっくり持ち上げる。胸の前面が伸びる感覚を確認しながら20〜30秒キープ。" },
-  { id: "neckshoulder", core: true, category: "上半身", timerSec: 20,
+  { id: "neckshoulder", core: true, category: "立って", timerSec: 20,
     label: "首・肩回し",
     how: "肩をすくめるように持ち上げてから、大きく後ろに回す。続けて首をゆっくり左右・前後に倒し、それぞれ10〜15秒かけて伸ばす。" },
-  { id: "hipflexor", core: true, category: "下半身", timerSec: 25,
+  { id: "hipflexor", core: true, category: "立って", timerSec: 25,
     label: "股関節屈筋のストレッチ(前後開脚)",
     how: "片足を大きく前に踏み出してランジの姿勢を取り、後ろ足の付け根を床に近づけるように腰を落とす。後ろ足側の股関節前面が伸びる感覚を確認しながら20〜30秒。左右入れ替える。" },
-  { id: "quad", core: true, category: "下半身", timerSec: 25,
+  { id: "quad", core: true, category: "壁や机を支えにして", timerSec: 25,
     label: "太もも前面(大腿四頭筋)",
     how: "壁や椅子に手を添えて片足立ちになり、反対側の足首をつかんでかかとをお尻に近づける。太もも前面が伸びる感覚を確認しながら20〜30秒。左右入れ替える。" },
-  { id: "hamstring", core: true, category: "下半身", timerSec: 25,
+  { id: "hamstring", core: true, category: "椅子・ベンチに座って", timerSec: 25,
     label: "ハムストリングス",
     how: "椅子に浅く座るか床に座り、片足を前に伸ばして膝を軽く伸ばしたまま上体を前に倒す。太もも裏が伸びる感覚を確認しながら20〜30秒。左右入れ替える。" },
-  { id: "calf", core: true, category: "下半身", timerSec: 25,
+  { id: "calf", core: true, category: "壁や机を支えにして", timerSec: 25,
     label: "ふくらはぎ",
     how: "壁に手をつき、片足を大きく後ろに引いてかかとを床につけたまま体重を前にかける。ふくらはぎが伸びる感覚を確認しながら20〜30秒。左右入れ替える。" },
-  { id: "backhip", core: true, category: "体幹・全身", timerSec: 25,
+  { id: "backhip", core: true, category: "床に座って", timerSec: 25,
     label: "腰・背中(膝抱えストレッチ)",
     how: "仰向けに寝て両膝を胸に抱え込み、腰・お尻が伸びる感覚を感じながら20〜30秒キープ。呼吸を止めずゆっくりと。" },
-  // --- おすすめ(v5.5で追加。道具なし・1人でできる。streakには含めない) ---
-  { id: "lats", core: false, category: "上半身", timerSec: 18,
-    label: "広背筋・体側のストレッチ",
-    how: "両手を頭上で組んでバンザイの姿勢を取り、上体をゆっくり真横に倒す。体側から脇腹にかけて伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
-  { id: "triceps", core: false, category: "上半身", timerSec: 18,
-    label: "二の腕(上腕三頭筋)のストレッチ",
-    how: "片腕を頭の後ろに上げて肘を曲げ、反対の手で肘を軽く押さえて後方に引く。二の腕の裏側が伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
-  { id: "wrist", core: false, category: "上半身", timerSec: 12,
-    label: "手首・前腕のストレッチ",
-    how: "片腕を前に伸ばし、手のひらを上に向けて反対の手で指先を軽く手前に引く。次に手のひらを下に向けて同様に。それぞれ10〜15秒。左右入れ替える。" },
-  { id: "innerthigh", core: false, category: "下半身", timerSec: 25,
+
+  // --- おすすめ: 床に座って(仰向け・うつ伏せなど、床の上で行うものを含む) ---
+  { id: "innerthigh", core: false, category: "床に座って", timerSec: 25,
     label: "内もものストレッチ",
     how: "床に座って両足の裏を合わせ、膝を外側に開く。かかとを体に近づけながら、両膝をゆっくり床に近づけるように上体を前に倒す。内ももが伸びる感覚を確認しながら20〜30秒。" },
-  { id: "ankle", core: false, category: "下半身", timerSec: 15,
-    label: "足首回し・アキレス腱のストレッチ",
-    how: "椅子に座るか壁に手をついて、片足のつま先を床につけたまま足首を大きく10回ほど回す。続けて壁に手をついて片足を後ろに引き、アキレス腱を伸ばして15秒キープ。左右入れ替える。" },
-  { id: "spinaltwist", core: false, category: "体幹・全身", timerSec: 18,
-    label: "座ったまま体幹ひねり",
-    how: "椅子に浅く座り、背筋を伸ばしたまま上体だけをゆっくり片方にひねる。椅子の背もたれや座面に軽く手を添えてひねりを深め、15〜20秒キープして反対側も。" },
-  { id: "catcow", core: false, category: "体幹・全身", timerSec: 30,
+  { id: "catcow", core: false, category: "床に座って", timerSec: 30,
     label: "背骨のストレッチ(キャット&カウ)",
     how: "四つばいの姿勢になり、息を吸いながら背中を反らせ(カウ)、息を吐きながら背中を丸める(キャット)。ゆっくり5〜8回繰り返す。" },
+  { id: "piriformis_floor", core: false, category: "床に座って", timerSec: 25,
+    label: "お尻(梨状筋)のストレッチ(仰向け)",
+    how: "仰向けに寝て片膝を立て、反対側の太ももの上にもう片方の足首をのせる。立てた膝の裏を両手で抱えて胸にゆっくり引き寄せ、お尻の奥が伸びる感覚を確認しながら20〜30秒。左右入れ替える。" },
+  { id: "supinetwist", core: false, category: "床に座って", timerSec: 20,
+    label: "背骨のひねり(仰向けツイスト)",
+    how: "仰向けに寝て両膝を立てる。両膝をそろえたままゆっくり片側に倒し、顔は反対方向に向ける。背骨・腰まわりが伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
+  { id: "pronereach", core: false, category: "床に座って", timerSec: 25,
+    label: "肩・背中のストレッチ(うつ伏せで腕伸ばし)",
+    how: "うつ伏せに寝て、両腕を頭の上にまっすぐ伸ばす。おでこを床につけたまま、腕と背中を遠くに引っぱられるように伸ばして20〜30秒キープ。" },
+
+  // --- おすすめ: 椅子・ベンチに座って ---
+  { id: "spinaltwist", core: false, category: "椅子・ベンチに座って", timerSec: 18,
+    label: "座ったまま体幹ひねり",
+    how: "椅子に浅く座り、背筋を伸ばしたまま上体だけをゆっくり片方にひねる。椅子の背もたれや座面に軽く手を添えてひねりを深め、15〜20秒キープして反対側も。" },
+  { id: "ankle_chair", core: false, category: "椅子・ベンチに座って", timerSec: 15,
+    label: "足首回し(椅子に座って)",
+    how: "椅子に座って片足を軽く持ち上げ、つま先で円を描くように足首を大きく10回ほど回す。反対回しも10回。左右入れ替える。" },
+  { id: "piriformis_chair", core: false, category: "椅子・ベンチに座って", timerSec: 20,
+    label: "椅子でお尻(梨状筋)のストレッチ",
+    how: "椅子に浅く座り、片足の足首をもう片方の太ももの上にのせる(数字の4の形)。背筋を伸ばしたまま上体をゆっくり前に倒し、お尻の奥が伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
+  { id: "scap_chair", core: false, category: "椅子・ベンチに座って", timerSec: 20,
+    label: "椅子で肩甲骨まわりのストレッチ",
+    how: "椅子に座り、両腕を前に伸ばして手を組み、背中を丸めながら肩甲骨を左右に開く。手のひらを前に押し出すようにして15〜20秒キープ。" },
+  { id: "side_chair", core: false, category: "椅子・ベンチに座って", timerSec: 18,
+    label: "椅子で体側のストレッチ",
+    how: "椅子に座り、片手を頭上に伸ばして反対側にゆっくり体を倒す。反対の手を座面や太ももに添えて安定させながら、体側が伸びる感覚を確認して15〜20秒。左右入れ替える。" },
+
+  // --- おすすめ: 立って ---
+  { id: "lats", core: false, category: "立って", timerSec: 18,
+    label: "広背筋・体側のストレッチ",
+    how: "両手を頭上で組んでバンザイの姿勢を取り、上体をゆっくり真横に倒す。体側から脇腹にかけて伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
+  { id: "triceps", core: false, category: "立って", timerSec: 18,
+    label: "二の腕(上腕三頭筋)のストレッチ",
+    how: "片腕を頭の後ろに上げて肘を曲げ、反対の手で肘を軽く押さえて後方に引く。二の腕の裏側が伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
+  { id: "wrist", core: false, category: "立って", timerSec: 12,
+    label: "手首・前腕のストレッチ",
+    how: "片腕を前に伸ばし、手のひらを上に向けて反対の手で指先を軽く手前に引く。次に手のひらを下に向けて同様に。それぞれ10〜15秒。左右入れ替える。" },
+  { id: "standingtwist", core: false, category: "立って", timerSec: 20,
+    label: "体幹ひねり(立ったまま)",
+    how: "立った姿勢で両手を胸の前で組み、腰の位置を動かさずに上体だけをゆっくり左右にひねる。呼吸を止めずに20〜30秒。" },
+  { id: "shoulderroll", core: false, category: "立って", timerSec: 20,
+    label: "肩まわりのストレッチ(腕回し)",
+    how: "立った姿勢で両腕を大きくゆっくり前回しに20秒、続けて後ろ回しに20秒。肩関節の可動域を広げるイメージで動かす。" },
+
+  // --- おすすめ: 壁や机を支えにして ---
+  { id: "ankle_wall", core: false, category: "壁や机を支えにして", timerSec: 15,
+    label: "アキレス腱のストレッチ(壁に手をついて)",
+    how: "壁に手をつき、片足を後ろに引いてつま先を正面に向け、かかとを床につけたまま膝を軽く曲げて体重を前にかける。アキレス腱が伸びる感覚を確認しながら15秒。左右入れ替える。" },
+  { id: "chestwall", core: false, category: "壁や机を支えにして", timerSec: 18,
+    label: "胸・肩のストレッチ(壁を使って)",
+    how: "壁の横に立ち、片腕を肩の高さで壁につける。腕の位置を保ったまま体を反対方向にゆっくりひねる。胸の前面が伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
+  { id: "soleuswall", core: false, category: "壁や机を支えにして", timerSec: 25,
+    label: "ふくらはぎ深部(ヒラメ筋)のストレッチ",
+    how: "壁に手をつき、後ろ足の膝を軽く曲げたままかかとを床につけて体重を前にかける(ふくらはぎのストレッチと似ているが、後ろ足の膝を曲げるのがポイント)。ふくらはぎの深い部分が伸びる感覚を確認しながら20〜30秒。左右入れ替える。" },
+  { id: "sidedesk", core: false, category: "壁や机を支えにして", timerSec: 18,
+    label: "体側のストレッチ(机に手をついて)",
+    how: "机や椅子の背もたれに片手を添えて体を支え、反対の手を頭上に伸ばしながら体をゆっくり横に倒す。体側が伸びる感覚を確認しながら15〜20秒。左右入れ替える。" },
+  { id: "forearmdesk", core: false, category: "壁や机を支えにして", timerSec: 15,
+    label: "前腕のストレッチ(机に手をついて)",
+    how: "机やテーブルに手のひらを下向きにつき、指先を自分の方に向ける。ゆっくり体重を軽くかけ、前腕の内側が伸びる感覚を確認しながら15秒。左右入れ替える。" },
 ];
 
 const STORAGE_KEY = "training-log-data";
@@ -502,10 +560,12 @@ let routineMaster = []; // {id, name, items:[{type:"strength",part,exercise,weig
                          // よく使う運動メニュー。複数種目をまとめて登録し、ワンタップで今日にまとめて記録できる
 let savingRoutine = false; // 「今日の内容をメニューとして保存」の名前入力欄を表示中か
 let stretchLog = {}; // "YYYY-MM-DD" -> [itemId, ...] その日にチェック済みのストレッチ項目ID一覧
-// v5.6: ストレッチタブのタイマー・カレンダー用のUI状態。localStorageには保存しない
-// (どちらも「今の画面状態」であり、記録データそのものではないため)。
+// v5.6: ストレッチタブのタイマー用のUI状態。localStorageには保存しない
+// (「今の画面状態」であり、記録データそのものではないため)。
+// ストレッチ専用の月めくりカレンダー(stretchCalMonth)はv5.6で追加したが、v5.15で
+// 「カレンダーはカレンダータブだけでいい」というご要望を受けて廃止した(独立した
+// 「📅 カレンダー」タブの4項目印で、ストレッチの記録日も見られるため)。
 let stretchTimer = null; // { itemId, remaining, intervalId } | null。実行中のタイマーは常に1つだけ。
-let stretchCalMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 
 let activeTab = "today"; // today | meals | weight | training | stretch | settings
 let trainingSubTab = "strength"; // strength | cardio
@@ -4781,88 +4841,104 @@ function calendarGridHtml() {
     <div class="cal-grid">${cells}</div>`;
 }
 
-// ============ カレンダータブ(v5.13) ============
-// 「全ての記録をカレンダーからボタン一つで見られるようにしてほしい」「項目ごとの履歴を
-// 7日間まとめて見たい」というご要望に対応。以前は運動タブの履歴に「カレンダー」表示が
-// 埋もれていて、しかも日付をタップしても運動・体重・食事がまとめて1日ぶん出るだけだった。
-// 独立したタブにしたうえで、日付をタップすると「その日を含む直近7日間」を、運動・食事・
-// からだ・ストレッチの項目ごとに分けて個別表示するようにした(ストレッチも新たにカレンダーの
-// 印の対象に加えた)。
-// dateStr(YYYY-MM-DD)を末日として、そこから遡った7日ぶんの日付配列(古い→新しい順)を返す。
-function last7DatesEnding_(dateStr) {
-  const end = new Date(dateStr + "T00:00:00");
-  const list = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(end); d.setDate(d.getDate() - i);
-    list.push(localDateStr(d));
-  }
-  return list;
+// ============ カレンダータブ(v5.13、v5.14で1日表示に変更) ============
+// 「全ての記録をカレンダーからボタン一つで見られるようにしてほしい」というご要望に対応。
+// 以前は運動タブの履歴に「カレンダー」表示が埋もれていて、しかも日付をタップしても
+// 運動・体重・食事がまとめて1日ぶん出るだけだった。独立したタブにしたうえで、日付を
+// タップした「その日」の記録を、運動・食事・からだ・ストレッチの項目ごとに分けて表示する
+// (ストレッチも新たにカレンダーの印の対象に加えた)。
+// v5.13ではタップした日を含む直近7日間を表示していたが、「タップした日だけでいい」との
+// ご要望を受けてv5.14で1日ぶんの表示に戻した。
+// v5.15: 選択した日のKPIサマリー(ダッシュボード)を追加し(calendarDayKpiHtml_)、
+// ストレッチタブ専用だった月めくりカレンダーは廃止した(「カレンダーはカレンダータブ
+// だけでいい」というご要望により、カレンダー機能をこのタブに一本化)。
+// 項目ごとのカードで共通して使う、見出し+中身+「記録が無いとき」のラッパー。
+function calendarItemCardHtml_(icon, title, innerHtml) {
+  return `<div class="card"><p class="section-title">${icon} ${title}</p>${innerHtml || `<p class="muted" style="font-size:11.5px;margin:0;">この日の記録はありません。</p>`}</div>`;
 }
-// 項目ごとの7日間カードで共通して使う、1日ぶんの見出し+中身のラッパー。
-function calendarDayBlockHtml_(dateStr, innerHtml) {
-  const dd = new Date(dateStr + "T00:00:00");
-  const isToday = dateStr === localDateStr();
-  return `<div style="margin-bottom:10px;">
-    <p class="mono" style="font-size:11px;font-weight:700;margin:0 0 4px;color:${isToday ? "var(--slate)" : "var(--ink-faint)"};">${dateStr}(${WEEKDAY[dd.getDay()]})${isToday ? " ・今日" : ""}</p>
-    ${innerHtml}
-  </div>`;
-}
-function calendarTrainingWeekHtml_(dates) {
+function calendarTrainingDayHtml_(d) {
   const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
-  const body = dates.map(d => {
-    const dayItems = entries.filter(e => e.date === d);
-    if (!dayItems.length) return calendarDayBlockHtml_(d, `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`);
-    const dayBurn = dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
-    return calendarDayBlockHtml_(d, `${dayItems.map(trainingEntryRowHtml).join("")}${dayBurn ? `<p class="muted mono" style="font-size:10.5px;margin:2px 0 0;">計約${dayBurn}kcal</p>` : ""}`);
-  }).join("");
-  return `<div class="card"><p class="section-title">🏋️ 運動(直近7日間)</p>${body}</div>`;
+  const dayItems = entries.filter(e => e.date === d);
+  if (!dayItems.length) return calendarItemCardHtml_("🏋️", "運動", "");
+  const dayBurn = dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
+  return calendarItemCardHtml_("🏋️", "運動", `${dayItems.map(trainingEntryRowHtml).join("")}${dayBurn ? `<p class="muted mono" style="font-size:10.5px;margin:6px 0 0;">計約${dayBurn}kcal</p>` : ""}`);
 }
-function calendarMealsWeekHtml_(dates) {
-  const body = dates.map(d => {
-    const dayMeals = mealEntries.filter(m => m.date === d);
-    return calendarDayBlockHtml_(d, dayMeals.length ? dayMeals.map(mealEntryRowHtml).join("") : `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`);
-  }).join("");
-  return `<div class="card"><p class="section-title">🍽️ 食事(直近7日間)</p>${body}</div>`;
+function calendarMealsDayHtml_(d) {
+  const dayMeals = mealEntries.filter(m => m.date === d);
+  return calendarItemCardHtml_("🍽️", "食事", dayMeals.map(mealEntryRowHtml).join(""));
 }
-function calendarWeightWeekHtml_(dates) {
-  const body = dates.map(d => {
-    const w = weightEntries.find(x => x.date === d);
-    const inner = w
-      ? `<div class="entry-row">
-          <div class="badge" style="background:var(--sand-soft);">⚖️</div>
-          <div style="flex:1;">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${w.muscle != null ? ` <span class="muted">筋量${w.muscle}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</div>
-          <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
-          <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
-        </div>`
-      : `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`;
-    return calendarDayBlockHtml_(d, inner);
-  }).join("");
-  return `<div class="card"><p class="section-title">⚖️ からだ(直近7日間)</p>${body}</div>`;
+function calendarWeightDayHtml_(d) {
+  const w = weightEntries.find(x => x.date === d);
+  const inner = w ? `<div class="entry-row">
+      <div class="badge" style="background:var(--sand-soft);">⚖️</div>
+      <div style="flex:1;">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${w.muscle != null ? ` <span class="muted">筋量${w.muscle}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</div>
+      <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
+      <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
+    </div>` : "";
+  return calendarItemCardHtml_("⚖️", "からだ", inner);
 }
-function calendarStretchWeekHtml_(dates) {
-  const body = dates.map(d => {
-    const doneIds = stretchLog[d] || [];
-    const coreDone = CORE_STRETCH_IDS.filter(id => doneIds.includes(id)).length;
-    const inner = doneIds.length
-      ? `<p style="font-size:11.5px;margin:0;">基本セット ${coreDone}/${CORE_STRETCH_IDS.length}${doneIds.length > coreDone ? `・おすすめ含め計${doneIds.length}件` : ""}${coreDone === CORE_STRETCH_IDS.length ? " ✅" : ""}</p>`
-      : `<p class="muted" style="font-size:11.5px;margin:0;">記録なし</p>`;
-    return calendarDayBlockHtml_(d, inner);
-  }).join("");
-  return `<div class="card"><p class="section-title">🧘 ストレッチ(直近7日間)</p>${body}</div>`;
+function calendarStretchDayHtml_(d) {
+  const doneIds = stretchLog[d] || [];
+  const coreDone = CORE_STRETCH_IDS.filter(id => doneIds.includes(id)).length;
+  const inner = doneIds.length
+    ? `<p style="font-size:12.5px;margin:0;">基本セット ${coreDone}/${CORE_STRETCH_IDS.length}${doneIds.length > coreDone ? `・おすすめ含め計${doneIds.length}件` : ""}${coreDone === CORE_STRETCH_IDS.length ? " ✅" : ""}</p>`
+    : "";
+  return calendarItemCardHtml_("🧘", "ストレッチ", inner);
+}
+// その日のKPIサマリー(v5.15)。「選択した日のダッシュボードを見たい」というご要望に対応。
+// 「今日」タブのKPIタイルと同じ見た目(.kpi-grid)で、摂取カロリー・カロリー収支・体重・
+// 運動の消費カロリーの4つを、選択した日を基準に計算し直して表示する。下の項目ごとの
+// カード(運動・食事・からだ・ストレッチ)はこれまでどおり残し、その上に追加する。
+function calendarDayKpiHtml_(d) {
+  const targets = getEffectiveCalorieTarget(d);
+  const dayMeals = mealEntries.filter(m => m.date === d);
+  const intake = dayMeals.reduce((s,m) => s + (m.calories||0), 0);
+  const hasMealData = dayMeals.some(m => (m.calories||0) > 0);
+  const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
+  const dayItems = entries.filter(e => e.date === d);
+  const exerciseBurn = dayItems.reduce((s,e) => s + estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null), 0);
+  const w = weightEntries.find(x => x.date === d);
+  const balance = (targets && hasMealData) ? Math.round(intake - (targets.tdee + exerciseBurn)) : null;
+  return `
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">摂取カロリー</div>
+        <div class="kpi-v">${hasMealData ? intake : "−"}<span>${targets ? `/${targets.effectiveTarget}kcal` : "kcal"}</span></div>
+        <div class="kpi-d ${!hasMealData ? "neutral" : !targets ? "neutral" : (intake <= targets.effectiveTarget ? "good" : "bad")}">${!hasMealData ? "未記録" : !targets ? "目標未設定" : (intake <= targets.effectiveTarget ? `残り${targets.effectiveTarget - intake}kcal` : `超過${intake - targets.effectiveTarget}kcal`)}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">カロリー収支</div>
+        <div class="kpi-v">${balance != null ? (balance > 0 ? "+" : "") + balance : "−"}<span>kcal</span></div>
+        <div class="kpi-d ${balance == null ? "neutral" : (balance < 0 ? "good" : balance > 0 ? "bad" : "neutral")}">${balance == null ? "未記録" : (balance < 0 ? "赤字" : balance > 0 ? "黒字" : "均衡")}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">体重</div>
+        <div class="kpi-v">${w ? w.weight : "−"}<span>kg</span></div>
+        <div class="kpi-d neutral">${w ? (w.bodyFat != null ? `体脂肪${w.bodyFat}%` : "") : "未記録"}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">運動の消費</div>
+        <div class="kpi-v">${exerciseBurn ? Math.round(exerciseBurn) : "−"}<span>kcal</span></div>
+        <div class="kpi-d neutral">${exerciseBurn ? `${dayItems.length}件` : "記録なし"}</div>
+      </div>
+    </div>`;
 }
 function calendarTabHtml() {
   const selected = (selectedCalDate && selectedCalDate <= localDateStr()) ? selectedCalDate : localDateStr();
-  const dates = last7DatesEnding_(selected);
+  const dd = new Date(selected + "T00:00:00");
+  const isToday = selected === localDateStr();
   return `
     <div class="card">
       <p class="section-title">📅 カレンダー</p>
-      <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">印: 🔴運動 / 🟡からだ / 🔵食事 / 🔷ストレッチ。日付をタップすると、その日を含む直近7日間の記録を項目ごとに見られます。</p>
+      <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">印: 🔴運動 / 🟡からだ / 🔵食事 / 🔷ストレッチ。日付をタップすると、その日の記録を項目ごとに見られます。</p>
       ${calendarGridHtml()}
     </div>
-    ${calendarTrainingWeekHtml_(dates)}
-    ${calendarMealsWeekHtml_(dates)}
-    ${calendarWeightWeekHtml_(dates)}
-    ${calendarStretchWeekHtml_(dates)}`;
+    <p class="mono" style="font-weight:700;font-size:14px;margin:0 0 8px;">${selected}(${WEEKDAY[dd.getDay()]})${isToday ? " ・今日" : ""}</p>
+    ${calendarDayKpiHtml_(selected)}
+    ${calendarTrainingDayHtml_(selected)}
+    ${calendarMealsDayHtml_(selected)}
+    ${calendarWeightDayHtml_(selected)}
+    ${calendarStretchDayHtml_(selected)}`;
 }
 
 function renderHistory() {
@@ -5807,42 +5883,6 @@ function todaysStretchPicks() {
   return scored.slice(0, 3).map(s => s.item);
 }
 
-// ---- ③ 記録のカレンダー表示(v5.6) ----
-// 運動タブの履歴カレンダー(calendarGridHtml/calMonth)とは別に、ストレッチ専用の
-// 月めくりカレンダーを持つ(状態を混ぜると、片方をめくるともう片方も動いてしまうため)。
-// 色の濃さ = その日の基本セット達成率(0件は無地、全部でしっかり色付き)。
-function stretchCalendarHtml() {
-  const year = stretchCalMonth.getFullYear(), month = stretchCalMonth.getMonth();
-  const startWeekday = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const todayStr = localDateStr();
-  let cells = "";
-  for (let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell" style="visibility:hidden;"></div>`;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const doneIds = stretchLog[dateStr] || [];
-    const coreDone = CORE_STRETCH_IDS.filter(id => doneIds.includes(id)).length;
-    const ratio = coreDone / CORE_STRETCH_IDS.length;
-    let bg = "var(--paper)", fg = "";
-    if (ratio >= 1) { bg = "var(--teal)"; fg = "color:#fff;"; }
-    else if (ratio > 0.5) { bg = "var(--teal-soft)"; }
-    else if (ratio > 0) { bg = "var(--line)"; }
-    cells += `<div class="cal-cell ${dateStr === todayStr ? "today" : ""}" style="background:${bg};${fg}" title="基本セット${coreDone}/${CORE_STRETCH_IDS.length}">
-      <span>${d}</span>${doneIds.length ? `<span style="font-size:9px;">${doneIds.length}</span>` : ""}
-    </div>`;
-  }
-  const weekHead = WEEKDAY.map(w => `<div style="text-align:center;font-size:10px;color:var(--ink-faint);">${w}</div>`).join("");
-  return `
-    <div class="between" style="margin-bottom:8px;">
-      <button data-action="stretch-cal-prev" style="background:none;border:none;font-size:16px;padding:4px 10px;">‹</button>
-      <span class="mono" style="font-weight:700;">${year}年${month + 1}月</span>
-      <button data-action="stretch-cal-next" style="background:none;border:none;font-size:16px;padding:4px 10px;">›</button>
-    </div>
-    <div class="cal-grid" style="margin-bottom:4px;">${weekHead}</div>
-    <div class="cal-grid">${cells}</div>
-    <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">色が濃いほど、その日の基本セット達成率が高いことを表します(数字はチェックした項目の合計数)。</p>`;
-}
-
 // チェック項目1件ぶんの行(チェックボックス + 名前 + やり方 + タイマー)。基本セット・おすすめ共通。
 // タイマーボタンは<label>の外に置く(<label>の中にボタンを入れるのはHTML的に不正な
 // 入れ子になり、クリック時の挙動も怪しくなるため、チェックボックス部分とは兄弟要素にしている)。
@@ -5876,13 +5916,11 @@ function stretchHtml() {
   const streak = stretchStreak();
   const picks = todaysStretchPicks();
 
-  // おすすめ項目をcategory(上半身/下半身/体幹・全身)ごとにグルーピングして表示する。
-  const categories = [];
-  extraItems.forEach(item => {
-    let cat = categories.find(c => c.name === item.category);
-    if (!cat) { cat = { name: item.category, items: [] }; categories.push(cat); }
-    cat.items.push(item);
-  });
+  // おすすめ項目をcategory(v5.15から「どんな姿勢でやるか」の4分類)ごとにグルーピングして
+  // 表示する。STRETCH_CATEGORIESの並び順で固定し、STRETCH_ITEMS内の登場順には依存しない。
+  const categories = STRETCH_CATEGORIES
+    .map(name => ({ name, items: extraItems.filter(i => i.category === name) }))
+    .filter(c => c.items.length > 0);
 
   return `
     ${picks.length ? `
@@ -5902,22 +5940,17 @@ function stretchHtml() {
         <span class="muted" style="font-size:11.5px;">${coreDoneCount}/${coreTotal}${allCoreDone ? " ✅" : ""}</span>
       </div>
       ${streak > 0 ? `<p class="muted" style="font-size:11px;margin:0 0 8px;">🔥 基本セット全項目達成 ${streak}日連続</p>` : ""}
-      <p class="muted" style="font-size:11px;margin:0 0 12px;line-height:1.6;">デスクワークで座りっぱなしになりやすい部位と、筋トレ後の回復ケアを踏まえた毎日の基本セットです。全部チェックすると連続記録がカウントされます。</p>
+      <p class="muted" style="font-size:11px;margin:0 0 12px;line-height:1.6;">デスクワークで座りっぱなしになりやすい部位と、筋トレ後の回復ケアを踏まえた毎日の基本セットです。全部チェックすると連続記録がカウントされます。過去の記録は「📅 カレンダー」タブから日付ごとに確認できます。</p>
       ${coreItems.map(item => stretchItemRow(item, doneIds)).join("")}
     </div>
 
     <div class="card">
       <p class="section-title" style="margin:0 0 6px;">✨ 他にもやってみる(1人でできるおすすめ)</p>
-      <p class="muted" style="font-size:11px;margin:0 0 14px;line-height:1.6;">道具や補助者なしで1人でできるストレッチです。基本セットに慣れてきたら、気になる部位を選んで取り入れてみましょう。チェックすると記録は残りますが、連続記録(streak)には影響しません。</p>
+      <p class="muted" style="font-size:11px;margin:0 0 14px;line-height:1.6;">道具や補助者なしで1人でできるストレッチです(壁や机は身近な家具として使うだけです)。基本セットに慣れてきたら、そのときやりやすい姿勢のものを選んで取り入れてみましょう。チェックすると記録は残りますが、連続記録(streak)には影響しません。</p>
       ${categories.map(cat => `
         <p class="muted" style="font-size:11px;font-weight:700;margin:0 0 8px;">${esc(cat.name)}</p>
         ${cat.items.map(item => stretchItemRow(item, doneIds)).join("")}
       `).join("")}
-    </div>
-
-    <div class="card">
-      <p class="section-title" style="margin:0 0 10px;">📅 記録カレンダー</p>
-      ${stretchCalendarHtml()}
     </div>
 `;
 }
@@ -6083,8 +6116,6 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "toggle-stretch") { toggleStretchItem(today, t.dataset.id); }
   else if (action === "start-stretch-timer") { startStretchTimer(t.dataset.id); }
   else if (action === "stop-stretch-timer") { stopStretchTimer(); renderTabContent(); }
-  else if (action === "stretch-cal-prev") { stretchCalMonth = new Date(stretchCalMonth.getFullYear(), stretchCalMonth.getMonth()-1, 1); renderTabContent(); }
-  else if (action === "stretch-cal-next") { stretchCalMonth = new Date(stretchCalMonth.getFullYear(), stretchCalMonth.getMonth()+1, 1); renderTabContent(); }
   else if (action === "set-pace") { goals.paceKgPerWeek = Number(t.dataset.val); saveState(); renderTabContent(); scheduleSync(); }
   else if (action === "clear-stats-start-date") { goals.statsStartDate = null; saveState(); renderTabContent(); }
   else if (action === "set-gender") { profile.gender = t.dataset.val; saveState(); renderTabContent(); }
