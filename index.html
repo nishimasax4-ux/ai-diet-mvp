@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.19";
+const APP_VERSION = "v5.21";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -337,6 +337,100 @@ const EXERCISES_BY_PART = {
   "腕": ["アームカール","トライセップエクステンション","ハンマーカール"],
   "腹筋": ["クランチ","プランク","レッグレイズ"],
 };
+// 種目ごとの「やり方」の初期値(v5.21)。通っているジム(LifeFit)のマシンに合わせて
+// もらった解説をもとにしている。名前が一致する種目マスタの項目に、起動のたびに
+// (すでに本人がやり方を書いていれば上書きせず)差し込む。マスタにまだ無い名前は
+// 新規に追加する(seedExerciseHowDefaults_)。他のジム・マシンを使っている場合は、
+// 設定タブの「種目マスタ」からいつでも書き換えられる。
+const EXERCISE_HOW_DEFAULTS = {
+  "レッグプレス": { part: "脚", how:
+    "【セット】背中と腰をシートに付ける。足は肩幅で足裏全体をプレートに。つま先と膝は同じ向き。\n" +
+    "【動き】押すときは膝を伸ばし切らない。下ろすときは2〜3秒かけて膝が90度前後まで。腰が丸まる・お尻が浮く手前で止める。\n" +
+    "【足の位置】高め・広めはお尻と太もも裏、低め・狭めは太もも前に効く。\n" +
+    "【コツ】足裏全体・かかと寄りで押す。「プレートを遠くに押す」イメージ。膝の向きはつま先と揃える。\n" +
+    "【NG】膝が内側に入る/お尻が浮く/膝を完全にロック/反動でバウンド。\n" +
+    "【注意】終わったら必ず安全ストッパーをかけてから足を下ろす。" },
+  "アブドミナル": { part: "腹筋", how:
+    "【セット】パッドの軸がおへそ〜みぞおちの高さ。ハンドルは持つだけ。\n" +
+    "【動き】股関節からでなく背中を丸めて肋骨を骨盤に近づける。倒すのに2秒、戻すのに3秒。戻しても重りは完全に置かない。\n" +
+    "【コツ】背骨を上から1つずつ丸めておへそをのぞき込む。倒し切ったら1秒止めて絞る。息を吐き切る。腕は軽く握るだけ(引かない)。\n" +
+    "【NG】腕でハンドルを引く/勢いで倒す/軽すぎて効いている感覚がない。\n" +
+    "【うまく効かない時】重すぎるか軽すぎるので、いったん軽めに落としてフォームを作り直す。腰が痛い時は戻す幅を浅くする。" },
+  "ラットプルダウン": { part: "背中", how:
+    "【セット】太ももパッドが浮かない高さに調整。バーは肩幅より少し広め。上体を5〜10度だけ後ろに倒す。\n" +
+    "【動き】胸を張ってバーを鎖骨に向けて引く。肘を「下に落とす」イメージ。首の後ろには引かない。反動をつけない。\n" +
+    "【コツ】肩甲骨を先に下げて寄せる。引き切りで1秒止める。手はフックのように軽く握り、肘で引く意識。\n" +
+    "【NG】腕だけがパンパンになる(握り込みすぎ)/首・肩がきつい(重すぎ)/腰が反る(倒しすぎ)。" },
+  "シーテッドロー": { part: "背中", how:
+    "【セット】胸パッドに胸を当てる(無ければ背筋を伸ばして座る)。足を足置きに乗せグリップを握る。\n" +
+    "【動き】背筋を伸ばしたまま、グリップをおへそに向けて引く。肩をすくめない。引き切ったら1秒止める。戻すときは腕が伸び切る手前で止めて負荷を保つ。\n" +
+    "【コツ】肩甲骨を先に動かす。胸を張る。反動を使わない。\n" +
+    "【NG】腕だけがパンパン(握り込みすぎ)/首・肩がきつい(重すぎ)/腰が反る。" },
+  "チェストプレス": { part: "胸", how:
+    "【セット】ハンドルが胸の真ん中〜やや下の高さ。背中と頭をパッドに、足は床にしっかり。肩甲骨を寄せて下げ、胸を張る。\n" +
+    "【動き】息を吐きながら押し、吸いながらゆっくり戻す。肘は体から45〜60度(真横には開かない)。押し切りで肘を伸ばし切らない。戻すのは胸が軽く伸びるところまで。\n" +
+    "【コツ】「両手を体の前で合わせる」イメージで押す。手首はまっすぐ保つ。\n" +
+    "【NG】肩の前が痛い(ハンドル位置が高い/肘が開きすぎ)/首・肩がすくむ(重すぎ)/腕ばかり疲れる(肩甲骨を寄せ忘れ)。" },
+  "ベンチプレス": { part: "胸", how:
+    "【無人ジムでの安全ルール】補助してくれる人がいない前提で行う。ラックのセーフティバーを胸の少し上に設定する。\n" +
+    "「あと1〜2回できる」ところで終え、限界までは追い込まない。重量に不安があればチェストプレスかスミスマシンにする。" },
+  "ショルダープレス": { part: "肩", how:
+    "【セット】ハンドルが肩〜耳の高さ。背中をパッドに、腰を反らさず座る。\n" +
+    "【動き】息を吐きながら頭上に押し、肘は伸ばし切らない。吸いながらゆっくり戻す。\n" +
+    "【コツ】肩をすくめない(すくむと首の付け根に力が逃げる)。\n" +
+    "【NG】首・肩の上がきつい(重すぎ→半分に落とす)/肩の前が痛い(肘が後ろに行きすぎ)/腰が反る。" },
+  "サイドレイズ": { part: "肩", how:
+    "軽い重量(片手2〜3kg)から。肘を軽く曲げて固定し、肩の高さまで横に上げる。小指側をわずかに高くするイメージ。反動を使わない。\n" +
+    "【コツ】手ではなく肘を上げる意識。肩より上に上げすぎない(肩を痛めやすい)。\n" +
+    "【NG】首・肩の上が先に疲れる→重すぎ。" },
+  "リアレイズ": { part: "肩", how:
+    "前傾して肘を軽く曲げ、肘を後ろ・外に引くイメージで上げる。事務仕事で前に丸まりやすい肩・姿勢の改善にも役立つ。\n" +
+    "【コツ】胸をベンチかパッドにつけられる機種だと安定する。背中を丸めない。反動を使わず軽い重さでゆっくり行う。" },
+  "アームカール": { part: "腕", how:
+    "肘を体の横に固定する(前後に動くと肩で上げてしまう)。上げ切ったところで1秒止めて力こぶを絞る。下ろすのは3秒かけて、腕が伸び切る手前まで。体を後ろに反らして上げない。\n" +
+    "10〜15回で限界になる軽めの重さで十分。重さより丁寧さを優先する。" },
+  "トライセプス": { part: "腕", how:
+    "肘の位置を固定し、肘から先だけを動かす(プレスダウンなど)。押し切ったところで1秒止めて二の腕の裏を絞る。肩がすくまないようにする。戻すときは肘が体から離れない位置まで。\n" +
+    "10〜15回で限界になる軽めの重さで十分。重さより丁寧さを優先する。" },
+};
+// 全種目に共通するルール・効かせる7つのコツ(v5.21)。種目ごとの「やり方」とは別に、
+// 設定タブの「種目マスタ」から折りたたみで読めるようにしておく(記録フォームには出さない。
+// 毎回読む内容ではないため)。
+const EXERCISE_COMMON_RULES =
+  "【回数と重さ】10〜15回で、最後の2〜3回がきつい重さにする。\n" +
+  "【スピード】上げるのは1〜2秒、下ろすのは2〜3秒。反動は使わない。\n" +
+  "【呼吸】力を出すときに吐き、戻すときに吸う。息は止めない。\n" +
+  "【休憩】セット間は60〜90秒。\n" +
+  "【重量アップ】目標回数を2セット続けて余裕でできたら、次回から2.5〜5kg足す。\n" +
+  "【頻度】同じ部位は中1〜2日空ける。\n" +
+  "【痛みの区別】筋肉のだるさ・熱さはOK。関節の鋭い痛み・しびれは中止する。\n" +
+  "【マシン調整】始める前にシート高さやパッド位置を合わせる。ここが合っていないと、どの種目も効かない。\n" +
+  "【体調が悪い日】寝不足の日は重さを1〜2割落とすか、軽めの日にする。\n\n" +
+  "【効かせる7つのコツ】\n" +
+  "・狙った筋肉を意識する(可能なら片手で軽く触る)\n" +
+  "・下ろす動作(2〜3秒)こそ筋肉に効く\n" +
+  "・痛みのない範囲で大きく動かす。関節はロックしない\n" +
+  "・反動を使わない\n" +
+  "・重さは、最後の2〜3回でフォームが崩れる直前になる重さ\n" +
+  "・力を出す時に吐き、戻す時に吸う\n" +
+  "・動かさない部位(背中・腰・肩)は動作中に固定する\n\n" +
+  "【順番】大きな筋肉(脚・背中・胸)を先に、小さな筋肉(肩・腕・腹筋)は後にする。\n" +
+  "【効いていないサイン】関節だけがきつい/息が上がるだけで筋肉の疲れを感じない/重さを上げてもきつさが変わらない\n" +
+  "→ この場合は重さを2〜3割落として、狙った筋肉で動かす練習をやり直す。重さを増やすのはその後。";
+// EXERCISE_HOW_DEFAULTSを種目マスタに反映する(v5.21)。名前が一致する項目には
+// やり方が空のときだけ差し込み(本人が書いた内容は上書きしない)、名前が
+// まだマスタに無い種目は新規に追加する。何度呼んでも安全(冪等)。
+function seedExerciseHowDefaults_() {
+  Object.keys(EXERCISE_HOW_DEFAULTS).forEach(name => {
+    const def = EXERCISE_HOW_DEFAULTS[name];
+    const existing = exerciseMaster.find(x => x.name === name);
+    if (existing) {
+      if (!existing.how) existing.how = def.how;
+    } else {
+      exerciseMaster.push({ id: uid(), part: def.part, name, how: def.how });
+    }
+  });
+}
 const CARDIO_OPTIONS = ["ランニング","ジョギング","バイク","ウォーキング","クロストレーナー","リカベントバイク","買い物","その他"];
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
 // MET値の目安(Compendium of Physical Activities等を参考にした概算・ふつうの強度)。
@@ -398,6 +492,16 @@ function backfillCardioDistances_() {
 }
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
 const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
+// 筋トレ1件ごとの感想(任意、v5.20)。キツさの自己申告を記録として残せるようにした。
+// Google Sheetsの「筋トレ」シートには列が無いため、この端末だけの項目として扱う
+// (骨格筋量・骨格筋率・有酸素の距離と同じ扱い。applyPayload内で引き継ぎ処理を行う)。
+// score(-1/0/1)は「今日のおすすめ」の強度調整(recentFeelingAdjustment_)に使う。
+const FEELING_OPTIONS = [
+  { val: "easy", label: "余裕", emoji: "😌", score: -1 },
+  { val: "normal", label: "ちょうどいい", emoji: "🙂", score: 0 },
+  { val: "hard", label: "キツめ", emoji: "😣", score: 1 },
+];
+function feelingOption_(val) { return FEELING_OPTIONS.find(f => f.val === val) || null; }
 const MINUTE_QUICK_OPTIONS = [15,30,45,60]; // 有酸素の時間のワンタップ候補(分)。これ以外の時間は入力欄に直接入力できます
 const MEAL_TYPES = ["朝食","昼食","夕食","間食"];
 // 内蔵の食品カロリー概算表(外部APIには接続しません)。
@@ -552,7 +656,9 @@ function backendOutdatedByVersion_() {
 }
 let backendAiKeys = null;   // { gemini: bool, groq: bool } | null
 let backendChecked = false;
-let exerciseMaster = []; // {id, part, name} - user-editable list of gym machines/exercises per body part
+let exerciseMaster = []; // {id, part, name, how?} - user-editable list of gym machines/exercises per body part
+                          // how(任意・v5.21): その種目のやり方・フォームの注意点(記録フォームで種目を
+                          // 選んだときに表示する)。設定タブの「種目マスタ」から追加・編集できる。
 let mealMaster = [];     // {id, name, calories, protein, fat, carb} - user-editable list of frequently-eaten meals
 let lastStrengthByExercise = {}; // "種目名"(または"(部位)") -> {reps, weight} の直近の入力値。次回そのままの値を提案する
 let lastCardioMinutes = {}; // 有酸素の種目名 -> 直近の分数
@@ -571,6 +677,9 @@ let activeTab = "today"; // today | meals | weight | training | stretch | settin
 let trainingSubTab = "strength"; // strength | cardio
 let selectedPart = "胸";
 let selectedCardio = "ランニング";
+let selectedFeeling = null; // 筋トレ記録フォームで選択中の感想("easy"|"normal"|"hard"|null=未選択・任意項目)
+let exerciseHowOpen = false; // 筋トレ記録フォームで「やり方」を展開表示中か(v5.21・種目を変えると閉じる)
+let commonRulesOpen = false; // 設定タブ「種目マスタ」の共通ルール表示中か(v5.21)
 let cardioInputMode = "time"; // "time" | "steps" | "distance" — ランニング・ウォーキングのときだけ使う(v5.7)
 let selectedMealType = "朝食";
 let masterExercisePart = "胸"; // which part's tab is active in the master-data editor
@@ -1339,6 +1448,10 @@ function seedExerciseMasterIfEmpty() {
       EXERCISES_BY_PART[part].forEach(name => exerciseMaster.push({ id: uid(), part, name }));
     });
   }
+  // v5.21: 空だったときの初期投入だけでなく、既存の種目マスタにも毎回(冪等に)
+  // やり方のデフォルトを差し込む。バージョンアップで新しく追加した種目
+  // (アブドミナル・シーテッドローなど)が、既存ユーザーのマスタにも反映されるように。
+  seedExerciseHowDefaults_();
 }
 function saveState() {
   try {
@@ -1437,6 +1550,13 @@ function applyPayload(payload) {
   entries.forEach(e => { if (e.type === "cardio" && e.distance != null) oldDistance[cardioKey(e)] = e.distance; });
   nextEntries.forEach(e => {
     if (e.type === "cardio" && oldDistance[cardioKey(e)] != null) e.distance = oldDistance[cardioKey(e)];
+  });
+  // v5.20: 筋トレの「感想」もシートに列が無いこの端末だけの項目なので、同じ考え方で引き継ぐ。
+  const strengthKey = e => `${e.date}|${e.part}|${e.exercise}|${Number(e.weight) || 0}|${Number(e.reps) || 0}`;
+  const oldFeeling = {};
+  entries.forEach(e => { if (e.type === "strength" && e.feeling) oldFeeling[strengthKey(e)] = e.feeling; });
+  nextEntries.forEach(e => {
+    if (e.type === "strength" && oldFeeling[strengthKey(e)] != null) e.feeling = oldFeeling[strengthKey(e)];
   });
   entries = nextEntries.sort((a,b) => a.date < b.date ? 1 : -1);
   weightEntries = nextWeights;
@@ -2622,11 +2742,32 @@ function resolveWorkoutSuggestion(w) {
   // cardio
   return { ...w, exercise: "", displayName: w.name, displayDetail: `${w.min}分` };
 }
+// 直近の筋トレの「感想」から、「今日のおすすめ」の強度を1段階だけ上下させる(v5.20)。
+// 直近3件の「感想つき」筋トレ記録の平均スコア(余裕=-1/ちょうどいい=0/キツめ=+1)を見て、
+// +0.5以上(キツめが多い)なら1段階下げ、-0.5以下(余裕が多い)なら1段階上げる。
+// 感想つきの記録が2件未満のうちは判断材料が足りないので調整しない。
+function recentFeelingAdjustment_() {
+  const recent = entries
+    .filter(e => e.type === "strength" && e.feeling)
+    .sort((a,b) => a.date === b.date ? (b.createdAt||0) - (a.createdAt||0) : (a.date < b.date ? 1 : -1))
+    .slice(0, 3);
+  if (recent.length < 2) return 0;
+  const avg = recent.reduce((s,e) => s + ((feelingOption_(e.feeling) || {}).score || 0), 0) / recent.length;
+  if (avg >= 0.5) return -1;
+  if (avg <= -0.5) return 1;
+  return 0;
+}
 // 「今日のおすすめ」の運動を選ぶ。以前は「今日の調子」ボタン(疲れた/ふつう/元気)の
-// 自己申告で強度を上下させていたが、そのボタン自体を廃止したため(v44.8)、
-// 利用可能時間(プロフィールのtimeAvail)だけで決まる基準の強度をそのまま使う。
+// その場の自己申告で強度を上下させていたが、実際の記録と食い違うことがあり廃止した
+// (v44.8)。今回、筋トレの記録に感想(任意)を残せるようにしたのに合わせて、利用可能
+// 時間(プロフィールのtimeAvail)で決まる基準の強度を、実際に記録した直近の感想
+// (recentFeelingAdjustment_)で1段階だけ上下させるようにした(v5.20)。
 function pickWorkout() {
-  const level = TIME_TO_LEVEL[(profile && profile.timeAvail) || "10-15分"] || "medium";
+  const LEVELS = ["low", "medium", "high"];
+  const baseLevel = TIME_TO_LEVEL[(profile && profile.timeAvail) || "10-15分"] || "medium";
+  const idx = LEVELS.indexOf(baseLevel);
+  const adjustedIdx = Math.min(LEVELS.length - 1, Math.max(0, idx + recentFeelingAdjustment_()));
+  const level = LEVELS[adjustedIdx];
   const pool = WORKOUTS[level];
   const w = pool[dayOfYear(new Date()) % pool.length];
   return resolveWorkoutSuggestion(w);
@@ -3722,6 +3863,9 @@ function todayHtml() {
         </div>
         <button class="chip active-b" data-action="quicklog-workout" style="flex:0 0 auto;">記録する</button>
       </div>
+      ${(() => { const adj = recentFeelingAdjustment_(); return adj !== 0
+        ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">直近の筋トレの感想が「${adj < 0 ? "キツめ" : "余裕"}」続きだったので、強度を${adj < 0 ? "少し下げて" : "少し上げて"}提案しています。</p>`
+        : ""; })()}
       <p class="muted" style="font-size:10.5px;margin:8px 0 0;">${aiAdvice
         ? "※AIによる生成コメントです(あくまで一般的な目安。体調に不安があるときは医療機関へ)"
         : "※ルールベースの簡易アドバイスです(外部AIには接続していません)"}</p>
@@ -4489,7 +4633,8 @@ function trainingHtml() {
         <div class="wrap" id="part-buttons" style="margin-bottom:10px;"></div>
         <label class="label">種目(任意)</label>
         <div class="wrap" id="exercise-buttons" style="margin-bottom:8px;"></div>
-        <input type="text" id="exercise-input" placeholder="例: ベンチプレス(空欄可・自由入力もOK)" style="margin-bottom:10px;">
+        <input type="text" id="exercise-input" placeholder="例: ベンチプレス(空欄可・自由入力もOK)" style="margin-bottom:8px;">
+        <div id="exercise-how-box" style="margin-bottom:10px;"></div>
         <div class="row" style="margin-bottom:6px;align-items:flex-start;">
           <div style="flex:1;">
             <label class="label">回数</label>
@@ -4505,6 +4650,9 @@ function trainingHtml() {
           </div>
         </div>
         <div class="wrap" id="reps-quick-buttons" style="margin-bottom:10px;"></div>
+        <label class="label">感想(任意)</label>
+        <div class="wrap" id="feeling-buttons" style="margin-bottom:4px;"></div>
+        <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">「今日のおすすめ」の運動強度に反映されます。この項目はGoogle Sheetsには同期されず、この端末の中だけに保存されます。</p>
       </div>
       <div id="cardio-fields" class="${trainingSubTab==="cardio"?"":"hidden"}">
         <label class="label">種目</label>
@@ -4720,8 +4868,9 @@ function trainingEntryRowHtml(e) {
   const isStrength = e.type === "strength";
   const latestWeight = [...weightEntries].sort((a,b) => a.date < b.date ? 1 : -1)[0];
   const burn = estimateEntryBurn_(e, latestWeight ? latestWeight.weight : null);
+  const feelingOpt = isStrength ? feelingOption_(e.feeling) : null;
   const detail = isStrength
-    ? `<span style="font-weight:600;">[${esc(e.part)}]</span>${e.exercise ? " "+esc(e.exercise) : ""} <span class="mono" style="color:var(--sand);">${e.weight}kg × ${e.reps}</span>`
+    ? `<span style="font-weight:600;">[${esc(e.part)}]</span>${e.exercise ? " "+esc(e.exercise) : ""} <span class="mono" style="color:var(--sand);">${e.weight}kg × ${e.reps}</span>${feelingOpt ? ` <span class="muted">${feelingOpt.emoji}${feelingOpt.label}</span>` : ""}`
     : `${esc(e.exercise)} <span class="mono" style="color:var(--sand);">${e.minutes}分</span>${e.distance != null ? ` <span class="mono" style="color:var(--slate);">${e.distance}km</span>` : ""}`;
   return `<div class="entry-row">
     <div class="badge" style="background:${isStrength ? "var(--coral-soft)" : "var(--slate-soft)"};">${isStrength ? "🏋️" : "💨"}</div>
@@ -5003,12 +5152,33 @@ function renderTrainingFormOptions() {
   const exerciseInput = document.getElementById("exercise-input");
   const currentExercise = exerciseInput ? exerciseInput.value.trim() : "";
   const exOptions = exerciseNamesForPartByUsage(selectedPart);
+  // v5.21: 種目マスタに「やり方」が登録されている種目には📖マークを付け、
+  // 選んだ種目にやり方があれば下にトグルで表示できるようにする。
+  const howByName = {};
+  exerciseMaster.filter(x => x.part === selectedPart && x.how).forEach(x => { howByName[x.name] = x.how; });
   document.getElementById("exercise-buttons").innerHTML = exOptions.length
-    ? exOptions.map(ex => `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${esc(ex)}">${esc(ex)}</button>`).join("")
+    ? exOptions.map(ex => `<button class="chip ${currentExercise===ex?"active-a":""}" data-action="select-exercise" data-val="${esc(ex)}">${esc(ex)}${howByName[ex] ? " 📖" : ""}</button>`).join("")
     : '<span class="muted" style="font-size:11px;">未登録(設定タブの「種目マスタ」から追加できます)</span>';
+  const howBox = document.getElementById("exercise-how-box");
+  if (howBox) {
+    const howText = howByName[currentExercise];
+    howBox.innerHTML = !howText ? "" : (exerciseHowOpen
+      ? `<div style="background:var(--paper);border-radius:8px;padding:10px 12px;">
+           <button type="button" style="width:100%;background:none;border:none;padding:0;text-align:left;" data-action="toggle-exercise-how">
+             <span class="muted" style="font-size:11px;font-weight:700;">📖 やり方を閉じる ▴</span>
+           </button>
+           <p style="font-size:11.5px;line-height:1.7;margin:8px 0 0;white-space:pre-wrap;">${esc(howText)}</p>
+         </div>`
+      : `<button type="button" class="chip" data-action="toggle-exercise-how">📖 やり方を見る</button>`);
+  }
   document.getElementById("cardio-buttons").innerHTML = cardioOptionsByUsage().map(c =>
     `<button class="chip ${selectedCardio===c?"active-b":""}" data-action="select-cardio" data-val="${c}">${c}</button>`).join("");
   document.getElementById("cardio-custom-input").classList.toggle("hidden", selectedCardio !== "その他");
+  const feelingEl = document.getElementById("feeling-buttons");
+  if (feelingEl) {
+    feelingEl.innerHTML = FEELING_OPTIONS.map(f =>
+      `<button type="button" class="chip ${selectedFeeling===f.val?"active-a":""}" data-action="select-feeling" data-val="${f.val}">${f.emoji} ${f.label}</button>`).join("");
+  }
 
   // 負荷(kg): 初回は20kgを既定値にしつつ、部位・種目に対して前回入力した
   // 回数・負荷があればそれを優先して提案する(reps-inputが空のときだけ上書きし、
@@ -5301,7 +5471,8 @@ function settingsHtml() {
     <div class="card">
       ${settingsSectionHeader("masterExercise", "🏋️ 種目マスタ")}
       <div id="settings-section-masterExercise" class="${settingsOpenSections.masterExercise ? "" : "hidden"}" style="margin-top:10px;">
-        <p class="muted" style="margin:0 0 12px;">よく使う筋トレ種目をあらかじめ登録しておくと、記録時にワンタップで選べます。✏️で名前や部位を修正できます。</p>
+        <p class="muted" style="margin:0 0 12px;">よく使う筋トレ種目をあらかじめ登録しておくと、記録時にワンタップで選べます。✏️で名前や部位、やり方を修正できます。📖は「やり方」が登録済みの印です。</p>
+        <div id="common-rules-wrap" style="margin-bottom:10px;"></div>
         <p class="label" style="margin-bottom:6px;">筋トレ種目(部位ごと)</p>
         <div class="wrap" id="master-ex-part-buttons" style="margin-bottom:8px;"></div>
         <div id="master-ex-list" style="margin-bottom:8px;"></div>
@@ -5384,6 +5555,17 @@ function bindSettingsWidgets() {
   if (activeTab !== "settings") return;
   renderMasterExerciseSection();
   renderMasterMealList();
+  renderCommonRulesWrap();
+}
+// 筋トレの「共通ルール」の開閉表示(v5.21)。種目マスタの一覧よりも前に置き、
+// 折りたたんでおくことで、記録の邪魔にならずいつでも読み返せるようにする。
+function renderCommonRulesWrap() {
+  const el = document.getElementById("common-rules-wrap");
+  if (!el) return;
+  el.innerHTML = commonRulesOpen
+    ? `<button type="button" class="chip" data-action="toggle-common-rules" style="margin-bottom:8px;">📋 共通ルールを閉じる ▴</button>
+       <div style="background:var(--paper);border-radius:8px;padding:10px 12px;margin-bottom:10px;"><p style="font-size:11.5px;line-height:1.8;margin:0;white-space:pre-wrap;">${esc(EXERCISE_COMMON_RULES)}</p></div>`
+    : `<button type="button" class="chip" data-action="toggle-common-rules" style="margin-bottom:10px;">📋 共通ルール・フォームの基本を見る</button>`;
 }
 function renderMasterExerciseSection() {
   const partEl = document.getElementById("master-ex-part-buttons");
@@ -5391,7 +5573,7 @@ function renderMasterExerciseSection() {
   partEl.innerHTML = PARTS.map(p => `<button class="chip ${masterExercisePart===p?"active-a":""}" data-action="select-master-ex-part" data-val="${p}">${p}</button>`).join("");
   const list = exerciseMaster.filter(x => x.part === masterExercisePart);
   document.getElementById("master-ex-list").innerHTML = list.length
-    ? list.map(x => `<div class="entry-row"><span style="flex:1;">${esc(x.name)}</span><button class="del-btn" data-action="open-edit-exercise-master" data-id="${x.id}">✏️</button><button class="del-btn" data-action="del-exercise-master" data-id="${x.id}">🗑️</button></div>`).join("")
+    ? list.map(x => `<div class="entry-row"><span style="flex:1;">${esc(x.name)}${x.how ? ' <span class="muted" title="やり方が登録されています">📖</span>' : ""}</span><button class="del-btn" data-action="open-edit-exercise-master" data-id="${x.id}">✏️</button><button class="del-btn" data-action="del-exercise-master" data-id="${x.id}">🗑️</button></div>`).join("")
     : '<p class="muted" style="font-size:11px;">この部位の種目はまだ登録されていません。</p>';
 }
 function renderMasterMealList() {
@@ -5408,7 +5590,7 @@ function openEdit(kind, key) {
     const e = entries.find(x => x.id === key);
     if (!e) return;
     editing = e.type === "strength"
-      ? { kind, id: key, tempPart: e.part, draftExercise: e.exercise || "", draftReps: e.reps, draftWeight: e.weight, draftDate: e.date }
+      ? { kind, id: key, tempPart: e.part, draftExercise: e.exercise || "", draftReps: e.reps, draftWeight: e.weight, draftDate: e.date, tempFeeling: e.feeling || null }
       : { kind, id: key, draftExercise: e.exercise || "", draftMinutes: e.minutes, draftDate: e.date };
   } else if (kind === "weight") {
     const w = weightEntries.find(x => x.date === key);
@@ -5422,7 +5604,7 @@ function openEdit(kind, key) {
   } else if (kind === "exercise-master") {
     const x = exerciseMaster.find(i => i.id === key);
     if (!x) return;
-    editing = { kind, id: key, tempPart: x.part, draftName: x.name || "" };
+    editing = { kind, id: key, tempPart: x.part, draftName: x.name || "", draftHow: x.how || "" };
   } else if (kind === "meal-master") {
     const m = mealMaster.find(i => i.id === key);
     if (!m) return;
@@ -5436,6 +5618,7 @@ function bindEditModalDraftInputs() {
     "edit-exercise": "draftExercise", "edit-reps": "draftReps", "edit-weight": "draftWeight",
     "edit-minutes": "draftMinutes", "edit-date": "draftDate", "edit-text": "draftText", "edit-calories": "draftCalories",
     "edit-protein": "draftProtein", "edit-fat": "draftFat", "edit-carb": "draftCarb", "edit-master-name": "draftName",
+    "edit-master-how": "draftHow",
   };
   Object.keys(map).forEach((id) => {
     const inp = document.getElementById(id);
@@ -5466,6 +5649,8 @@ function renderEditModal() {
           <div style="flex:1;"><label class="label">回数</label><input type="number" id="edit-reps" value="${editing.draftReps}" class="mono"></div>
           <div style="flex:1;"><label class="label">負荷(kg)</label><input type="number" id="edit-weight" value="${editing.draftWeight}" class="mono"></div>
         </div>
+        <label class="label">感想(任意)</label>
+        <div class="wrap" style="margin-bottom:10px;">${FEELING_OPTIONS.map(f => `<button class="chip ${editing.tempFeeling===f.val?"active-a":""}" data-edit-action="set-feeling" data-val="${f.val}">${f.emoji} ${f.label}</button>`).join("")}</div>
         <label class="label">日付</label><input type="date" id="edit-date" value="${editing.draftDate}" style="margin-bottom:14px;">`;
     } else {
       body = `
@@ -5502,7 +5687,9 @@ function renderEditModal() {
     body = `
       <label class="label">部位</label>
       <div class="wrap" style="margin-bottom:10px;">${PARTS.map(p => `<button class="chip ${editing.tempPart===p?"active-a":""}" data-edit-action="set-part" data-val="${p}">${p}</button>`).join("")}</div>
-      <label class="label">種目名</label><input type="text" id="edit-master-name" value="${esc(editing.draftName||"")}" style="margin-bottom:14px;">`;
+      <label class="label">種目名</label><input type="text" id="edit-master-name" value="${esc(editing.draftName||"")}" style="margin-bottom:10px;">
+      <label class="label">やり方(任意)</label>
+      <textarea id="edit-master-how" rows="6" placeholder="セットの仕方・動き・コツなどを自由に書けます" style="margin-bottom:14px;width:100%;box-sizing:border-box;font-family:inherit;font-size:12.5px;line-height:1.6;padding:8px;border-radius:8px;border:1px solid var(--line);">${esc(editing.draftHow||"")}</textarea>`;
   } else if (editing.kind === "meal-master") {
     body = `
       <label class="label">名前</label><input type="text" id="edit-master-name" value="${esc(editing.draftName||"")}" style="margin-bottom:10px;">
@@ -5539,6 +5726,8 @@ function handleEditSave() {
       const weight = Number(document.getElementById("edit-weight").value);
       if (reps > 0) e.reps = reps;
       if (weight > 0) e.weight = weight;
+      if (editing.tempFeeling) e.feeling = editing.tempFeeling;
+      else delete e.feeling;
     } else {
       const ex = document.getElementById("edit-exercise").value.trim();
       if (ex) e.exercise = ex;
@@ -5588,6 +5777,8 @@ function handleEditSave() {
       const name = document.getElementById("edit-master-name").value.trim();
       if (name) x.name = name;
       x.part = editing.tempPart;
+      const how = document.getElementById("edit-master-how").value.trim();
+      if (how) x.how = how; else delete x.how;
     }
   } else if (editing.kind === "meal-master") {
     const m = mealMaster.find(i => i.id === editing.id);
@@ -5633,12 +5824,16 @@ function handleAddTraining() {
     if (!reps) return;
     const exercise = document.getElementById("exercise-input").value.trim();
     const weight = Number(document.getElementById("weight-input").value) || 0;
-    entries.unshift({
+    const entry = {
       id: uid(), date, type: "strength", createdAt: Date.now(),
       part: selectedPart, exercise, reps: Number(reps), weight,
-    });
+    };
+    if (selectedFeeling) entry.feeling = selectedFeeling;
+    entries.unshift(entry);
     // 次回この種目(または部位)を選んだときに、今回の回数・負荷を提案できるよう覚えておく。
     lastStrengthByExercise[exercise || `(${selectedPart})`] = { reps: Number(reps), weight };
+    // 感想はセットごとに変わりうるので、次の記録では選び直してもらう(前回の値を残さない)。
+    selectedFeeling = null;
   } else {
     const customVal = document.getElementById("cardio-custom-input").value.trim();
     if (selectedCardio === "その他" && !customVal) return;
@@ -5994,10 +6189,13 @@ document.getElementById("app").addEventListener("click", (e) => {
     }
   }
   else if (action === "select-training-type") { trainingSubTab = t.dataset.val; renderTabContent(); }
-  else if (action === "select-part") { selectedPart = t.dataset.val; renderTrainingFormOptions(); }
-  else if (action === "select-exercise") { document.getElementById("exercise-input").value = t.dataset.val; renderTrainingFormOptions(); }
+  else if (action === "select-part") { selectedPart = t.dataset.val; exerciseHowOpen = false; renderTrainingFormOptions(); }
+  else if (action === "select-exercise") { document.getElementById("exercise-input").value = t.dataset.val; exerciseHowOpen = false; renderTrainingFormOptions(); }
+  else if (action === "toggle-exercise-how") { exerciseHowOpen = !exerciseHowOpen; renderTrainingFormOptions(); }
+  else if (action === "toggle-common-rules") { commonRulesOpen = !commonRulesOpen; renderCommonRulesWrap(); }
   else if (action === "select-cardio") { selectedCardio = t.dataset.val; renderTrainingFormOptions(); }
   else if (action === "select-cardio-mode") { cardioInputMode = t.dataset.val; renderTrainingFormOptions(); }
+  else if (action === "select-feeling") { selectedFeeling = (selectedFeeling === t.dataset.val) ? null : t.dataset.val; renderTrainingFormOptions(); }
   else if (action === "weight-step") {
     const inp = document.getElementById("weight-input");
     if (!inp) return;
@@ -6447,6 +6645,7 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
   if (action === "dismiss") { editing = null; renderEditModal(); }
   else if (action === "set-part") { editing.tempPart = t.dataset.val; renderEditModal(); }
   else if (action === "set-exercise") { editing.draftExercise = t.dataset.val; renderEditModal(); }
+  else if (action === "set-feeling") { editing.tempFeeling = (editing.tempFeeling === t.dataset.val) ? null : t.dataset.val; renderEditModal(); }
   else if (action === "set-mealtype") { editing.tempMealType = t.dataset.val; renderEditModal(); }
   else if (action === "save") { handleEditSave(); }
   else if (action === "delete") { handleEditDelete(); }
