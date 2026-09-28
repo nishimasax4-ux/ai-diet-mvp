@@ -209,7 +209,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.21";
+const APP_VERSION = "v5.22";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -746,15 +746,15 @@ function entryDateNoticeInner(kind) {
 function entryDateNoticeHtml(kind) {
   return `<div id="entry-date-notice-${kind}">${entryDateNoticeInner(kind)}</div>`;
 }
-// 体重フォームの入力欄(体重・体脂肪率・腹囲・骨格筋量・骨格筋率)を、渡した記録の
+// 体重フォームの入力欄(体重・体脂肪率・腹囲・骨格筋率)を、渡した記録の
 // 値で一括して差し替える(recがnullなら空欄)。v5.11: 以前は骨格筋量・骨格筋率だけ
 // 差し替え漏れがあり、過去の日付を選んで記録すると最新の値がその日に保存されていた。
+// v5.22: 骨格筋量は入力欄を廃止し、骨格筋率と体重から自動計算する方式に変更。
 function fillWeightForm_(rec) {
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v != null ? v : ""; };
   set("weight-value-input", rec ? rec.weight : null);
   set("weight-bodyfat-input", rec ? rec.bodyFat : null);
   set("weight-waist-input", rec ? rec.waist : null);
-  set("weight-muscle-input", rec ? rec.muscle : null);
   set("weight-muscle-rate-input", rec ? rec.muscleRate : null);
 }
 // 体重フォームの初期値に使う記録。今日の日付なら直近の記録(毎日の入力の手間を減らすため)、
@@ -2202,12 +2202,18 @@ const BODYFAT_MIN = 3, BODYFAT_MAX = 60;
 // 腹囲として受け付ける範囲(cm)。体脂肪率と同様、入力ミス(メジャーの目盛りの
 // 読み違い等)とみなせる極端な値は採用しない(v46.8)。
 const WAIST_MIN = 40, WAIST_MAX = 200;
-// 骨格筋量として受け付ける範囲(kg・v5.9)。体組成計で測れる現実的な範囲の外側は、
-// 体脂肪率・腹囲と同様に入力ミスとみなして無視する。
-const MUSCLE_MIN = 10, MUSCLE_MAX = 60;
-// 骨格筋率として受け付ける範囲(%・v5.10)。骨格筋量(kg)と同じ考え方で、
+// 骨格筋率として受け付ける範囲(%・v5.10)。体脂肪率・腹囲と同じ考え方で、
 // 現実的にありえない値は入力ミスとみなして無視する。
 const MUSCLE_RATE_MIN = 5, MUSCLE_RATE_MAX = 60;
+// 骨格筋量(kg)を返す(v5.22)。以前は手入力の欄があったが、骨格筋率(%)さえ
+// 記録すれば体重から自動計算できるため入力欄を廃止した。骨格筋率が無い日はkgも出さない。
+// 旧バージョンで直接kgを手入力した記録が端末に残っている場合は、互換のためそちらを優先する。
+function muscleKgFor_(w) {
+  if (!w) return null;
+  if (w.muscle != null) return w.muscle;
+  if (w.muscleRate != null && w.weight) return round1_(w.weight * w.muscleRate / 100);
+  return null;
+}
 // 目標カロリーの計算に使う体脂肪率。1回の測定値をそのまま使わず、直近の平均で均す。
 // 家庭用の体組成計(BIA方式)は体内の水分量に強く影響され、時間帯・食事・入浴の前後で
 // 数%動くため、単発の値を使うと目標カロリーが日ごとに数十kcal揺れて使いにくくなる。
@@ -2572,13 +2578,15 @@ function waistCardHtml() {
 }
 // 骨格筋量の推移(v5.9)。腹囲カードとほぼ同じ作りだが、骨格筋量は増えるほど
 // 良い指標なので、トレンドの色(増加=緑系/減少=赤系)は腹囲と逆にしてある。
+// v5.22: kgは手入力欄を廃止し、骨格筋率(%)と体重から計算した値(muscleKgFor_)を使う。
 function muscleCardHtml() {
   const withMuscle = weightEntries
-    .filter(w => w.muscle != null)
-    .sort((a, b) => a.date < b.date ? -1 : 1);
+    .map(w => ({ w, kg: muscleKgFor_(w) }))
+    .filter(x => x.kg != null)
+    .sort((a, b) => a.w.date < b.w.date ? -1 : 1);
   if (!withMuscle.length) return "";
   const last = withMuscle[withMuscle.length - 1];
-  const points = withMuscle.map(w => ({ date: w.date, value: w.muscle }));
+  const points = withMuscle.map(x => ({ date: x.w.date, value: x.kg }));
   const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
   const chart = lineChartSvg(points, "var(--teal)", null, avg);
   let trendBlock = "";
@@ -2601,11 +2609,11 @@ function muscleCardHtml() {
   return `<div class="card">
     <div class="between" style="margin-bottom:10px;">
       <p class="section-title" style="margin:0;">💪 骨格筋量の推移</p>
-      <span class="muted">${last.date} 時点 ${last.muscle.toFixed(1)}kg</span>
+      <span class="muted">${last.w.date} 時点 ${last.kg.toFixed(1)}kg</span>
     </div>
     ${chart}
     ${trendBlock}
-    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">体組成計の測定値は水分量や測るタイミングで数百g単位で変わります。1回の値ではなく推移で見てください。この項目はGoogle Sheetsには同期されず、この端末の中だけに保存されます。</p>
+    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">骨格筋量(kg)は「体重 × 骨格筋率」から自動で計算した値です。体組成計の測定値は水分量や測るタイミングで数百g単位で変わります。1回の値ではなく推移で見てください。骨格筋率はGoogle Sheetsには同期されず、この端末の中だけに保存されます。</p>
   </div>`;
 }
 // 骨格筋率(%)の推移カード(v5.10)。骨格筋量(kg)と同じ構成だが、単位が%なので
@@ -3081,7 +3089,7 @@ function importJsonFile(file) {
 
 // ============ オムロン体組成計CSV 取り込み(v5.10) ============
 // オムロン connectアプリの「データエクスポート」で書き出されるCSVを取り込み、
-// 骨格筋率(%)・骨格筋量(kg)・体重・体脂肪率をまとめて記録できるようにする。
+// 骨格筋率(%)・体重・体脂肪率をまとめて記録できるようにする(骨格筋量kgは計算値)。
 // (骨格筋率は毎回手入力するには手間な項目なので、まとめて読み込めることに意味がある)
 // ダブルクォート囲み・カンマ区切りの簡易CSVパーサ。オムロンのエクスポートは値を
 // すべて""で囲んでいるが、念のため""でのエスケープ(RFC4180)にも対応しておく。
@@ -3121,13 +3129,12 @@ function parseOmronDateTime_(raw) {
 // ヘッダー行から必要な列の位置を探す。表記ゆれ(「骨格筋率」表記の機種がある等)に
 // ある程度耐えられるよう、キーワードでゆるく判定する。
 function detectOmronColumns_(header) {
-  const idx = { date: -1, weight: -1, bodyFat: -1, muscle: -1, muscleRate: -1 };
+  const idx = { date: -1, weight: -1, bodyFat: -1, muscleRate: -1 };
   header.forEach((h, i) => {
     const s = String(h || "");
     if (idx.date < 0 && (s.includes("測定日") || s.includes("日付"))) idx.date = i;
     else if (idx.weight < 0 && s.includes("体重")) idx.weight = i;
     else if (idx.bodyFat < 0 && s.includes("体脂肪") && s.includes("%") && !s.includes("量")) idx.bodyFat = i;
-    else if ((s.includes("骨格筋") || s.includes("筋肉")) && s.includes("kg") && idx.muscle < 0) idx.muscle = i;
     else if ((s.includes("骨格筋") || s.includes("筋肉")) && s.includes("%") && idx.muscleRate < 0) idx.muscleRate = i;
   });
   return idx;
@@ -3141,8 +3148,8 @@ function parseOmronCsv_(text) {
   const header = table[0];
   const cols = detectOmronColumns_(header);
   if (cols.date < 0) throw new Error("「測定日」の列が見つかりませんでした。オムロンconnectアプリから書き出したCSVか確認してください");
-  if (cols.muscleRate < 0 && cols.muscle < 0) throw new Error("骨格筋率・骨格筋量の列が見つかりませんでした");
-  const byDate = new Map(); // date -> { date, time, weight, bodyFat, muscle, muscleRate }
+  if (cols.muscleRate < 0) throw new Error("骨格筋率の列が見つかりませんでした");
+  const byDate = new Map(); // date -> { date, time, weight, bodyFat, muscleRate }
   let skipped = 0;
   for (let i = 1; i < table.length; i++) {
     const r = table[i];
@@ -3151,11 +3158,9 @@ function parseOmronCsv_(text) {
     const rec = { date: dt.date, time: dt.time };
     const w = cols.weight >= 0 ? parseFloat(r[cols.weight]) : NaN;
     const bf = cols.bodyFat >= 0 ? parseFloat(r[cols.bodyFat]) : NaN;
-    const mu = cols.muscle >= 0 ? parseFloat(r[cols.muscle]) : NaN;
     const mr = cols.muscleRate >= 0 ? parseFloat(r[cols.muscleRate]) : NaN;
     if (Number.isFinite(w) && w > 0) rec.weight = Math.round(w * 10) / 10;
     if (Number.isFinite(bf) && bf >= BODYFAT_MIN && bf <= BODYFAT_MAX) rec.bodyFat = Math.round(bf * 10) / 10;
-    if (Number.isFinite(mu) && mu >= MUSCLE_MIN && mu <= MUSCLE_MAX) rec.muscle = Math.round(mu * 10) / 10;
     if (Number.isFinite(mr) && mr >= MUSCLE_RATE_MIN && mr <= MUSCLE_RATE_MAX) rec.muscleRate = Math.round(mr * 10) / 10;
     // 同じ日に複数回の測定があれば、最後(時刻が遅い方)を採用する。
     const existing = byDate.get(rec.date);
@@ -3163,7 +3168,7 @@ function parseOmronCsv_(text) {
   }
   const rows = [...byDate.values()].sort((a, b) => a.date < b.date ? -1 : 1);
   if (!rows.length) throw new Error("取り込めるデータがありませんでした");
-  return { rows, skipped, hasWeight: cols.weight >= 0, hasBodyFat: cols.bodyFat >= 0, hasMuscle: cols.muscle >= 0, hasMuscleRate: cols.muscleRate >= 0 };
+  return { rows, skipped, hasWeight: cols.weight >= 0, hasBodyFat: cols.bodyFat >= 0, hasMuscleRate: cols.muscleRate >= 0 };
 }
 // 取り込み内容をまだ反映せず、件数(新規/更新)だけ確認できるプレビューを作る。
 // v5.11: 体重が空欄の行は、その日の記録がまだ無ければ作れない(体重は必須項目)ため、
@@ -3173,7 +3178,7 @@ function buildOmronImportPreview_(parsed) {
   const existingDates = new Set(weightEntries.map(w => w.date));
   const usable = parsed.rows.filter(r =>
     (r.weight != null || existingDates.has(r.date)) &&
-    (r.weight != null || r.bodyFat != null || r.muscle != null || r.muscleRate != null));
+    (r.weight != null || r.bodyFat != null || r.muscleRate != null));
   const noWeight = parsed.rows.length - usable.length;
   if (!usable.length) throw new Error("体重の値が入っている行が無いため、取り込めるデータがありませんでした");
   const newCount = usable.filter(r => !existingDates.has(r.date)).length;
@@ -3202,7 +3207,7 @@ function handleOmronCsvFile(file) {
   reader.readAsText(file);
 }
 // プレビュー内容をweightEntriesに反映する。既存の記録がある日は、CSVに含まれる
-// 項目(体重・体脂肪率・骨格筋量・骨格筋率)だけを上書きし、腹囲など他の項目は残す。
+// 項目(体重・体脂肪率・骨格筋率)だけを上書きし、腹囲など他の項目は残す。
 function applyOmronImport_() {
   if (!omronImportPreview) return;
   let newCount = 0, updateCount = 0;
@@ -3211,7 +3216,6 @@ function applyOmronImport_() {
     const rec = existing ? { ...existing } : { date: r.date };
     if (r.weight != null) rec.weight = r.weight;
     if (r.bodyFat != null) rec.bodyFat = r.bodyFat;
-    if (r.muscle != null) rec.muscle = r.muscle;
     if (r.muscleRate != null) rec.muscleRate = r.muscleRate;
     if (rec.weight == null) return; // 体重が無い記録は作れない(プレビューで除外済みだが念のため)
     weightEntries = weightEntries.filter(w => w.date !== r.date);
@@ -3240,7 +3244,7 @@ function omronImportCardHtml() {
     </div>` : "";
   return `<div class="card">
     <p class="section-title">📥 オムロン体組成計CSVを取り込む</p>
-    <p class="muted" style="font-size:11px;margin:0 0 10px;line-height:1.6;">オムロン connectアプリの「データエクスポート」で書き出したCSVから、体重・体脂肪率・骨格筋量・骨格筋率をまとめて取り込めます。同じ日の記録が既にある場合は、CSVの値で上書きされます(腹囲など他の項目は残ります)。</p>
+    <p class="muted" style="font-size:11px;margin:0 0 10px;line-height:1.6;">オムロン connectアプリの「データエクスポート」で書き出したCSVから、体重・体脂肪率・骨格筋率をまとめて取り込めます(骨格筋量は体重と骨格筋率から自動で計算されます)。同じ日の記録が既にある場合は、CSVの値で上書きされます(腹囲など他の項目は残ります)。</p>
     <input type="file" id="omron-csv-input" accept=".csv,text/csv" class="hidden">
     <button class="chip" data-action="omron-import-pick">📄 CSVファイルを選ぶ</button>
     ${preview}
@@ -4448,7 +4452,7 @@ function weightHtml() {
   const list = sortedDesc.slice(0,8).map(w => `
     <div class="entry-row">
       <span class="mono muted" style="flex:1;">${w.date}</span>
-      <span class="mono">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${w.muscle != null ? ` <span class="muted">筋量${w.muscle}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</span>
+      <span class="mono">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${muscleKgFor_(w) != null ? ` <span class="muted">筋量${muscleKgFor_(w)}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</span>
       <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
       <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
     </div>`).join("");
@@ -4465,6 +4469,8 @@ function weightHtml() {
         <div class="kpi-v">${bmi ? bmi.bmi.toFixed(1) : "−"}<span>${bmi ? bmi.label : ""}</span></div>
         <div class="kpi-d ${bmi ? (bmi.normal ? "good" : "bad") : "neutral"}">${bmi ? `標準まで${bmi.normal ? "維持中" : round1_(Math.abs(latest.weight - bmi.standardWeight)) + "kg"}` : "身長未登録"}</div>
       </div>` : "";
+  // v5.22: 骨格筋量(kg)は入力欄を廃止し、骨格筋率と体重から計算する。
+  const latestMuscleKg = latest ? muscleKgFor_(latest) : null;
   return `
     <div class="kpi-grid">
       <div class="kpi">
@@ -4484,8 +4490,8 @@ function weightHtml() {
       </div>
       <div class="kpi">
         <div class="kpi-l">骨格筋量</div>
-        <div class="kpi-v">${latest && latest.muscle != null ? latest.muscle : "−"}<span>kg</span></div>
-        <div class="kpi-d neutral">${latest && latest.muscle != null ? latest.date : "任意項目"}</div>
+        <div class="kpi-v">${latestMuscleKg != null ? latestMuscleKg : "−"}<span>kg</span></div>
+        <div class="kpi-d neutral">${latestMuscleKg != null ? latest.date : "任意項目"}</div>
       </div>
       <div class="kpi">
         <div class="kpi-l">骨格筋率</div>
@@ -4515,15 +4521,11 @@ function weightHtml() {
           <input type="number" step="0.1" id="weight-waist-input" placeholder="例: 82.0" class="mono" value="${formSrc && formSrc.waist != null ? formSrc.waist : ""}">
         </div>
         <div class="f-val">
-          <label class="label">骨格筋量 (kg・任意)</label>
-          <input type="number" step="0.1" id="weight-muscle-input" placeholder="例: 28.0" class="mono" value="${formSrc && formSrc.muscle != null ? formSrc.muscle : ""}">
-        </div>
-        <div class="f-val">
           <label class="label">骨格筋率 (%・任意)</label>
           <input type="number" step="0.1" id="weight-muscle-rate-input" placeholder="例: 29.0" class="mono" value="${formSrc && formSrc.muscleRate != null ? formSrc.muscleRate : ""}">
         </div>
       </div>
-      <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">体脂肪率は任意です。記録すると、基礎代謝を体組成から計算する式(Katch-McArdle)に自動で切り替わり、目標カロリーとたんぱく質の目安がより実態に近づきます。腹囲・骨格筋量・骨格筋率も任意で、体組成計の表示値をそのまま記録できます(骨格筋量・骨格筋率はこの端末の中だけに保存され、Google Sheetsへの同期対象には含まれません)。</p>
+      <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">体脂肪率は任意です。記録すると、基礎代謝を体組成から計算する式(Katch-McArdle)に自動で切り替わり、目標カロリーとたんぱく質の目安がより実態に近づきます。腹囲・骨格筋率も任意で、体組成計の表示値をそのまま記録できます(骨格筋率はこの端末の中だけに保存され、Google Sheetsへの同期対象には含まれません)。骨格筋量(kg)は入力欄を設けず、体重×骨格筋率から自動で計算して表示します。</p>
       ${entryDateNoticeHtml("weight")}
       <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
       ${list}
@@ -5006,7 +5008,7 @@ function calendarWeightDayHtml_(d) {
   const w = weightEntries.find(x => x.date === d);
   const inner = w ? `<div class="entry-row">
       <div class="badge" style="background:var(--sand-soft);">⚖️</div>
-      <div style="flex:1;">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${w.muscle != null ? ` <span class="muted">筋量${w.muscle}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</div>
+      <div style="flex:1;">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${muscleKgFor_(w) != null ? ` <span class="muted">筋量${muscleKgFor_(w)}kg</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋率${w.muscleRate}%</span>` : ""}</div>
       <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
       <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
     </div>` : "";
@@ -5595,7 +5597,7 @@ function openEdit(kind, key) {
   } else if (kind === "weight") {
     const w = weightEntries.find(x => x.date === key);
     if (!w) return;
-    editing = { kind, date: key, draftWeight: w.weight, draftBodyFat: w.bodyFat, draftWaist: w.waist, draftMuscle: w.muscle, draftMuscleRate: w.muscleRate, draftDate: w.date };
+    editing = { kind, date: key, draftWeight: w.weight, draftBodyFat: w.bodyFat, draftWaist: w.waist, draftMuscleRate: w.muscleRate, draftDate: w.date };
   } else if (kind === "meal") {
     const m = mealEntries.find(x => x.id === key);
     if (!m) return;
@@ -5664,7 +5666,6 @@ function renderEditModal() {
       <label class="label">体重(kg)</label><input type="number" step="0.1" id="edit-weight" value="${editing.draftWeight}" class="mono" style="margin-bottom:10px;">
       <label class="label">体脂肪率(%・任意)</label><input type="number" step="0.1" id="edit-bodyfat" value="${editing.draftBodyFat != null ? editing.draftBodyFat : ""}" placeholder="例: 29.0" class="mono" style="margin-bottom:10px;">
       <label class="label">腹囲(cm・任意)</label><input type="number" step="0.1" id="edit-waist" value="${editing.draftWaist != null ? editing.draftWaist : ""}" placeholder="例: 82.0" class="mono" style="margin-bottom:10px;">
-      <label class="label">骨格筋量(kg・任意)</label><input type="number" step="0.1" id="edit-muscle" value="${editing.draftMuscle != null ? editing.draftMuscle : ""}" placeholder="例: 28.0" class="mono" style="margin-bottom:10px;">
       <label class="label">骨格筋率(%・任意)</label><input type="number" step="0.1" id="edit-muscle-rate" value="${editing.draftMuscleRate != null ? editing.draftMuscleRate : ""}" placeholder="例: 29.0" class="mono" style="margin-bottom:14px;">`;
   } else if (editing.kind === "meal") {
     body = `
@@ -5748,16 +5749,16 @@ function handleEditSave() {
       const bfRaw = bfEl ? parseFloat(bfEl.value) : NaN;
       const waistEl = document.getElementById("edit-waist");
       const waistRaw = waistEl ? parseFloat(waistEl.value) : NaN;
-      const muscleEl = document.getElementById("edit-muscle");
-      const muscleRaw = muscleEl ? parseFloat(muscleEl.value) : NaN;
       const muscleRateEl = document.getElementById("edit-muscle-rate");
       const muscleRateRaw = muscleRateEl ? parseFloat(muscleRateEl.value) : NaN;
       weightEntries = weightEntries.filter(x => x.date !== editing.date && x.date !== newDate);
       const rec = { date: newDate, weight: newVal };
       if (Number.isFinite(bfRaw) && bfRaw >= BODYFAT_MIN && bfRaw <= BODYFAT_MAX) rec.bodyFat = Math.round(bfRaw * 10) / 10;
       if (Number.isFinite(waistRaw) && waistRaw >= WAIST_MIN && waistRaw <= WAIST_MAX) rec.waist = Math.round(waistRaw * 10) / 10;
-      if (Number.isFinite(muscleRaw) && muscleRaw >= MUSCLE_MIN && muscleRaw <= MUSCLE_MAX) rec.muscle = Math.round(muscleRaw * 10) / 10;
       if (Number.isFinite(muscleRateRaw) && muscleRateRaw >= MUSCLE_RATE_MIN && muscleRateRaw <= MUSCLE_RATE_MAX) rec.muscleRate = Math.round(muscleRateRaw * 10) / 10;
+      // v5.22: 骨格筋量(kg)の入力欄は廃止したが、旧バージョンで手入力した値が
+      // 残っている場合は、他の項目を編集しても消えないよう引き継ぐ。
+      if (w.muscle != null) rec.muscle = w.muscle;
       weightEntries.unshift(rec);
     }
   } else if (editing.kind === "meal") {
@@ -5880,10 +5881,11 @@ function handleAddWeight() {
   const bfRaw = bfEl ? parseFloat(bfEl.value) : NaN;
   const waistEl = document.getElementById("weight-waist-input");
   const waistRaw = waistEl ? parseFloat(waistEl.value) : NaN;
-  const muscleEl = document.getElementById("weight-muscle-input");
-  const muscleRaw = muscleEl ? parseFloat(muscleEl.value) : NaN;
   const muscleRateEl = document.getElementById("weight-muscle-rate-input");
   const muscleRateRaw = muscleRateEl ? parseFloat(muscleRateEl.value) : NaN;
+  // v5.22: 骨格筋量(kg)の入力欄は廃止した。旧バージョンで手入力した値がこの日の
+  // 記録に既にあれば、上書き保存で消えてしまわないよう引き継ぐ。
+  const existingMuscle = weightEntries.find(w => w.date === date);
   weightEntries = weightEntries.filter(w => w.date !== date);
   const rec = { date, weight: val };
   // 体脂肪率は任意。入力ミス(2.9%や290%など)がそのまま目標カロリーを狂わせないよう、
@@ -5891,10 +5893,9 @@ function handleAddWeight() {
   if (Number.isFinite(bfRaw) && bfRaw >= BODYFAT_MIN && bfRaw <= BODYFAT_MAX) rec.bodyFat = Math.round(bfRaw * 10) / 10;
   // 腹囲も任意。同様に、明らかな入力ミスとみなせる範囲外の値は採用しない(v46.8)。
   if (Number.isFinite(waistRaw) && waistRaw >= WAIST_MIN && waistRaw <= WAIST_MAX) rec.waist = Math.round(waistRaw * 10) / 10;
-  // 骨格筋量も任意(v5.9)。同様に明らかな入力ミスは採用しない。
-  if (Number.isFinite(muscleRaw) && muscleRaw >= MUSCLE_MIN && muscleRaw <= MUSCLE_MAX) rec.muscle = Math.round(muscleRaw * 10) / 10;
   // 骨格筋率も任意(v5.10)。
   if (Number.isFinite(muscleRateRaw) && muscleRateRaw >= MUSCLE_RATE_MIN && muscleRateRaw <= MUSCLE_RATE_MAX) rec.muscleRate = Math.round(muscleRateRaw * 10) / 10;
+  if (existingMuscle && existingMuscle.muscle != null) rec.muscle = existingMuscle.muscle;
   weightEntries.unshift(rec);
   saveState(); renderTabContent(); scheduleSync();
 }
