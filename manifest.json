@@ -2,7 +2,7 @@
   "name": "Training Log + AI",
   "short_name": "Training Log",
   "description": "摂取カロリーと消費カロリーを記録・管理するトレーニング日誌",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#EEF1F6",

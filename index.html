@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.1";
+const APP_VERSION = "v6.3";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -660,8 +660,18 @@ function versionNum_(v) {
   const parts = String(v || "").replace(/^v/i, "").split(".").map(n => Number(n) || 0);
   return (parts[0] || 0) * 1000 + (parts[1] || 0);
 }
+// v6.1: Cloudflare Workersバックエンド(cloudflare-worker/)は"v1.0-cf"のように
+// 末尾に"-cf"が付く、Apps Scriptとは別系統のバージョン表記を使う。これをApps Script用の
+// REQUIRED_BACKEND_VERSION(v44など)と比べてしまうと、桁が全く違うために常に
+// 「古いバージョンです」という誤った警告が出てしまっていた。この関数でApps Script製の
+// バックエンドかどうかを見分け、Cloudflare Workersのときはこの版数チェック自体をしない
+// (Workersはapps-script.gsとは別のコードで、常に配布物と同じ版数のはずのため)。
+function isCloudflareBackend_() {
+  return /-cf$/i.test(String(backendVersion || ""));
+}
 function backendOutdatedByVersion_() {
-  return backendVersion != null && versionNum_(backendVersion) < versionNum_(REQUIRED_BACKEND_VERSION);
+  return backendVersion != null && !isCloudflareBackend_()
+    && versionNum_(backendVersion) < versionNum_(REQUIRED_BACKEND_VERSION);
 }
 let backendAiKeys = null;   // { gemini: bool, groq: bool } | null
 let backendChecked = false;
@@ -5357,7 +5367,7 @@ function settingsHtml() {
       <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">ふだんは変更のあった記録だけを自動で送っています。シートの中身がおかしいときは、このボタンで全件を送り直せます(シートはこの端末の内容で置き換わります)。</p>
       ${backendAiKeys ? `
       <div style="background:${backendAiKeys.groq ? "var(--paper)" : "#FDF1E7"};border-radius:8px;padding:10px;margin-top:12px;">
-        <p style="font-size:11.5px;margin:0 0 6px;font-weight:700;">AI接続の状態${backendVersion ? ` <span class="muted mono" style="font-weight:400;">(Apps Script ${esc(backendVersion)})</span>` : ""}</p>
+        <p style="font-size:11.5px;margin:0 0 6px;font-weight:700;">AI接続の状態${backendVersion ? ` <span class="muted mono" style="font-weight:400;">(${isCloudflareBackend_() ? "Cloudflare Workers" : "Apps Script"} ${esc(backendVersion)})</span>` : ""}</p>
         <p class="muted" style="font-size:11px;margin:0 0 ${backendAiKeys.groq ? "0" : "8px"};line-height:1.7;">
           Groq: <b style="color:${backendAiKeys.groq ? "var(--teal)" : "var(--coral)"};">${backendAiKeys.groq ? "設定済み ✅" : "未設定"}</b> ／
           Gemini: <b style="color:${backendAiKeys.gemini ? "var(--teal)" : "var(--ink-faint)"};">${backendAiKeys.gemini ? "設定済み ✅" : "未設定"}</b>

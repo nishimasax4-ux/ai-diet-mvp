@@ -20,17 +20,41 @@
  * 【触らないもの】
  * Google Sheets(Apps Script)との通信はPOSTで、ここでは一切横取りしません。
  * 同期やAIの応答が控えに残ることはありません。
+ *
+ * 【v6.3で追加: リダイレクトを経た応答をそのまま使わない】
+ * ホスティング先(Cloudflare Pagesなど)によっては、/index.html のような
+ * 拡張子付きのURLに直接アクセスすると、正規のURL(/ など)へ自動的に
+ * 転送(リダイレクト)されることがある。このとき取れる応答は
+ * response.redirected === true になるが、これをそのままrespondWith()で
+ * 返したり控え(Cache)に保存したりすると、iOS Safariだけで
+ * 「Response served by service worker has redirections」というエラーになり、
+ * ホーム画面から開いたアプリが真っ白(エラー画面)になってしまう(Chrome等では
+ * 問題にならないため気づきにくい)。stripRedirect_()で、リダイレクトを経た
+ * 応答だけ中身をコピーした「まっさらな」Responseに作り直してから使う。
  */
-const VERSION = 'v6.1';
+const VERSION = 'v6.3';
 const CACHE = 'training-log-' + VERSION;
 // このサービスワーカーが置かれている場所(GitHub Pagesのサブフォルダでも動くよう相対で解決)。
 const HTML_URL = new URL('./index.html', self.registration.scope).href;
 const ROOT_URL = new URL('./', self.registration.scope).href;
 
+function stripRedirect_(res) {
+  if (!res || !res.redirected) return Promise.resolve(res);
+  return res.arrayBuffer().then((body) =>
+    new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers })
+  );
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
-      .then((c) => c.addAll([ROOT_URL, HTML_URL]))
+      .then((c) => Promise.all([ROOT_URL, HTML_URL].map((url) =>
+        fetch(url, { cache: 'reload' })
+          .then((res) => stripRedirect_(res))
+          .then((res) => c.put(url, res))
+          // 1つのURLで失敗しても、もう一方は試す(どちらもダメでも次のcatchで握り潰す)。
+          .catch(() => {})
+      )))
       // 初回にネットが不安定でも、インストール自体は失敗させない
       // (次にオンラインで開いたときにfetch側で控えが作られる)。
       .catch(() => {})
@@ -65,6 +89,7 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     fetch(request)
+      .then((res) => stripRedirect_(res))
       .then((res) => {
         // 取れたら控えを最新にしておく(次のオフライン時に備える)。
         if (res && res.ok) {
