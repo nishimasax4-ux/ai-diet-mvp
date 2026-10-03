@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1B3E63"/>
+      <stop offset="55%" stop-color="#2C4A7C"/>
+      <stop offset="100%" stop-color="#16243d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="38%" r="55%">
+      <stop offset="0%" stop-color="#C4483A" stop-opacity="0.55"/>
+      <stop offset="60%" stop-color="#C4483A" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#C4483A" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="210" r="210" fill="url(#glow)"/>
+
+  <!-- speed/motion lines (back leg side) -->
+  <g stroke="#AD7B12" stroke-width="10" stroke-linecap="round" opacity="0.55">
+    <line x1="352" y1="330" x2="398" y2="318"/>
+    <line x1="358" y1="356" x2="410" y2="348"/>
+    <line x1="362" y1="382" x2="406" y2="378"/>
+  </g>
+
+  <!-- body: legs (split power-jerk stance) -->
+  <g fill="none" stroke="#EEF1F6" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 262 298 L 226 372 L 204 432"/>
+    <path d="M 262 298 L 312 364 L 336 420"/>
+  </g>
+  <!-- feet -->
+  <g stroke="#EEF1F6" stroke-width="34" stroke-linecap="round">
+    <line x1="204" y1="432" x2="176" y2="432"/>
+    <line x1="336" y1="420" x2="368" y2="428"/>
+  </g>
+
+  <!-- torso -->
+  <path d="M 262 298 L 254 208" fill="none" stroke="#EEF1F6" stroke-width="38" stroke-linecap="round"/>
+
+  <!-- arms up to bar -->
+  <g fill="none" stroke="#EEF1F6" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 254 212 L 196 160 L 168 112"/>
+    <path d="M 254 212 L 312 156 L 344 110"/>
+  </g>
+
+  <!-- head -->
+  <circle cx="256" cy="156" r="0" fill="none"/>
+  <circle cx="254" cy="168" r="36" fill="#EEF1F6"/>
+  <!-- small neck gap to separate head from torso (pictogram style) -->
+  <circle cx="254" cy="196" r="14" fill="#1B3E63"/>
+
+  <!-- barbell -->
+  <line x1="150" y1="104" x2="362" y2="108" stroke="#EEF1F6" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="150" cy="104" r="30" fill="#AD7B12" stroke="#16243d" stroke-width="4"/>
+  <circle cx="362" cy="108" r="30" fill="#AD7B12" stroke="#16243d" stroke-width="4"/>
+  <circle cx="150" cy="104" r="14" fill="#16243d" opacity="0.35"/>
+  <circle cx="362" cy="108" r="14" fill="#16243d" opacity="0.35"/>
+</svg>
