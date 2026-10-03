@@ -205,11 +205,15 @@ function saveConfig() {
   try { localStorage.setItem(CONFIG_KEY, JSON.stringify(gasConfig)); }
   catch (e) { console.error("config save error", e); }
 }
+// v5.23: 同期先はGoogle Apps Scriptに限らず、同じAPIを実装していれば
+// Cloudflare Workers等の別バックエンドでもよいことにした(詳しくはcloudflare-worker/)。
+// そのため、以前は "https://script.google.com/macros/" で始まるURLしか受け付けて
+// いなかったのを、https://で始まるURL全般を受け付けるよう緩めた。
 function gasConfigured() {
-  return !!(gasConfig.url && /^https:\/\/script\.google\.com\/macros\//.test(gasConfig.url));
+  return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v5.22";
+const APP_VERSION = "v6.0";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -5375,17 +5379,17 @@ function settingsHtml() {
           </div>
           <button class="chip" data-action="reveal-gas-config">変更する</button>
         </div>` : `
-        <label class="label">Apps Script Webアプリ URL</label>
+        <label class="label">バックエンドのURL(Apps Script または Cloudflare Workers)</label>
         <input type="url" id="gas-url-input" value="${esc(gasConfig.url)}" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:8px;font-size:12px;">
         <label class="label">アクセストークン</label>
-        <input type="password" id="gas-token-input" value="${esc(gasConfig.token)}" placeholder="Apps Script側に設定した合言葉" style="margin-bottom:8px;font-size:12px;">
+        <input type="password" id="gas-token-input" value="${esc(gasConfig.token)}" placeholder="バックエンド側に設定した合言葉" style="margin-bottom:8px;font-size:12px;">
         <label class="label">スプレッドシートのURL(任意)</label>
         <input type="url" id="gas-sheet-url-input" value="${esc(gasConfig.sheetUrl || "")}" placeholder="https://docs.google.com/spreadsheets/d/.../edit" style="margin-bottom:8px;font-size:12px;">
         <div class="row">
           <button class="chip active-b" data-action="save-gas-config">接続設定を保存</button>
           ${gasConfigured() ? `<button class="chip" data-action="cancel-gas-edit">キャンセル</button>` : ""}
         </div>
-        <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">上の2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはApps Script側のスクリプトプロパティ <span class="mono">APP_TOKEN</span> と一致させてください。保存すると、次にこの画面を開いたときは内容が伏せて表示されます。<br>スプレッドシートのURLは「📊 スプレッドシートを開く」ボタン用で、同期には使いません。ブラウザでスプレッドシートを開いてアドレスバーからコピーしたものを貼り付けてください。空欄のままでも構いません。</p>`}
+        <p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.5;">上の2つはソースコードには含めず、この端末のブラウザにのみ保存されます。トークンはバックエンド側に設定した合言葉(Apps Scriptなら <span class="mono">APP_TOKEN</span> スクリプトプロパティ)と一致させてください。保存すると、次にこの画面を開いたときは内容が伏せて表示されます。<br>配布物のApps Script(<span class="mono">apps-script-1file.gs</span>)のほか、同じAPIを実装したCloudflare Workers版(<span class="mono">cloudflare-worker/</span>)のURLも使えます。どちらも同期・AI機能の中身は同じです。<br>スプレッドシートのURLは「📊 スプレッドシートを開く」ボタン用で、同期には使いません。ブラウザでスプレッドシートを開いてアドレスバーからコピーしたものを貼り付けてください。空欄のままでも構いません。</p>`}
       </div>
     </div>
 

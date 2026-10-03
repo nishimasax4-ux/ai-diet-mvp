@@ -6,7 +6,44 @@ Claude の API は一切呼び出さないため、利用枠(usage)は消費し�
 基本機能(運動・体重・食事の記録、カロリー収支、内蔵の食品辞書など)はすべてルールベースで完結し、外部通信は発生しません。
 **唯一の例外**が、任意で使える「🔍 AIで栄養を調べる」機能と「🤖 AIのひとこと」機能です。これらだけは設定した場合に限り、Google Gemini APIに食品名や直近の記録を送って概算・コメントを取得します(詳しくは後述)。使わなければ今まで通り完全オフラインで動作します。
 
-## 今回の更新内容 [v5.22](骨格筋量を骨格筋率からの自動計算に変更・入力欄を廃止)
+## 今回の更新内容 [v6.0](バージョン表記をv6系に変更)
+
+**「V6で作成」というご要望**に対応し、バージョン表記を `v5.x` 系から `v6.x` 系に切り替えました。
+
+- 機能面の変更はありません(表示される版数が `v5.24` → `v6.0` に変わるだけです)。骨格筋量の自動計算・やり方表示・Cloudflare Workers/Pagesへの移行対応など、これまでの更新内容はすべてそのまま引き継がれています。
+- 今後の更新は `v6.1`・`v6.2`…のように、この`v6.x`系列の中で版数を重ねていきます。
+
+### 更新するファイル
+
+**`index.html` だけです(版数表記のみの変更)。** `sw.js` も版数だけ変わっています。Apps Scriptの変更はありません。
+
+## [v5.24](ホスティングもCloudflare Pagesに移せるように)
+
+**「クラウドフレア構成に変更したい」というご要望**(「ホスティングもCloudflare Pagesに移したい」)に対応しました。
+
+- `cloudflare-pages/README.md` に、今GitHub Pagesで公開している `index.html`・`sw.js` をCloudflare Pagesで公開するための手順を追加しました。GitHubリポジトリをそのまま接続する方法(推奨・pushのたびに自動デプロイ)と、Wrangler CLIで直接アップロードする方法の2通りを案内しています。
+- **アプリのコード自体は変更していません。** Service Workerの登録はもともと相対パス(`sw.js`・`self.registration.scope`基準)で書かれていて、ホスティング先やURLの形に依存しないため、GitHub PagesでもCloudflare Pagesでもそのまま動きます。
+- 乗り換え時の注意点(localStorageのデータはURLごとに独立しているため「⬇️ JSONで書き出し」→「⬆️ JSONから復元」かGoogle Sheetsからの復元で引き継ぐ必要があること、ホーム画面に追加しているPWAは新しいURLで追加し直す必要があることなど)もガイドにまとめています。
+- v5.23で追加したCloudflare Workers版バックエンド(`cloudflare-worker/`)とは独立した変更です。ホスティング・バックエンドのどちらか一方だけをCloudflareに移すことも、両方移すこともできます。
+
+### 更新するファイル
+
+**`index.html` だけです(版数表記のみの変更)。** Apps Scriptの変更はありません。Cloudflare Pagesへの移行は、`cloudflare-pages/README.md` の手順に沿って進めてください。
+
+## [v5.23](バックエンドをCloudflare Workersでも動かせるように)
+
+**「このアプリもクラウドフレア化したい」というご要望**に対応しました。
+
+- これまでGoogle Apps Script専用だった同期・AI機能のバックエンドを、**同じAPIを実装していれば別の実行環境でも使える**ようにしました。
+- `cloudflare-worker/` フォルダに、`apps-script-1file.gs` と機能・応答形式が完全に同じ、Cloudflare Workers版のバックエンドを追加しました。データの保存先は引き続きあなたのGoogleスプレッドシートです(Google Sheets APIをサービスアカウント経由で呼び出します)。デプロイ手順は `cloudflare-worker/README.md` にまとめてあります。
+- アプリ側(`index.html`)は、接続設定のURL欄がこれまでApps ScriptのURL形式(`https://script.google.com/macros/...`)に限定されていたのを、`https://` で始まるURL全般を受け付けるように広げました。設定タブの文言も「Apps ScriptのURL」から「バックエンドのURL(Apps Script または Cloudflare Workers)」に変更しています。既存のApps Script接続はそのまま引き続き使えます(変更の必要はありません)。
+- Cloudflare Workers版には、Apps Script版の`LockService`による排他制御(同時書き込みの待ち合わせ)は同じ形では再現していません。個人利用・1〜2台での利用であれば実用上の影響はほぼ無い想定です(詳しくは`cloudflare-worker/README.md`の「既知の制限」を参照してください)。
+
+### 更新するファイル
+
+**Apps Script版をお使いの方は `index.html` だけで大丈夫です。** `sw.js` は版数だけ変わっています。Cloudflare Workers版を新しく使いたい方は、`cloudflare-worker/README.md` の手順に沿ってデプロイしてください。
+
+## [v5.22](骨格筋量を骨格筋率からの自動計算に変更・入力欄を廃止)
 
 **「骨格筋量は率から計算に変更・入力欄なしで」というご要望**に対応しました。
 
