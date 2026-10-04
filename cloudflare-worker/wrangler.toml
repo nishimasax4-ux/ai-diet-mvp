@@ -1,0 +1,14 @@
+name = "training-log-backend"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# KV Namespace(最終書き込み時刻・Googleアクセストークンのキャッシュに使用)。
+# `npx wrangler kv namespace create SYNC_KV` を実行すると id が表示されるので、
+# 下の "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" をその値に置き換えてください。
+kv_namespaces = [
+  { binding = "SYNC_KV", id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }
+]
+
+# シークレット(APP_TOKEN・SHEET_ID・GOOGLE_CLIENT_EMAIL・GOOGLE_PRIVATE_KEY・
+# GEMINI_API_KEY・GROQ_API_KEY)は、このファイルには書きません。
+# `wrangler secret put <名前>` でそれぞれ個別に設定してください(README.md参照)。

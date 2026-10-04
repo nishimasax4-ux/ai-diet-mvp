@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.3";
+const APP_VERSION = "v6.4";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -722,7 +722,6 @@ let gasConfigRevealed = false;
 // 運動・食事の履歴(リスト表示)で、どの日付をアコーディオン展開中か(v44.8)。
 // 初期状態はすべて閉じておき、見たい日だけタップして開く(要望⑥)。
 let trainingHistoryOpenDates = new Set();
-let distanceHistoryShowAll = false; // v5.7: 移動距離一覧の「もっと見る」展開状態
 let trainingHistoryShowAll = false; // v5.7: 運動履歴(10日より前)の展開状態
 let mealHistoryShowAll = false; // v5.7: 食事履歴(10日より前)の展開状態
 let selectedShareVariant = "data"; // v5.9: SNS投稿文の選択中バリアント(v5.11: data/meal/exercise)
@@ -1184,6 +1183,22 @@ const AI_PROMPTS = {
     '- 具体的な数字や種目名に触れ、記録をちゃんと見ていると伝わる内容にする\n' +
     '- 現在体脂肪率パーセント・現在腹囲cm、体重体脂肪率腹囲の推移が記録にあれば、体重だけでなくそれらの変化にも触れる(体重は横ばいでも腹囲が減っている、など体重だけでは分からない変化を拾えるとよい)\n' +
     '- 良かった点を1つ、次にやると良いことを1つ、必ず入れる\n' +
+    '- 断定的な医学的助言・診断はしない。極端な食事制限は勧めない\n' +
+    '- 記録が少ない日を責めない。前向きで落ち着いた口調で\n' +
+    '- 見出しや箇条書きは使わず、地の文だけで書く\n\n' +
+    '### 記録\n' + JSON.stringify(ctx),
+
+  // v6.4: 「食事、特にPFCの摂取についてアドバイスをAIにもらえるように」というご要望への
+  // 対応。advice(上)は体重・運動も含めた全体コメントだが、こちらは食事タブ専用で、
+  // たんぱく質・脂質・炭水化物のバランスに絞って踏み込んだコメントをもらう。
+  mealAdvice: (ctx) =>
+    'あなたは管理栄養士のサポート役です。\n' +
+    '以下は利用者の直近2週間の食事記録(JSON)です。とくにたんぱく質(P)・脂質(F)・炭水化物(C)の' +
+    '摂取バランスに注目して、日本語で3〜4文の短いコメントを書いてください。\n\n' +
+    '### 守ること\n' +
+    '- 目標(目標kcal・目標たんぱく質g・目標脂質g・目標炭水化物g)と直近の平均を比べ、何が足りていて' +
+    '何が不足・過多かに具体的な数字で触れる(目標が無い場合は、PFCの配分バランスだけで判断する)\n' +
+    '- 「よく食べているもの」があれば、それも踏まえて次の一食で変えると良い具体的な提案を1つ入れる\n' +
     '- 断定的な医学的助言・診断はしない。極端な食事制限は勧めない\n' +
     '- 記録が少ない日を責めない。前向きで落ち着いた口調で\n' +
     '- 見出しや箇条書きは使わず、地の文だけで書く\n\n' +
@@ -1945,6 +1960,20 @@ function loadAiAdvice() {
   // 日付が変わったら前日のコメントは捨てる
   if (aiAdvice && aiAdvice.date !== localDateStr()) aiAdvice = null;
 }
+// v6.4: 食事タブ専用のAIアドバイス(PFCのバランスに絞ったコメント)。仕組みは
+// 上のaiAdviceと同じだが、別のカード・別のボタンで独立して取得・更新できるよう、
+// 状態(mealAiAdvice*)と保存先(MEAL_AI_ADVICE_KEY)を分けている。
+const MEAL_AI_ADVICE_KEY = "training-log-meal-ai-advice";
+let mealAiAdvice = null;          // {date, text}
+let mealAiAdviceStatus = "idle";  // idle | loading | error
+let mealAiAdviceError = null;
+function loadMealAiAdvice() {
+  try {
+    const raw = localStorage.getItem(MEAL_AI_ADVICE_KEY);
+    if (raw) mealAiAdvice = JSON.parse(raw);
+  } catch (e) { mealAiAdvice = null; }
+  if (mealAiAdvice && mealAiAdvice.date !== localDateStr()) mealAiAdvice = null;
+}
 // 直近14日分を「日ごとの集計」にまとめてから送る。
 // 以前は1食ずつ・1セットずつの明細をそのまま送っていたため、2週間分だと数十行になり、
 // 入力トークン(=Gemini APIの無料枠)を大きく消費していた。アドバイスに必要なのは
@@ -2020,6 +2049,73 @@ async function fetchAiAdvice() {
   } catch (e) {
     aiAdviceStatus = "error";
     aiAdviceError = await diagnoseAiFailure_(friendlySyncError_(e && e.message ? e.message : String(e)));
+  }
+  renderTabContent();
+}
+// v6.4: 食事タブの「🤖 PFCのAIアドバイス」用。buildAdviceContext()とほぼ同じ作りだが、
+// 運動や体重には触れず、直近14日の食事(摂取kcal・P/F/Cそれぞれの日ごとの合計)と
+// 目標PFC、よく食べているものだけを渡す(送る情報を絞るほど、AIがPFCの話に集中しやすい)。
+function buildMealAdviceContext() {
+  const since = localDateStr(new Date(Date.now() - 13 * 86400000));
+  const targets = getTargets();
+
+  const byDate = {};
+  const dayOf = (d) => byDate[d] || (byDate[d] = { 日付: d, 摂取kcal: 0, P: 0, F: 0, C: 0 });
+  mealEntries.filter(m => m.date >= since).forEach(m => {
+    const x = dayOf(m.date);
+    x.摂取kcal += m.calories || 0; x.P += m.protein || 0; x.F += m.fat || 0; x.C += m.carb || 0;
+  });
+  const days = Object.keys(byDate).sort().map(d => {
+    const x = byDate[d];
+    return { 日付: x.日付, 摂取kcal: Math.round(x.摂取kcal), P: Math.round(x.P), F: Math.round(x.F), C: Math.round(x.C) };
+  });
+  const withData = days.filter(d => d.摂取kcal > 0 || d.P > 0 || d.F > 0 || d.C > 0);
+  const avg = (key) => withData.length ? Math.round(withData.reduce((s,d) => s + d[key], 0) / withData.length) : null;
+
+  // 食材の偏りにも触れられるように、よく記録している食品名を多い順に。
+  const nameCount = {};
+  mealEntries.filter(m => m.date >= since && m.name).forEach(m => { nameCount[m.name] = (nameCount[m.name] || 0) + 1; });
+  const よく食べているもの = Object.keys(nameCount)
+    .sort((a,b) => nameCount[b] - nameCount[a]).slice(0, 8)
+    .map(n => `${n}×${nameCount[n]}`);
+
+  return {
+    今日: localDateStr(),
+    目標: targets ? {
+      目標kcal: targets.targetCalories,
+      目標たんぱく質g: targets.targetProtein,
+      目標脂質g: targets.targetFat,
+      目標炭水化物g: targets.targetCarb,
+    } : null,
+    直近14日の平均_記録がある日のみ: withData.length ? {
+      摂取kcal: avg("摂取kcal"), たんぱく質g: avg("P"), 脂質g: avg("F"), 炭水化物g: avg("C"),
+    } : null,
+    日ごとの記録: days,
+    よく食べているもの,
+  };
+}
+async function fetchMealAiAdvice() {
+  if (mealAiAdviceStatus === "loading") return; // 連打による二重問い合わせを防ぐ(無料枠の節約)
+  if (!gasConfigured()) {
+    mealAiAdviceStatus = "error";
+    mealAiAdviceError = "設定タブで接続先URLとトークンを登録すると、AIコメントを取得できます。";
+    renderTabContent();
+    return;
+  }
+  mealAiAdviceStatus = "loading"; mealAiAdviceError = null; renderTabContent();
+  try {
+    const data = await aiText_("advice", AI_PROMPTS.mealAdvice(buildMealAdviceContext()));
+    if (data && data.status === "ok" && data.text) {
+      mealAiAdvice = { date: localDateStr(), text: String(data.text) };
+      try { localStorage.setItem(MEAL_AI_ADVICE_KEY, JSON.stringify(mealAiAdvice)); } catch (e) {}
+      mealAiAdviceStatus = "idle";
+    } else {
+      mealAiAdviceStatus = "error";
+      mealAiAdviceError = friendlyAiError_(data && data.message);
+    }
+  } catch (e) {
+    mealAiAdviceStatus = "error";
+    mealAiAdviceError = await diagnoseAiFailure_(friendlySyncError_(e && e.message ? e.message : String(e)));
   }
   renderTabContent();
 }
@@ -3380,62 +3476,6 @@ function lineChartSvg(points, colorHex, goalValue, avgPoints) {
   const dots = points.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${colorHex}" stroke="#fff" stroke-width="2"/>`).join("");
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}<polyline points="${line}" fill="none" stroke="${colorHex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
 }
-// 体重の推移グラフに腹囲を重ねて表示する版(v46.11)。体重(kg)と腹囲(cm)は
-// 単位もスケールも違うため、同じ0基準の軸で重ねると片方がつぶれて見える。
-// そこで縦軸はそれぞれ「自分の値の範囲」で正規化し(2軸グラフ)、横位置(日付)
-// だけを揃えて2本の線として重ねる。腹囲は体重ほど毎日は記録しないことが多い
-// ため、腹囲側は記録がある日の値だけを、体重側と同じ日付位置に打つ。
-function lineChartSvgDual(primaryPoints, primaryColor, goalValue, primaryAvg, secondaryPoints, secondaryColor, secondaryAvg) {
-  if (primaryPoints.length < 2) return '<p class="muted">データが2件以上になるとグラフが表示されます。</p>';
-  const w=300, h=100, pad=8;
-  const values = primaryPoints.map(p=>p.value)
-    .concat(primaryAvg ? primaryAvg.map(p=>p.value) : [])
-    .concat(goalValue!=null?[goalValue]:[]);
-  const min = Math.min(...values)-1, max = Math.max(...values)+1;
-  const xStep = (w-pad*2)/(primaryPoints.length-1);
-  const yFor = v => h-pad-((v-min)/(max-min))*(h-pad*2);
-  const goalLine = goalValue!=null ? `<line x1="${pad}" y1="${yFor(goalValue)}" x2="${w-pad}" y2="${yFor(goalValue)}" stroke="var(--sand)" stroke-dasharray="4 4" stroke-width="1"/>` : "";
-
-  let primarySvg;
-  if (primaryAvg && primaryAvg.length === primaryPoints.length) {
-    const step = Math.max(1, Math.ceil(primaryPoints.length / 60));
-    const rawDots = primaryPoints.map((p,i) => (i % step === 0 || i === primaryPoints.length-1)
-      ? `<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="1.8" fill="var(--ink-faint)" opacity="0.6"/>` : "").join("");
-    const avgLine = primaryAvg.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
-    const lastAvg = primaryAvg[primaryAvg.length-1];
-    primarySvg = `${rawDots}<polyline points="${avgLine}" fill="none" stroke="${primaryColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>` +
-      `<circle cx="${pad+(primaryAvg.length-1)*xStep}" cy="${yFor(lastAvg.value)}" r="3.5" fill="${primaryColor}" stroke="#fff" stroke-width="2"/>`;
-  } else {
-    const line = primaryPoints.map((p,i)=>`${pad+i*xStep},${yFor(p.value)}`).join(" ");
-    const dots = primaryPoints.map((p,i)=>`<circle cx="${pad+i*xStep}" cy="${yFor(p.value)}" r="4" fill="${primaryColor}" stroke="#fff" stroke-width="2"/>`).join("");
-    primarySvg = `<polyline points="${line}" fill="none" stroke="${primaryColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}`;
-  }
-
-  let secondarySvg = "";
-  if (secondaryPoints && secondaryPoints.length >= 2) {
-    // 腹囲側のx座標は、体重側と同じ日付の位置に合わせる(記録日が体重と
-    // 一致している前提。両方とも同じ1件の記録から作っているので必ず一致する)。
-    const xFor2 = p => {
-      const idx = primaryPoints.findIndex(pp => pp.date === p.date);
-      return pad + (idx >= 0 ? idx : 0) * xStep;
-    };
-    const values2 = secondaryPoints.map(p=>p.value).concat(secondaryAvg ? secondaryAvg.map(p=>p.value) : []);
-    const min2 = Math.min(...values2)-1, max2 = Math.max(...values2)+1;
-    const yFor2 = v => h-pad-((v-min2)/(max2-min2))*(h-pad*2);
-    if (secondaryAvg && secondaryAvg.length === secondaryPoints.length) {
-      const avgLine2 = secondaryAvg.map(p=>`${xFor2(p)},${yFor2(p.value)}`).join(" ");
-      const lastAvg2 = secondaryAvg[secondaryAvg.length-1];
-      secondarySvg = `<polyline points="${avgLine2}" fill="none" stroke="${secondaryColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 4"/>` +
-        `<circle cx="${xFor2(lastAvg2)}" cy="${yFor2(lastAvg2.value)}" r="3.5" fill="${secondaryColor}" stroke="#fff" stroke-width="2"/>`;
-    } else {
-      const line2 = secondaryPoints.map(p=>`${xFor2(p)},${yFor2(p.value)}`).join(" ");
-      const lastP2 = secondaryPoints[secondaryPoints.length-1];
-      secondarySvg = `<polyline points="${line2}" fill="none" stroke="${secondaryColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 4"/>` +
-        `<circle cx="${xFor2(lastP2)}" cy="${yFor2(lastP2.value)}" r="3.5" fill="${secondaryColor}" stroke="#fff" stroke-width="2"/>`;
-    }
-  }
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;">${goalLine}${primarySvg}${secondarySvg}</svg>`;
-}
 // lineChartSvgの下に添える凡例(v44.5)。7日平均の線(colorHexそのまま)と
 // 実測の点(グレー固定)を実際の色で示す。以前は文字だけの「────」で色の
 // 説明になっていなかったため、線・点それぞれの実際の色を小さく描いて示す。
@@ -3446,17 +3486,6 @@ function trendLegendHtml(colorHex) {
     `<span class="muted" style="opacity:0.5;margin:0 1px;">・</span>` +
     `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink-faint);opacity:0.6;"></span>` +
     `<span class="muted">実測</span></span>`;
-}
-// lineChartSvgDual用の凡例(v46.11)。体重(実線)と腹囲(点線)を、それぞれの
-// 色と線種で示す。単位が違う2軸グラフだと知らないと誤読しやすいため、
-// 「グラフの中の数値」を見るのではなく「線の向き(増減)」で見てもらう
-// ことを促す注記もあわせて出す。
-function weightWaistLegendHtml(weightColor, waistColor) {
-  const swatch = (color, dashed) => `<span style="display:inline-block;width:14px;height:2.5px;border-radius:2px;background:${dashed ? `repeating-linear-gradient(90deg,${color} 0 3px,transparent 3px 6px)` : color};"></span>`;
-  return `<span style="display:inline-flex;align-items:center;gap:10px;font-size:10.5px;flex-wrap:wrap;">` +
-    `<span style="display:inline-flex;align-items:center;gap:5px;">${swatch(weightColor,false)}<span class="muted">体重(kg)</span></span>` +
-    `<span style="display:inline-flex;align-items:center;gap:5px;">${swatch(waistColor,true)}<span class="muted">腹囲(cm)</span></span>` +
-    `</span>`;
 }
 // 各点について「その日を含む直近7日ぶんの記録」の平均を返す(v44)。
 // 単純に直近7件ではなく日付の範囲で見るので、記録が飛んでいる日があっても
@@ -3975,6 +4004,23 @@ function weeklyPfcCardHtml() {
     </div>` : ""}
   </div>`;
 }
+// v6.4: 食事タブ専用のAIアドバイス。「🤖 AIのひとこと」(今日タブ)が体重・運動も
+// 含めた全体コメントなのに対し、こちらはPFC(たんぱく質・脂質・炭水化物)の
+// 摂取バランスに絞って、具体的に何を変えるとよいかをAIにコメントしてもらう。
+// 仕組みはAIのひとことと同じ(設定タブでバックエンドを接続している場合のみ使える)。
+function mealAiAdviceCardHtml() {
+  return `<div class="card">
+    <p class="section-title">🤖 PFCのAIアドバイス</p>
+    ${mealAiAdvice
+      ? `<p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${esc(mealAiAdvice.text).replace(/\n/g, "<br>")}</p>`
+      : `<p class="muted" style="font-size:12px;margin:0 0 12px;line-height:1.6;">直近2週間の食事記録から、たんぱく質・脂質・炭水化物のバランスについてAIにコメントをもらえます。</p>`}
+    <div class="wrap" style="margin-bottom:${mealAiAdviceStatus === "error" && mealAiAdviceError ? "10px" : "0"};">
+      <button class="chip" data-action="fetch-meal-ai-advice">${mealAiAdviceStatus === "loading" ? "🔄 AIに問い合わせ中..." : (mealAiAdvice ? "🤖 AIコメントを更新" : "🤖 AIにコメントをもらう")}</button>
+    </div>
+    ${mealAiAdviceStatus === "error" && mealAiAdviceError ? `<p style="font-size:11px;margin:0;color:var(--coral);line-height:1.5;">${esc(mealAiAdviceError)}</p>` : ""}
+    ${mealAiAdvice ? `<p class="muted" style="font-size:10.5px;margin:8px 0 0;">※AIによる生成コメントです(あくまで一般的な目安。体調に不安があるときは医療機関へ)</p>` : ""}
+  </div>`;
+}
 function mealsHtml() {
   const today = localDateStr();
   const todayMeals = mealEntries.filter(m => m.date === today);
@@ -4065,6 +4111,7 @@ function mealsHtml() {
     </div>
 
     ${weeklyPfcCardHtml()}
+    ${mealAiAdviceCardHtml()}
 
     <div class="card">
       <p class="section-title">📊 摂取カロリーと消費カロリー(直近14日)</p>
@@ -4558,15 +4605,13 @@ function weightHtml() {
         <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
       </div>
       ${(() => {
+        // v6.4: 以前は腹囲を記録している日があれば同じグラフに重ねていたが(2軸グラフ)、
+        // 単位の違う2本の線が分かりにくいとのご要望があり、体重だけのグラフに戻した。
+        // 腹囲の推移は、このすぐ下にある「📏 腹囲の推移」カード(waistCardHtml)で
+        // 引き続き見られる。
         const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
-        // v46.11: 腹囲を記録している日があれば、同じグラフに重ねて表示する
-        // (単位が違うkg/cmなので、縦軸はそれぞれの範囲で正規化した2軸グラフ)。
-        const withWaist = sortedAsc.filter(w => w.waist != null).map(w => ({ date: w.date, value: w.waist }));
-        const waistAvg = withWaist.length >= 3 ? movingAverage_(withWaist, 7) : null;
-        const chart = withWaist.length
-          ? lineChartSvgDual(points, "var(--slate)", goals.weight, avg, withWaist, "var(--coral)", waistAvg)
-          : lineChartSvg(points, "var(--slate)", goals.weight, avg);
-        if (!avg) return chart + (withWaist.length ? `<div style="margin-top:6px;">${weightWaistLegendHtml("var(--slate)","var(--coral)")}</div>` : "");
+        const chart = lineChartSvg(points, "var(--slate)", goals.weight, avg);
+        if (!avg) return chart;
         const cur = avg[avg.length-1].value;
         // 7日前の平均と比べた変化。日々の増減ではなく傾向として見せる。
         const weekAgoIdx = (() => {
@@ -4579,10 +4624,10 @@ function weightHtml() {
           ? `<span class="mono" style="color:${weightTrendColor_(diff, cur, goals.weight)};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}kg</span> <span class="muted">/ 1週間</span>`
           : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
         return chart + `<div class="between" style="margin-top:6px;">
-          ${withWaist.length ? weightWaistLegendHtml("var(--slate)","var(--coral)") : trendLegendHtml("var(--slate)")}
+          ${trendLegendHtml("var(--slate)")}
           <span style="font-size:12px;">${trend}</span>
         </div>
-        <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。${withWaist.length ? "体重(実線)と腹囲(点線)は単位が違うため、それぞれ別の縦軸で表示しています。数値そのものより、線の向き(増えている/減っている)で比べてください。" : ""}</p>`;
+        <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。</p>`;
       })()}
       ${latest ? bmiBlockHtml() : ""}
     </div>
@@ -4638,6 +4683,8 @@ function trainingHtml() {
         <div class="kpi-d neutral">運動した日 ${burnActiveDays14}/14日</div>
       </div>
     </div>
+
+    ${bodyPartStatusHtml()}
 
     ${strengthPlanCardHtml()}
 
@@ -4731,10 +4778,6 @@ function trainingHtml() {
       ${weeklyDistanceBarSvg(weekDistanceBuckets(8))}
     </div>
 
-    ${distanceHistoryHtml()}
-
-    ${bodyPartStatusHtml()}
-
     <div id="history-section"></div>`;
 }
 // 部位ごとの実施状況の一覧(v46.12)。「どの部位をしばらくやっていないか」は
@@ -4772,12 +4815,17 @@ function bodyPartStatusHtml() {
     ${rows.map(rowHtml).join("")}
   </div>`;
 }
-// ---- 本日の筋トレプラン(v5.9) ----
-// 「過去の運動履歴から、今日の筋トレプランを4種類提示してほしい」というご要望への対応。
-// bodyPartStatusHtmlと同じく「部位ごとの最終実施日」を材料に、性格の異なる4パターンを
+// ---- 本日の筋トレプラン(v5.9、v6.4で4種類→2種類に整理) ----
+// 「過去の運動履歴から、今日の筋トレプランを提示してほしい」というご要望への対応。
+// bodyPartStatusHtmlと同じく「部位ごとの最終実施日」を材料に、性格の異なる2パターンを
 // 組み立てる。各種目は、ユーザーが種目マスタに登録した種目 or 既定のおすすめ種目から
 // pickExerciseForPart()で選び、重量・回数はlastStrengthByExercise(前回その種目を記録した
 // ときの値)があればそれを、無ければ初回向けの控えめな既定値(10回・重量は本人が判断)を使う。
+// v6.4: 当初は「優先ケア/上半身の日/下半身・体幹の日/全身バランス」の4種類だったが、
+// 選択肢が多すぎるというご要望を受けて「優先ケア」と「疲労回復」の2つに絞った。
+// 優先ケアは従来どおり、しばらくやっていない部位を中心に据える。疲労回復は逆に、
+// 直近で使った(=疲労が残っていそうな)部位を、重め・追い込む内容ではなく、
+// 軽い重量・多めの回数でほぐす内容にして使い分けられるようにしている。
 function partStalenessDays_() {
   const strengthEntries = entries.filter(e => e.type === "strength");
   const nowMs = new Date(localDateStr()).getTime();
@@ -4799,20 +4847,31 @@ function suggestedSetForPart_(part) {
     reps: remembered ? remembered.reps : 10,
   };
 }
+// 疲労回復プラン用(v6.4)。追い込む内容ではなく「軽く動かして血流を促す」ことが
+// 目的なので、前回の重量が分かっていれば6割程度(0.5kg刻み)に落とし、回数は
+// 多めの18回を提案する。重量が分からない(その部位が未記録)ときは、通常プランと
+// 同じくnullのまま返し、本人に無理のない重さから判断してもらう。
+function suggestedRecoverySetForPart_(part) {
+  const base = suggestedSetForPart_(part);
+  const weight = base.weight != null ? Math.round(base.weight * 0.6 * 2) / 2 : null;
+  return { ...base, weight, reps: 18 };
+}
 function buildStrengthPlans_() {
   const staleness = partStalenessDays_();
-  const rankedParts = [...PARTS].sort((a, b) => {
+  const byStaleness = (dir) => [...PARTS].sort((a, b) => {
     const av = staleness[a] === Infinity ? 99999 : staleness[a];
     const bv = staleness[b] === Infinity ? 99999 : staleness[b];
-    return bv - av;
+    return dir * (av - bv);
   });
+  const stalePartsFirst = byStaleness(-1);   // 経過日数が長い(=しばらくやっていない)順
+  // 疲労回復は「直近でやった部位」が対象。一度も記録が無い部位(Infinity)は
+  // 疲労のしようがないので除外する。
+  const recentTrainedParts = byStaleness(1).filter(p => staleness[p] !== Infinity);
   const plans = [
-    { id: "priority", icon: "🔥", label: "優先ケア", note: "しばらくやっていない部位を中心に", parts: rankedParts.slice(0, 3) },
-    { id: "upper",    icon: "💪", label: "上半身の日", note: "胸・背中・肩を中心に", parts: ["胸","背中","肩"] },
-    { id: "lower",    icon: "🦵", label: "下半身・体幹の日", note: "脚・腹筋を中心に", parts: ["脚","腹筋"] },
-    { id: "full",     icon: "⚖️", label: "全身バランス", note: "全身から1種目ずつまんべんなく", parts: ["胸","背中","脚","腹筋"] },
+    { id: "priority", icon: "🔥", label: "優先ケア", note: "しばらくやっていない部位を中心に", parts: stalePartsFirst.slice(0, 3), setFn: suggestedSetForPart_ },
+    { id: "recovery", icon: "🌿", label: "疲労回復", note: "直近で使った部位を、軽めの重量・多めの回数でほぐす", parts: recentTrainedParts.slice(0, 3), setFn: suggestedRecoverySetForPart_ },
   ];
-  return plans.map(p => ({ ...p, items: p.parts.map(suggestedSetForPart_) }));
+  return plans.map(p => ({ ...p, items: p.parts.map(p.setFn) }));
 }
 function applyStrengthPlan(planId) {
   const plan = buildStrengthPlans_().find(p => p.id === planId);
@@ -4833,14 +4892,15 @@ function strengthPlanCardHtml() {
   const planCard = (p) => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;">
     <div class="between" style="margin-bottom:2px;">
       <span style="font-weight:700;font-size:13px;">${p.icon} ${p.label}</span>
-      <button type="button" class="chip active-b" data-action="apply-strength-plan" data-plan="${p.id}">▶️ このプランで記録</button>
+      ${p.items.length ? `<button type="button" class="chip active-b" data-action="apply-strength-plan" data-plan="${p.id}">▶️ このプランで記録</button>` : ""}
     </div>
     <p class="muted" style="font-size:10.5px;margin:0 0 6px;">${p.note}</p>
-    ${p.items.map(planItemLine).join("")}
+    ${p.items.length ? p.items.map(planItemLine).join("")
+      : '<p class="muted" style="font-size:11px;margin:0;">まだ筋トレの記録が無いため、対象の部位がありません。まずは「優先ケア」から始めてみましょう。</p>'}
   </div>`;
   return `<div class="card">
     <p class="section-title">🧭 本日の筋トレプラン</p>
-    <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">これまでの記録(部位ごとの実施状況・種目ごとの前回の重量)をもとにした4つの候補です。タップするとまとめて記録され、あとから✏️で内容を調整できます。重量が空欄の種目は、まだ記録が無いため無理のない重さから始めてください。</p>
+    <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">これまでの記録(部位ごとの実施状況・種目ごとの前回の重量)をもとにした2つの候補です。タップするとまとめて記録され、あとから✏️で内容を調整できます。重量が空欄の種目は、まだ記録が無いため無理のない重さから始めてください。</p>
     ${plans.map(planCard).join("")}
   </div>`;
 }
@@ -4899,44 +4959,6 @@ function trainingEntryRowHtml(e) {
     <button class="del-btn" data-action="relog-training" data-id="${e.id}" title="今日も記録する">🔁</button>
     <button class="del-btn" data-action="edit-training" data-id="${e.id}">✏️</button>
     <button class="del-btn" data-action="del-training" data-id="${e.id}">🗑️</button>
-  </div>`;
-}
-// ランニング・ウォーキングの移動距離だけを抜き出した一覧(v5.7)。通常の運動履歴には
-// 筋トレなど他の記録も混ざって距離が埋もれてしまうため、「今月どれだけ歩いた/走ったか」を
-// 振り返れる専用の一覧を用意した。新しい記録から10件だけ初期表示し、それより前は
-// 「もっと見る」で展開する。
-function distanceHistoryHtml() {
-  const distEntries = entries
-    .filter(e => e.type === "cardio" && e.distance != null)
-    .sort((a,b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt);
-  if (!distEntries.length) {
-    return `<div class="card">
-      <p class="section-title">🏃 移動距離の記録</p>
-      <p class="muted" style="font-size:12px;margin:0;">ランニング・ウォーキングを記録すると、移動距離の一覧がここに表示されます。</p>
-    </div>`;
-  }
-  const totalKm = formatDistanceKm(distEntries.reduce((s,e) => s + e.distance, 0));
-  const visible = distanceHistoryShowAll ? distEntries : distEntries.slice(0, 10);
-  const rows = visible.map(e => {
-    const pace = e.distance > 0 ? formatDistanceKm(e.minutes / e.distance) : null;
-    return `<div class="entry-row">
-      <div class="badge" style="background:var(--slate-soft);">${e.exercise === "ランニング" ? "🏃" : "🚶"}</div>
-      <div style="flex:1;">
-        <div>${esc(e.date)} ${esc(e.exercise)} <span class="mono" style="color:var(--slate);">${e.distance}km</span></div>
-        <div class="muted" style="font-size:11px;">${e.minutes}分${pace ? `・ペース目安 ${pace}分/km` : ""}</div>
-      </div>
-    </div>`;
-  }).join("");
-  const moreBtn = distEntries.length > 10
-    ? `<button type="button" class="chip" data-action="toggle-distance-history-all" style="margin-top:6px;">${distanceHistoryShowAll ? "▲ 少なく表示" : `▶ もっと見る(他${distEntries.length-10}件)`}</button>`
-    : "";
-  return `<div class="card">
-    <div class="between" style="margin-bottom:8px;">
-      <p class="section-title" style="margin:0;">🏃 移動距離の記録</p>
-      <span class="muted mono" style="font-size:11px;">合計 ${totalKm}km</span>
-    </div>
-    ${rows}
-    ${moreBtn}
   </div>`;
 }
 // dayDetailHtml/renderHistory(リスト表示)で共通して使う、食事1件分の行。
@@ -6399,6 +6421,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTabContent();
   }
   else if (action === "fetch-ai-advice") { fetchAiAdvice(); }
+  else if (action === "fetch-meal-ai-advice") { fetchMealAiAdvice(); }
   // 写真判定の候補をタップ: 食事タブへ移動し、その内容を入力欄に入れておく
   // (記録そのものは、本人が内容を確認して「＋ 記録する」を押したときだけ行う)。
   else if (action === "use-meal-suggestion") {
@@ -6507,7 +6530,6 @@ document.getElementById("app").addEventListener("click", (e) => {
     if (trainingHistoryOpenDates.has(d)) trainingHistoryOpenDates.delete(d); else trainingHistoryOpenDates.add(d);
     renderHistory();
   }
-  else if (action === "toggle-distance-history-all") { distanceHistoryShowAll = !distanceHistoryShowAll; renderTabContent(); }
   else if (action === "toggle-training-history-show-all") { trainingHistoryShowAll = !trainingHistoryShowAll; renderHistory(); }
   else if (action === "toggle-meal-history-day") {
     const d = t.dataset.date;
@@ -6559,6 +6581,8 @@ document.getElementById("app").addEventListener("click", (e) => {
     // 確認待ちなどが画面に残らないよう、一時的な状態もあわせて初期化する。
     aiAdvice = null; aiAdviceStatus = "idle"; aiAdviceError = null;
     try { localStorage.removeItem(AI_ADVICE_KEY); } catch (e) {}
+    mealAiAdvice = null; mealAiAdviceStatus = "idle"; mealAiAdviceError = null;
+    try { localStorage.removeItem(MEAL_AI_ADVICE_KEY); } catch (e) {}
     photoStatus = "idle"; photoError = null; photoResults = null;
     omronImportPreview = null; omronImportMessage = null; omronImportError = false;
     dataOpMessage = null; dataOpError = false; confirmRestore = null;
@@ -6686,6 +6710,7 @@ loadState();
 // (loadStateより前に決めると、まだ記録が無い状態で判定してしまうためこの位置)。
 selectedCardio = defaultCardio();
 loadAiAdvice();
+loadMealAiAdvice();
 loadNutritionCache();
 backfillCardioDistances_();
 // 電波が届かない場所(地下のジム・機内モード)でもアプリを起動できるようにする(v44)。

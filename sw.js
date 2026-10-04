@@ -32,7 +32,7 @@
  * 問題にならないため気づきにくい)。stripRedirect_()で、リダイレクトを経た
  * 応答だけ中身をコピーした「まっさらな」Responseに作り直してから使う。
  */
-const VERSION = 'v6.3';
+const VERSION = 'v6.4';
 const CACHE = 'training-log-' + VERSION;
 // このサービスワーカーが置かれている場所(GitHub Pagesのサブフォルダでも動くよう相対で解決)。
 const HTML_URL = new URL('./index.html', self.registration.scope).href;

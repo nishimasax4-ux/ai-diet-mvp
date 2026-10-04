@@ -1,0 +1,15 @@
+{
+  "name": "training-log-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Training Log + AI のバックエンド(Cloudflare Workers版)。apps-script-1file.gsと同じAPIを実装したドロップイン代替。",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
