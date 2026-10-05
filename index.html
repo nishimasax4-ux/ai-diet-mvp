@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.4";
+const APP_VERSION = "v6.5";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -2612,7 +2612,10 @@ function bodyCompositionCardHtml() {
   const fatAvg = fatPoints.length >= 3 ? movingAverage_(fatPoints, 7) : null;
   const fatChart = lineChartSvg(fatPoints, "var(--coral)", null, fatAvg);
   const trendBlockFor = (points, avg, unit) => {
-    if (!avg) return "";
+    // v6.5: 「開始日からの増減」はavg(7日平均、記録3件以上が必要)が無くても出したいので、
+    // avgの有無に関わらず先に計算しておく。
+    const sinceStart = sinceStartChangeHtml_(points, unit, d => d < 0 ? "var(--teal)" : d > 0 ? "var(--coral)" : "var(--ink-faint)");
+    if (!avg) return sinceStart;
     const cur = avg[avg.length-1].value;
     const weekAgoIdx = (() => {
       const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
@@ -2626,7 +2629,8 @@ function bodyCompositionCardHtml() {
     return `<div class="between" style="margin-top:6px;">
       ${trendLegendHtml("var(--coral)")}
       <span style="font-size:12px;">${trend}</span>
-    </div>`;
+    </div>
+    ${sinceStart}`;
   };
   const bfTrendBlock = trendBlockFor(bfPoints, bfAvg, "%");
   const fatTrendBlock = trendBlockFor(fatPoints, fatAvg, "kg");
@@ -2664,7 +2668,10 @@ function waistCardHtml() {
   const points = withWaist.map(w => ({ date: w.date, value: w.waist }));
   const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
   const chart = lineChartSvg(points, "var(--slate)", null, avg);
-  let trendBlock = "";
+  // v6.5: 「開始日からの増減」はavg(記録3件以上が必要)が無くても出したいので、
+  // avgの有無に関わらず先に計算しておく。
+  const sinceStart = sinceStartChangeHtml_(points, "cm", d => d < 0 ? "var(--teal)" : d > 0 ? "var(--coral)" : "var(--ink-faint)");
+  let trendBlock = sinceStart;
   if (avg) {
     const cur = avg[avg.length-1].value;
     const weekAgoIdx = (() => {
@@ -2679,7 +2686,8 @@ function waistCardHtml() {
     trendBlock = `<div class="between" style="margin-top:6px;">
       ${trendLegendHtml("var(--slate)")}
       <span style="font-size:12px;">${trend}</span>
-    </div>`;
+    </div>
+    ${sinceStart}`;
   }
   return `<div class="card">
     <div class="between" style="margin-bottom:10px;">
@@ -2704,7 +2712,10 @@ function muscleCardHtml() {
   const points = withMuscle.map(x => ({ date: x.w.date, value: x.kg }));
   const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
   const chart = lineChartSvg(points, "var(--teal)", null, avg);
-  let trendBlock = "";
+  // v6.5: 「開始日からの増減」はavg(記録3件以上が必要)が無くても出したいので、
+  // avgの有無に関わらず先に計算しておく。
+  const sinceStart = sinceStartChangeHtml_(points, "kg", d => d > 0 ? "var(--teal)" : d < 0 ? "var(--coral)" : "var(--ink-faint)");
+  let trendBlock = sinceStart;
   if (avg) {
     const cur = avg[avg.length-1].value;
     const weekAgoIdx = (() => {
@@ -2719,7 +2730,8 @@ function muscleCardHtml() {
     trendBlock = `<div class="between" style="margin-top:6px;">
       ${trendLegendHtml("var(--teal)")}
       <span style="font-size:12px;">${trend}</span>
-    </div>`;
+    </div>
+    ${sinceStart}`;
   }
   return `<div class="card">
     <div class="between" style="margin-bottom:10px;">
@@ -2742,7 +2754,10 @@ function muscleRateCardHtml() {
   const points = withRate.map(w => ({ date: w.date, value: w.muscleRate }));
   const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
   const chart = lineChartSvg(points, "var(--sand)", null, avg);
-  let trendBlock = "";
+  // v6.5: 「開始日からの増減」はavg(記録3件以上が必要)が無くても出したいので、
+  // avgの有無に関わらず先に計算しておく。
+  const sinceStart = sinceStartChangeHtml_(points, "%", d => d > 0 ? "var(--sand)" : d < 0 ? "var(--coral)" : "var(--ink-faint)");
+  let trendBlock = sinceStart;
   if (avg) {
     const cur = avg[avg.length-1].value;
     const weekAgoIdx = (() => {
@@ -2757,7 +2772,8 @@ function muscleRateCardHtml() {
     trendBlock = `<div class="between" style="margin-top:6px;">
       ${trendLegendHtml("var(--sand)")}
       <span style="font-size:12px;">${trend}</span>
-    </div>`;
+    </div>
+    ${sinceStart}`;
   }
   return `<div class="card">
     <div class="between" style="margin-bottom:10px;">
@@ -3486,6 +3502,22 @@ function trendLegendHtml(colorHex) {
     `<span class="muted" style="opacity:0.5;margin:0 1px;">・</span>` +
     `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink-faint);opacity:0.6;"></span>` +
     `<span class="muted">実測</span></span>`;
+}
+// v6.5: からだタブの各推移グラフ(体重・体脂肪率・体脂肪量・腹囲・骨格筋量・骨格筋率)に
+// 「週ごとの変化」だけでなく「記録を始めた日からの増減」も表示してほしいというご要望への
+// 対応。rawPoints(昇順・{date,value}の実測値)の最初と最後を比べる。平均化した値では
+// なく実測値どうしの差にすることで、「記録を始めた日の値と今の値」という直感的な
+// 意味を保つ。colorFn(diff)で色を決める(各カードの「週ごとの変化」と同じ考え方を流用)。
+function sinceStartChangeHtml_(rawPoints, unit, colorFn) {
+  if (rawPoints.length < 2) return "";
+  const first = rawPoints[0], last = rawPoints[rawPoints.length - 1];
+  if (first.date === last.date) return "";
+  const diff = round1_(last.value - first.value);
+  const sign = diff < 0 ? "−" : diff > 0 ? "+" : "±";
+  return `<div class="between" style="margin-top:4px;">
+    <span class="muted" style="font-size:10.5px;">${esc(first.date)}(開始)から</span>
+    <span class="mono" style="font-size:12px;color:${colorFn(diff)};">${sign}${Math.abs(diff).toFixed(1)}${unit}</span>
+  </div>`;
 }
 // 各点について「その日を含む直近7日ぶんの記録」の平均を返す(v44)。
 // 単純に直近7件ではなく日付の範囲で見るので、記録が飛んでいる日があっても
@@ -4611,7 +4643,14 @@ function weightHtml() {
         // 引き続き見られる。
         const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
         const chart = lineChartSvg(points, "var(--slate)", goals.weight, avg);
-        if (!avg) return chart;
+        // v6.5: 「開始日からの増減」は7日平均(avg)が無くても(記録が2件だけでも)
+        // 出したいので、avgに依存しない最新の実測値(latestVal)を基準に色を決める。
+        // points自体が0件(まだ体重を一度も記録していない)こともあるため、その場合は
+        // latestValをnullにしておく(sinceStartChangeHtml_はpoints.length<2なら
+        // 何も返さないので、colorFnは呼ばれない)。
+        const latestVal = points.length ? points[points.length-1].value : null;
+        const sinceStart = sinceStartChangeHtml_(points, "kg", d => weightTrendColor_(d, latestVal, goals.weight));
+        if (!avg) return chart + sinceStart;
         const cur = avg[avg.length-1].value;
         // 7日前の平均と比べた変化。日々の増減ではなく傾向として見せる。
         const weekAgoIdx = (() => {
@@ -4627,6 +4666,7 @@ function weightHtml() {
           ${trendLegendHtml("var(--slate)")}
           <span style="font-size:12px;">${trend}</span>
         </div>
+        ${sinceStart}
         <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。</p>`;
       })()}
       ${latest ? bmiBlockHtml() : ""}
