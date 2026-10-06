@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.5";
+const APP_VERSION = "v6.7";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -2703,9 +2703,12 @@ function waistCardHtml() {
 // 良い指標なので、トレンドの色(増加=緑系/減少=赤系)は腹囲と逆にしてある。
 // v5.22: kgは手入力欄を廃止し、骨格筋率(%)と体重から計算した値(muscleKgFor_)を使う。
 function muscleCardHtml() {
+  // v6.6: 体組成カード(体脂肪率・体脂肪量)や体重目標の進捗と同じく、記録開始日
+  // (goals.statsStartDate)より前の記録はグラフ・「開始時からの増減」の対象から
+  // 除く。これにより、体組成カードなどと「開始」の日付がそろう。
   const withMuscle = weightEntries
     .map(w => ({ w, kg: muscleKgFor_(w) }))
-    .filter(x => x.kg != null)
+    .filter(x => x.kg != null && afterStatsStart_(x.w.date))
     .sort((a, b) => a.w.date < b.w.date ? -1 : 1);
   if (!withMuscle.length) return "";
   const last = withMuscle[withMuscle.length - 1];
@@ -3508,9 +3511,15 @@ function trendLegendHtml(colorHex) {
 // 対応。rawPoints(昇順・{date,value}の実測値)の最初と最後を比べる。平均化した値では
 // なく実測値どうしの差にすることで、「記録を始めた日の値と今の値」という直感的な
 // 意味を保つ。colorFn(diff)で色を決める(各カードの「週ごとの変化」と同じ考え方を流用)。
+// v6.7: 「開始」の基準点を、設定タブの記録開始日(goals.statsStartDate)がある場合は
+// その日以降の最初の記録にそろえた(カードによって開始日がバラバラになっていたため)。
+// 記録開始日を設定していない/その日以降の記録がまだ無い場合は、従来どおり全体の
+// 最初の記録を使う。グラフの折れ線や「週ごとの変化」自体の対象期間は変えていない。
 function sinceStartChangeHtml_(rawPoints, unit, colorFn) {
   if (rawPoints.length < 2) return "";
-  const first = rawPoints[0], last = rawPoints[rawPoints.length - 1];
+  const afterStart = rawPoints.filter(p => afterStatsStart_(p.date));
+  const first = afterStart.length ? afterStart[0] : rawPoints[0];
+  const last = rawPoints[rawPoints.length - 1];
   if (first.date === last.date) return "";
   const diff = round1_(last.value - first.value);
   const sign = diff < 0 ? "−" : diff > 0 ? "+" : "±";
