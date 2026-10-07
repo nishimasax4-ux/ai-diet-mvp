@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.7";
+const APP_VERSION = "v6.8";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -730,6 +730,9 @@ let omronImportPreview = null; // v5.10: オムロンCSV取り込みの確認待
 let omronImportMessage = null; // v5.10: オムロンCSV取り込みの結果メッセージ
 let omronImportError = false;
 let mealHistoryOpenDates = new Set();
+// v6.8: 「📋 部位ごとの実施状況」で、どの部位をタップして種目の内訳を展開中か。
+// 初期状態はすべて閉じておき、見たい部位だけタップして開く(履歴のアコーディオンと同じ考え方)。
+let bodyPartStatusOpenParts = new Set();
 let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedCalDate = null;
 let editing = null;
@@ -4833,6 +4836,39 @@ function trainingHtml() {
 // 履歴を遡らないと分からなかったため、部位ごとに最終実施日・経過日数・
 // 直近30日のセット数を一覧表にした。しばらくやっていない部位ほど上に来るよう
 // 並べ、色でも目立たせることで、次に何をやるべきかが一目で分かるようにする。
+// v6.8: 各部位の行をタップすると、その部位に登録されている種目ごとの
+// 「直近いつやったか・重量・回数」を展開できるようにした。それまでは部位単位の
+// 最終実施日しか分からず、種目ごとの前回の重さ・回数を知るには履歴を遡る必要があった。
+function bodyPartExerciseRows_(part) {
+  const nowMs = new Date(localDateStr()).getTime();
+  const byExercise = {};
+  entries
+    .filter(e => e.type === "strength" && e.part === part)
+    .forEach(e => {
+      const key = e.exercise || "(種目名なし)";
+      if (!byExercise[key] || e.date > byExercise[key].date) byExercise[key] = e;
+    });
+  return Object.keys(byExercise)
+    .map(exercise => {
+      const e = byExercise[exercise];
+      const daysAgo = Math.round((nowMs - new Date(e.date).getTime()) / 86400000);
+      return { exercise, date: e.date, weight: e.weight, reps: e.reps, daysAgo };
+    })
+    .sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0); // 直近に実施した種目を上に
+}
+function bodyPartExerciseListHtml_(part) {
+  const rows = bodyPartExerciseRows_(part);
+  if (!rows.length) return "";
+  return `<div style="margin:2px 0 2px 46px;padding:6px 0 2px;border-top:1px solid var(--line);">` +
+    rows.map(r => {
+      const daysLabel = r.daysAgo === 0 ? "今日" : r.daysAgo === 1 ? "1日前" : `${r.daysAgo}日前`;
+      return `<div class="between" style="margin-bottom:6px;gap:8px;">
+        <span style="font-size:12px;">${esc(r.exercise)}</span>
+        <span class="mono muted" style="font-size:11px;text-align:right;white-space:nowrap;">${r.date}(${daysLabel}) ${r.weight}kg×${r.reps}回</span>
+      </div>`;
+    }).join("") +
+  `</div>`;
+}
 function bodyPartStatusHtml() {
   const strengthEntries = entries.filter(e => e.type === "strength");
   if (!strengthEntries.length) return "";
@@ -4849,20 +4885,36 @@ function bodyPartStatusHtml() {
   const rowHtml = ({ part, last, daysAgo, sets30 }) => {
     const stale = daysAgo === null || daysAgo >= 14;
     const daysLabel = daysAgo === null ? "未実施" : daysAgo === 0 ? "今日" : `${daysAgo}日前`;
-    return `<div class="entry-row">
-      <div class="badge" style="background:${stale ? "var(--coral-soft)" : "var(--slate-soft)"};">🏋️</div>
-      <div style="flex:1;">
-        <div style="font-weight:600;">${esc(part)}</div>
-        <div class="muted" style="font-size:11px;">${last ? `最終 ${last}・直近30日 ${sets30}セット` : "記録なし"}</div>
-      </div>
-      <span class="status-pill ${stale ? "bad" : "good"}">${daysLabel}</span>
-    </div>`;
+    const isOpen = last && bodyPartStatusOpenParts.has(part);
+    const header = last
+      ? `<button type="button" class="entry-row" style="width:100%;background:none;text-align:left;cursor:pointer;font:inherit;color:inherit;" data-action="toggle-body-part-status" data-part="${esc(part)}">
+          <div class="badge" style="background:${stale ? "var(--coral-soft)" : "var(--slate-soft)"};">🏋️</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;">${esc(part)}</div>
+            <div class="muted" style="font-size:11px;">最終 ${last}・直近30日 ${sets30}セット</div>
+          </div>
+          <span class="status-pill ${stale ? "bad" : "good"}">${daysLabel}</span>
+          <span class="muted" style="font-size:11px;">${isOpen ? "▾" : "▸"}</span>
+        </button>`
+      : `<div class="entry-row">
+          <div class="badge" style="background:${stale ? "var(--coral-soft)" : "var(--slate-soft)"};">🏋️</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;">${esc(part)}</div>
+            <div class="muted" style="font-size:11px;">記録なし</div>
+          </div>
+          <span class="status-pill ${stale ? "bad" : "good"}">${daysLabel}</span>
+        </div>`;
+    return header + (isOpen ? bodyPartExerciseListHtml_(part) : "");
   };
-  return `<div class="card">
+  return `<div class="card" id="body-part-status-card">
     <p class="section-title">📋 部位ごとの実施状況</p>
-    <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">しばらくやっていない部位が上に来るように並んでいます。14日以上空いている部位は赤で示しています。</p>
+    <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">しばらくやっていない部位が上に来るように並んでいます。14日以上空いている部位は赤で示しています。タップすると、種目ごとの直近の実施日・重量・回数が見られます。</p>
     ${rows.map(rowHtml).join("")}
   </div>`;
+}
+function renderBodyPartStatus() {
+  const el = document.getElementById("body-part-status-card");
+  if (el) el.outerHTML = bodyPartStatusHtml();
 }
 // ---- 本日の筋トレプラン(v5.9、v6.4で4種類→2種類に整理) ----
 // 「過去の運動履歴から、今日の筋トレプランを提示してほしい」というご要望への対応。
@@ -6580,6 +6632,11 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderHistory();
   }
   else if (action === "toggle-training-history-show-all") { trainingHistoryShowAll = !trainingHistoryShowAll; renderHistory(); }
+  else if (action === "toggle-body-part-status") {
+    const part = t.dataset.part;
+    if (bodyPartStatusOpenParts.has(part)) bodyPartStatusOpenParts.delete(part); else bodyPartStatusOpenParts.add(part);
+    renderBodyPartStatus();
+  }
   else if (action === "toggle-meal-history-day") {
     const d = t.dataset.date;
     if (mealHistoryOpenDates.has(d)) mealHistoryOpenDates.delete(d); else mealHistoryOpenDates.add(d);
