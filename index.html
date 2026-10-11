@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.8";
+const APP_VERSION = "v6.10";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -338,13 +338,16 @@ const STRETCH_ITEMS = [
 
 const STORAGE_KEY = "training-log-data";
 const PARTS = ["胸","背中","脚","肩","腕","腹筋"];
+// v6.9: 「ベンチプレスなどフリーウエイトのものが出るけど気軽にできない」「プランクは
+// まだしたことがない」というご意見を受けて、初期値・おすすめ種目を「マシン・ダンベルのみ」
+// に見直した(バーベルを使う種目・自重のみの種目は外した)。
 const EXERCISES_BY_PART = {
-  "胸": ["ベンチプレス","インクラインプレス","ダンベルフライ","プッシュアップ"],
-  "背中": ["懸垂","ラットプルダウン","デッドリフト","ベントオーバーロウ"],
-  "脚": ["スクワット","レッグプレス","ランジ","レッグカール"],
-  "肩": ["ショルダープレス","サイドレイズ","アップライトロウ"],
+  "胸": ["チェストプレス","インクラインプレス","ダンベルフライ"],
+  "背中": ["ラットプルダウン","シーテッドロー"],
+  "脚": ["レッグプレス","レッグカール"],
+  "肩": ["ショルダープレス","サイドレイズ","リアレイズ"],
   "腕": ["アームカール","トライセップエクステンション","ハンマーカール"],
-  "腹筋": ["クランチ","プランク","レッグレイズ"],
+  "腹筋": ["アブドミナル"],
 };
 // 種目ごとの「やり方」の初期値(v5.21)。通っているジム(LifeFit)のマシンに合わせて
 // もらった解説をもとにしている。名前が一致する種目マスタの項目に、起動のたびに
@@ -439,6 +442,22 @@ function seedExerciseHowDefaults_() {
       exerciseMaster.push({ id: uid(), part: def.part, name, how: def.how });
     }
   });
+}
+// v6.9: 「ベンチプレスなどフリーウエイトのものが出るけど気軽にできない」「プランクは
+// まだしたことがない」というご意見を受けて、バーベルを使う種目・自重のみの種目は
+// 種目マスタ・おすすめから外すことにした(EXERCISES_BY_PARTはマシン・ダンベルの種目だけに
+// 変更済み)。ただしEXERCISES_BY_PARTを直すだけでは、すでに使っているユーザーの種目マスタ
+// (当時の初期値で作られたもの)には反映されない。そこで、ここに挙げた種目名は、まだ
+// 一度も記録したことが無い場合に限り、毎回(冪等に)マスタから取り除く。実際に記録した
+// ことがある種目は「使っている実績がある」とみなして残す(本人が気に入って続けている
+// 可能性があるため、黙って消さない)。代わりとなるマシン・ダンベルの種目(チェストプレス・
+// アブドミナルなど)は、上のseedExerciseHowDefaults_()で既にマスタに追加されている。
+const RETIRED_DEFAULT_EXERCISES_ = ["ベンチプレス","プッシュアップ","懸垂","デッドリフト","スクワット","ランジ","ベントオーバーロウ","アップライトロウ","クランチ","プランク","レッグレイズ"];
+function retireUnfriendlyDefaultExercises_() {
+  const everLogged = new Set(
+    entries.filter(e => e.type === "strength" && e.exercise).map(e => e.exercise)
+  );
+  exerciseMaster = exerciseMaster.filter(x => !RETIRED_DEFAULT_EXERCISES_.includes(x.name) || everLogged.has(x.name));
 }
 const CARDIO_OPTIONS = ["ランニング","ジョギング","バイク","ウォーキング","クロストレーナー","リカベントバイク","買い物","その他"];
 // 運動による消費カロリーの概算用(METs法の簡易版)。すべて目安の値です。
@@ -1489,6 +1508,11 @@ function seedExerciseMasterIfEmpty() {
   // やり方のデフォルトを差し込む。バージョンアップで新しく追加した種目
   // (アブドミナル・シーテッドローなど)が、既存ユーザーのマスタにも反映されるように。
   seedExerciseHowDefaults_();
+  // v6.9: 同じく毎回(冪等に)、もう使わないことにした初期値の種目(バーベル種目・
+  // 自重のみの種目)を取り除く。これは「種目マスタが空のときだけ初期投入する」
+  // seedExerciseMasterIfEmpty本体と違い、すでにEXERCISES_BY_PARTの初期値で
+  // マスタ作成済みの既存ユーザーにも反映するために必要。
+  retireUnfriendlyDefaultExercises_();
 }
 function saveState() {
   try {
@@ -4753,23 +4777,37 @@ function trainingHtml() {
         <div class="wrap" id="part-buttons" style="margin-bottom:10px;"></div>
         <label class="label">種目(任意)</label>
         <div class="wrap" id="exercise-buttons" style="margin-bottom:8px;"></div>
-        <input type="text" id="exercise-input" placeholder="例: ベンチプレス(空欄可・自由入力もOK)" style="margin-bottom:8px;">
+        <input type="text" id="exercise-input" placeholder="例: チェストプレス(空欄可・自由入力もOK)" style="margin-bottom:8px;">
         <div id="exercise-how-box" style="margin-bottom:10px;"></div>
         <div class="row" style="margin-bottom:6px;align-items:flex-start;">
           <div style="flex:1;">
             <label class="label">回数</label>
-            <input type="number" id="reps-input" placeholder="回" class="mono">
+            <div class="row" style="gap:4px;">
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="reps-step" data-val="-1">－</button>
+              <input type="number" id="reps-input" placeholder="回" class="mono" style="text-align:center;padding:9px 4px;">
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="reps-step" data-val="1">＋</button>
+            </div>
           </div>
           <div style="flex:1;">
-            <label class="label">負荷 (kg)</label>
+            <label class="label">セット数</label>
             <div class="row" style="gap:4px;">
-              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="weight-step" data-val="-2.5">－</button>
-              <input type="number" step="0.5" id="weight-input" class="mono" style="text-align:center;padding:9px 4px;">
-              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="weight-step" data-val="2.5">＋</button>
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="sets-step" data-val="-1">－</button>
+              <input type="number" id="sets-input" class="mono" style="text-align:center;padding:9px 4px;">
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="sets-step" data-val="1">＋</button>
             </div>
           </div>
         </div>
         <div class="wrap" id="reps-quick-buttons" style="margin-bottom:10px;"></div>
+        <div class="row" style="margin-bottom:6px;align-items:flex-start;">
+          <div style="flex:1;">
+            <label class="label">負荷 (kg)</label>
+            <div class="row" style="gap:4px;">
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="weight-step" data-val="-1">－</button>
+              <input type="number" step="0.5" id="weight-input" class="mono" style="text-align:center;padding:9px 4px;">
+              <button type="button" class="icon-btn" style="background:var(--slate);color:#fff;flex:0 0 auto;border-radius:8px;padding:9px 12px;" data-action="weight-step" data-val="1">＋</button>
+            </div>
+          </div>
+        </div>
         <label class="label">感想(任意)</label>
         <div class="wrap" id="feeling-buttons" style="margin-bottom:4px;"></div>
         <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">「今日のおすすめ」の運動強度に反映されます。この項目はGoogle Sheetsには同期されず、この端末の中だけに保存されます。</p>
@@ -5324,14 +5362,19 @@ function renderTrainingFormOptions() {
       `<button type="button" class="chip ${selectedFeeling===f.val?"active-a":""}" data-action="select-feeling" data-val="${f.val}">${f.emoji} ${f.label}</button>`).join("");
   }
 
-  // 負荷(kg): 初回は20kgを既定値にしつつ、部位・種目に対して前回入力した
-  // 回数・負荷があればそれを優先して提案する(reps-inputが空のときだけ上書きし、
-  // 入力中の値は消さない)。
+  // 負荷(kg)・セット数: 初回はそれぞれ20kg・1セットを既定値にしつつ、部位・種目に対して
+  // 前回入力した回数・負荷・セット数があればそれを優先して提案する(reps-inputが空の
+  // ときだけ上書きし、入力中の値は消さない)。
   const weightInput = document.getElementById("weight-input");
   const repsInput = document.getElementById("reps-input");
+  const setsInput = document.getElementById("sets-input");
   if (weightInput && !weightInput.dataset.built) {
     weightInput.value = 20;
     weightInput.dataset.built = "1";
+  }
+  if (setsInput && !setsInput.dataset.built) {
+    setsInput.value = 1;
+    setsInput.dataset.built = "1";
   }
   if (repsInput && (repsInput.value === "" || repsInput.dataset.autofilled === "1")) {
     const key = currentExercise || `(${selectedPart})`;
@@ -5340,10 +5383,12 @@ function renderTrainingFormOptions() {
       repsInput.value = remembered.reps;
       repsInput.dataset.autofilled = "1";
       if (weightInput) weightInput.value = remembered.weight;
+      if (setsInput) setsInput.value = remembered.sets || 1;
     } else if (repsInput.dataset.autofilled === "1") {
       // この部位・種目には過去の記録がない。前の候補が残らないようクリアする。
       repsInput.value = "";
       delete repsInput.dataset.autofilled;
+      if (setsInput) setsInput.value = 1;
     }
   }
   const repsQuickEl = document.getElementById("reps-quick-buttons");
@@ -5967,14 +6012,20 @@ function handleAddTraining() {
     if (!reps) return;
     const exercise = document.getElementById("exercise-input").value.trim();
     const weight = Number(document.getElementById("weight-input").value) || 0;
-    const entry = {
-      id: uid(), date, type: "strength", createdAt: Date.now(),
-      part: selectedPart, exercise, reps: Number(reps), weight,
-    };
-    if (selectedFeeling) entry.feeling = selectedFeeling;
-    entries.unshift(entry);
-    // 次回この種目(または部位)を選んだときに、今回の回数・負荷を提案できるよう覚えておく。
-    lastStrengthByExercise[exercise || `(${selectedPart})`] = { reps: Number(reps), weight };
+    // v6.10: 「セット数」を入力できるようにし、1回の記録で指定した件数ぶんまとめて
+    // 記録できるようにした(それまでは1セットごとに「記録する」を押す必要があった)。
+    const setsRaw = Number(document.getElementById("sets-input").value);
+    const sets = Number.isFinite(setsRaw) && setsRaw > 0 ? Math.round(setsRaw) : 1;
+    for (let i = 0; i < sets; i++) {
+      const entry = {
+        id: uid(), date, type: "strength", createdAt: Date.now(),
+        part: selectedPart, exercise, reps: Number(reps), weight,
+      };
+      if (selectedFeeling) entry.feeling = selectedFeeling;
+      entries.unshift(entry);
+    }
+    // 次回この種目(または部位)を選んだときに、今回の回数・負荷・セット数を提案できるよう覚えておく。
+    lastStrengthByExercise[exercise || `(${selectedPart})`] = { reps: Number(reps), weight, sets };
     // 感想はセットごとに変わりうるので、次の記録では選び直してもらう(前回の値を残さない)。
     selectedFeeling = null;
   } else {
@@ -6345,6 +6396,19 @@ document.getElementById("app").addEventListener("click", (e) => {
     const delta = Number(t.dataset.val);
     const v = Math.max(0, Math.round(((Number(inp.value) || 0) + delta) * 2) / 2);
     inp.value = v;
+  }
+  else if (action === "reps-step") {
+    const inp = document.getElementById("reps-input");
+    if (!inp) return;
+    const delta = Number(t.dataset.val);
+    inp.value = Math.max(0, (Number(inp.value) || 0) + delta);
+    delete inp.dataset.autofilled; // 自分で変更した値なので、以後の自動提案で上書きしない
+  }
+  else if (action === "sets-step") {
+    const inp = document.getElementById("sets-input");
+    if (!inp) return;
+    const delta = Number(t.dataset.val);
+    inp.value = Math.max(1, (Number(inp.value) || 0) + delta);
   }
   else if (action === "select-reps") {
     const repsInput = document.getElementById("reps-input");
