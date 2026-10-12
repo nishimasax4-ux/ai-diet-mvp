@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.10";
+const APP_VERSION = "v6.11";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -519,7 +519,9 @@ function backfillCardioDistances_() {
   if (changed) saveState();
 }
 const STRENGTH_KCAL_PER_SET = 10; // 筋トレ1セットあたりの消費カロリー概算(目安)
-const REP_QUICK_OPTIONS = [10,20,30,40,50]; // 回数のワンタップ候補(10回刻み・50回まで)。これ以外の回数は入力欄に直接入力できます
+// v6.11: 回数のワンタップ候補は、セット数の入力を追加したことで不要になったため廃止した
+// (「回数」は±1ボタンで細かく調整できる)。代わりに、負荷(kg)のワンタップ候補を追加する。
+const WEIGHT_QUICK_OPTIONS = [5,20,25,30,35,40,45,50]; // 負荷(kg)のワンタップ候補
 // 筋トレ1件ごとの感想(任意、v5.20)。キツさの自己申告を記録として残せるようにした。
 // Google Sheetsの「筋トレ」シートには列が無いため、この端末だけの項目として扱う
 // (骨格筋量・骨格筋率・有酸素の距離と同じ扱い。applyPayload内で引き継ぎ処理を行う)。
@@ -4797,7 +4799,6 @@ function trainingHtml() {
             </div>
           </div>
         </div>
-        <div class="wrap" id="reps-quick-buttons" style="margin-bottom:10px;"></div>
         <div class="row" style="margin-bottom:6px;align-items:flex-start;">
           <div style="flex:1;">
             <label class="label">負荷 (kg)</label>
@@ -4808,6 +4809,7 @@ function trainingHtml() {
             </div>
           </div>
         </div>
+        <div class="wrap" id="weight-quick-buttons" style="margin-bottom:10px;"></div>
         <label class="label">感想(任意)</label>
         <div class="wrap" id="feeling-buttons" style="margin-bottom:4px;"></div>
         <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">「今日のおすすめ」の運動強度に反映されます。この項目はGoogle Sheetsには同期されず、この端末の中だけに保存されます。</p>
@@ -5391,11 +5393,11 @@ function renderTrainingFormOptions() {
       if (setsInput) setsInput.value = 1;
     }
   }
-  const repsQuickEl = document.getElementById("reps-quick-buttons");
-  if (repsQuickEl) {
-    const currentReps = repsInput ? repsInput.value : "";
-    repsQuickEl.innerHTML = REP_QUICK_OPTIONS.map(r =>
-      `<button type="button" class="chip ${String(r)===String(currentReps)?"active-a":""}" data-action="select-reps" data-val="${r}">${r}回</button>`).join("");
+  const weightQuickEl = document.getElementById("weight-quick-buttons");
+  if (weightQuickEl) {
+    const currentWeight = weightInput ? weightInput.value : "";
+    weightQuickEl.innerHTML = WEIGHT_QUICK_OPTIONS.map(w =>
+      `<button type="button" class="chip ${String(w)===String(currentWeight)?"active-a":""}" data-action="select-weight" data-val="${w}">${w}kg</button>`).join("");
   }
 
   // 時間(分): 有酸素の種目ごとに前回の分数を覚えておき、未入力なら提案する。
@@ -6410,11 +6412,10 @@ document.getElementById("app").addEventListener("click", (e) => {
     const delta = Number(t.dataset.val);
     inp.value = Math.max(1, (Number(inp.value) || 0) + delta);
   }
-  else if (action === "select-reps") {
-    const repsInput = document.getElementById("reps-input");
-    if (!repsInput) return;
-    repsInput.value = t.dataset.val;
-    delete repsInput.dataset.autofilled;
+  else if (action === "select-weight") {
+    const weightInput = document.getElementById("weight-input");
+    if (!weightInput) return;
+    weightInput.value = t.dataset.val;
     renderTrainingFormOptions();
   }
   else if (action === "select-minutes") {
