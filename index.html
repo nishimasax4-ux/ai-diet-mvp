@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.12";
+const APP_VERSION = "v6.13";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -3154,6 +3154,119 @@ function computeCalorieBalanceHistory(days) {
   }
   return history;
 }
+// ---- 実測データからのTDEE逆算(v6.13) ----
+// 設定タブの「基礎消費」はプロフィール(年齢・身長・体組成・活動量)からの計算値だが、
+// ここでは実際に記録した体重の変化と摂取カロリーの記録から、実測に近いTDEE(総消費
+// カロリー)を逆算する。
+//   実測TDEE ≒ 期間の平均摂取カロリー + (減った体重kg × 7200kcal/kg) ÷ 日数
+// 体重は「期間の最初の7日間の平均」と「直近7日間の平均」を使う(1回の記録のブレを
+// 減らすため)。複数の期間(3週・5週・7週)で計算し、大きくブレていないかを確認
+// できるようにする(期間を変えても近い値になるほど、推定の信頼度が高いと考えられる)。
+const TDEE_ESTIMATE_WINDOWS_WEEKS = [3, 5, 7];
+function weightAverageInRange_(startStr, endStr) {
+  const inRange = weightEntries.filter(w => w.date >= startStr && w.date <= endStr);
+  if (!inRange.length) return null;
+  const weight = inRange.reduce((s,w) => s + w.weight, 0) / inRange.length;
+  const withBodyFat = inRange.filter(w => w.bodyFat != null);
+  const bodyFat = withBodyFat.length ? withBodyFat.reduce((s,w) => s + w.bodyFat, 0) / withBodyFat.length : null;
+  return { weight, bodyFat };
+}
+function avgDailyIntakeInRange_(startStr, endStr) {
+  // カロリーを入力していない日は「摂取0kcal」ではなく「不明」として除外する
+  // (computeCalorieTotalsと同じ考え方。未入力の日まで0kcal扱いにすると、実際には
+  // 食べているのに大きな赤字として数えてしまい、推定が実態から外れるため)。
+  const intakeByDate = {};
+  mealEntries.forEach(m => {
+    const c = m.calories || 0;
+    if (c <= 0) return;
+    if (m.date < startStr || m.date > endStr) return;
+    intakeByDate[m.date] = (intakeByDate[m.date] || 0) + c;
+  });
+  const days = Object.keys(intakeByDate);
+  if (!days.length) return null;
+  const total = days.reduce((s,d) => s + intakeByDate[d], 0);
+  return { avg: total / days.length, loggedDays: days.length };
+}
+// weeksぶん遡った期間で、体重の変化と平均摂取カロリーからTDEEを逆算する。
+// 期間の最初/最後それぞれ7日間に体重の記録が無い場合や、摂取カロリーを記録した日が
+// 期間の半分未満しかない(=信頼できない)場合はnullを返す。
+function estimateTdeeForWindow_(weeks) {
+  const today = new Date();
+  const todayStr = localDateStr(today);
+  const windowStartDate = new Date(today); windowStartDate.setDate(today.getDate() - weeks*7 + 1);
+  const earlyEndDate = new Date(windowStartDate); earlyEndDate.setDate(windowStartDate.getDate() + 6);
+  const lateStartDate = new Date(today); lateStartDate.setDate(today.getDate() - 6);
+  const windowStartStr = localDateStr(windowStartDate);
+  const earlyEndStr = localDateStr(earlyEndDate);
+  const lateStartStr = localDateStr(lateStartDate);
+
+  const early = weightAverageInRange_(windowStartStr, earlyEndStr);
+  const late = weightAverageInRange_(lateStartStr, todayStr);
+  if (!early || !late) return null;
+
+  const intake = avgDailyIntakeInRange_(windowStartStr, todayStr);
+  if (!intake || intake.loggedDays < weeks*7*0.5) return null;
+
+  // 最初の7日間平均と直近7日間平均の「差」なので、実質の経過日数は週数分の日数より
+  // 1週間(7日)短くなる(例: 3週間分なら実質2週間=14日ぶんの変化とみなす)。
+  const effectiveDays = Math.max(1, weeks*7 - 7);
+  const weightLossKg = early.weight - late.weight; // プラス=減った、マイナス=増えた
+  const estimateByWeight = Math.round(intake.avg + (weightLossKg * FAT_KCAL_PER_KG) / effectiveDays);
+
+  let estimateByBodyFat = null;
+  if (early.bodyFat != null && late.bodyFat != null) {
+    const fatLossKg = (early.weight * early.bodyFat/100) - (late.weight * late.bodyFat/100);
+    estimateByBodyFat = Math.round(intake.avg + (fatLossKg * FAT_KCAL_PER_KG) / effectiveDays);
+  }
+
+  return {
+    weeks, effectiveDays,
+    avgIntake: Math.round(intake.avg), loggedDays: intake.loggedDays,
+    weightLossKg: round1_(weightLossKg),
+    estimateByWeight, estimateByBodyFat,
+  };
+}
+// 複数期間ぶんの推定をまとめる。1つも計算できなければnull(データ不足)を返す。
+function estimateTdeeSummary_() {
+  const results = TDEE_ESTIMATE_WINDOWS_WEEKS.map(estimateTdeeForWindow_).filter(Boolean);
+  if (!results.length) return null;
+  const avgByWeight = Math.round(results.reduce((s,r) => s + r.estimateByWeight, 0) / results.length);
+  const fatResults = results.filter(r => r.estimateByBodyFat != null);
+  const avgByBodyFat = fatResults.length
+    ? Math.round(fatResults.reduce((s,r) => s + r.estimateByBodyFat, 0) / fatResults.length)
+    : null;
+  return { results, avgByWeight, avgByBodyFat };
+}
+// 設定タブに表示する「実測TDEEの推定」カード。
+function tdeeEstimateCardHtml_() {
+  const summary = estimateTdeeSummary_();
+  if (!summary) {
+    return `<div class="card">
+      <p class="section-title">📊 実測TDEEの推定</p>
+      <p class="muted" style="font-size:11px;margin:0;line-height:1.7;">からだタブの体重記録と、食事タブのカロリー記録が3週間ぶんそろうと、実際の記録から消費カロリー(TDEE)を逆算して表示します。体重はできれば2〜3日に1回以上、食事はできるだけ毎日カロリーを記録してください。</p>
+    </div>`;
+  }
+  const rows = summary.results.map(r => `
+    <div class="between" style="margin-bottom:4px;">
+      <span style="font-size:12px;">直近${r.weeks}週間</span>
+      <span class="mono" style="font-size:13px;">${r.estimateByWeight.toLocaleString()}kcal${r.estimateByBodyFat != null ? ` <span class="muted" style="font-size:10.5px;">(体脂肪ベース ${r.estimateByBodyFat.toLocaleString()})</span>` : ""}</span>
+    </div>`).join("");
+  const targets = getTargets();
+  const compareNote = targets
+    ? `<p class="muted" style="font-size:10.5px;margin:8px 0 0;line-height:1.6;">上の「🤖 AIアドバイス用プロフィール」の計算値(基礎消費 ${targets.tdee}kcal + 運動ぶん)と大きくかけ離れている場合は、活動量の設定を見直す目安になります。</p>`
+    : "";
+  return `<div class="card">
+    <p class="section-title">📊 実測TDEEの推定</p>
+    <p style="font-size:11.5px;margin:0 0 10px;line-height:1.7;">体重の変化と食事の記録から、実際の消費カロリー(TDEE)を逆算した目安です。</p>
+    <div class="between" style="margin-bottom:10px;">
+      <span style="font-size:12.5px;font-weight:700;">推定TDEE(平均)</span>
+      <span class="mono" style="font-size:18px;font-weight:700;">${summary.avgByWeight.toLocaleString()}<span class="muted" style="font-size:11px;font-weight:400;"> kcal</span></span>
+    </div>
+    ${rows}
+    <p class="muted" style="font-size:10.5px;margin:10px 0 0;line-height:1.6;">体重ベースは水分・筋肉の変化も含むため実際より高めに、体脂肪ベース(体組成計で体脂肪率を記録している場合のみ参考値として併記)は体組成計の誤差により低めに出やすい傾向があります。体重が変わると消費も変わるため、1か月ごとに見直すのがおすすめです。</p>
+    ${compareNote}
+  </div>`;
+}
 function generateBalanceAdvice(history) {
   const withData = history.filter(x => x.hasData);
   if (withData.length === 0) {
@@ -5658,6 +5771,8 @@ function settingsHtml() {
           : '<p class="muted" style="font-size:11px;margin:0;">年齢・身長と、からだタブでの体重記録がそろうと、AIが1日の目標カロリー・栄養バランスを計算します。</p>'}
       </div>
     </div>
+
+    ${tdeeEstimateCardHtml_()}
 
     <div class="card">
       ${settingsSectionHeader("masterExercise", "🏋️ 種目マスタ")}
