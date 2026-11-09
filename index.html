@@ -218,7 +218,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.14";
+const APP_VERSION = "v6.15";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -4439,7 +4439,7 @@ function mealHistoryHtml() {
     const isOpen = mealHistoryOpenDates.has(d);
     const items = grouped[d].map(m => `
       <div class="entry-row">
-        <div class="badge" style="background:var(--teal-soft);font-size:13px;">${m.mealType[0]}</div>
+        <div class="badge" style="background:var(--teal-soft);font-size:13px;">${esc(m.mealType[0])}</div>
         <div style="flex:1;">
           <div>${esc(m.text)} ${m.calories?`<span class="mono muted">${m.calories}kcal</span>`:""}</div>
           ${(m.protein||m.fat||m.carb) ? `<div class="muted">P${m.protein||0} F${m.fat||0} C${m.carb||0}</div>` : ""}

@@ -63,7 +63,13 @@ export default {
     try {
       const expected = env.APP_TOKEN;
       if (!expected) return json({ status: 'error', message: 'サーバ側にAPP_TOKENが設定されていません' });
-      if (!body.token || !safeEqual(String(body.token), expected)) {
+      // v6.15: body.token(アプリ本体が使う方式)に加えて、Authorizationヘッダーの
+      // Bearerトークンでも認証できるようにした。Meta Museなど外部のAIエージェントを
+      // 「カスタムコネクタ」として接続する場合、認証情報をHTTPヘッダーで渡す方式が
+      // 一般的なため(アプリ本体の動作・互換性は変えていない)。
+      const bearerMatch = /^Bearer\s+(.+)$/i.exec(request.headers.get('Authorization') || '');
+      const suppliedToken = body.token || (bearerMatch ? bearerMatch[1] : '');
+      if (!suppliedToken || !safeEqual(String(suppliedToken), expected)) {
         return json({ status: 'error', message: '認証に失敗しました(トークンが一致しません)' });
       }
 
@@ -77,6 +83,16 @@ export default {
       if (action === 'analyzePhoto') return json(await handleAnalyzePhoto(env, body.imageBase64, body.mimeType));
       if (action === 'aiText') return json(await handleAiText(env, body));
       if (action === 'aiVision') return json(await handleAiVision(env, body));
+      // v6.15: Meta Muse(やその他の外部AIエージェント)向けの読み書きアクション。
+      // 詳しくはこのファイル末尾の「Muse向けアクション」のコメントを参照。
+      if (action === 'museLogWeight') return json(await handleMuseLogWeight(env, body.payload));
+      if (action === 'museLogMeal') return json(await handleMuseLogMeal(env, body.payload));
+      if (action === 'museLogStrength') return json(await handleMuseLogStrength(env, body.payload));
+      if (action === 'museLogCardio') return json(await handleMuseLogCardio(env, body.payload));
+      if (action === 'museTodaySummary') return json(await handleMuseTodaySummary(env, body.payload));
+      if (action === 'museWeightTrend') return json(await handleMuseWeightTrend(env, body.payload));
+      if (action === 'museRecentTraining') return json(await handleMuseRecentTraining(env, body.payload));
+      if (action === 'museTdeeEstimate') return json(await handleMuseTdeeEstimate(env, body.payload));
       return json({ status: 'error', message: '不明なaction: ' + action });
     } catch (err) {
       return json({ status: 'error', message: String(err && err.message ? err.message : err) });
@@ -609,4 +625,289 @@ async function handleAiVision(env, body) {
   );
   if (!text) return { status: 'error', message: 'AIから応答がありませんでした' };
   return { status: 'ok', text: String(text).trim() };
+}
+
+// ============ Muse向けアクション(v6.15) ============
+// Meta Muse(やその他の外部AIエージェント)を「カスタムコネクタ」として接続し、
+// トレーニング記録を読み書きできるようにするためのアクション群。
+//
+// 【書き込み(museLogWeight/museLogMeal/museLogStrength/museLogCardio)】
+// 既存のaction=saveは「シートを丸ごとクリアしてから書き直す」方式で、アプリ本体
+// (index.html)が持つ全件を毎回送る前提になっている。Museのような外部からの
+// 書き込みにそのまま使うと、アプリ側が知らない変更を次の同期で消してしまう
+// (アプリは自分のlocalStorageが正だと思って上書きするため)。
+// そこで書き込み系はSheets APIのappend(末尾に1行追加するだけ)を使い、既存の
+// 行を一切消さない方式にした。
+// 追記のたびにLAST_WRITE_ATも更新する。これにより、アプリ側が次に同期しようと
+// したとき、アプリが覚えている書き込み時刻と食い違うため、既存の「他の端末で
+// 書き込みがあった」ときと同じ仕組みで自動的に競合(conflict)として扱われ、
+// アプリが黙ってMuseの記録を消してしまうことを防ぐ(index.html側の変更は不要)。
+// Museで記録した後にアプリを開いたときに同期の競合が出たら、設定タブの
+// 「☁️ シートから復元」で新しい内容を取り込んでください。
+// 【注意】アプリが一度もシートへの同期に成功していない(真っさらな状態)場合は
+// この食い違いチェック自体が働かないため、少なくとも一度はアプリ側で同期を
+// 済ませてからMuse連携を使い始めることをおすすめします。
+//
+// 【読み取り(museTodaySummary/museWeightTrend/museRecentTraining/museTdeeEstimate)】
+// 年齢・身長・性別・活動量などのプロフィールや、目標体重・減量ペースといった
+// 「目標」は、この端末のlocalStorageにしか無くスプレッドシートには同期されて
+// いない。そのため、ここでは「目標カロリー」や「基礎代謝」は計算できず、実際に
+// 記録された摂取カロリー・体重の変化・運動の記録だけから分かる範囲の概算を返す。
+const MUSE_STRENGTH_KCAL_PER_SET = 10; // index.htmlのSTRENGTH_KCAL_PER_SETと同じ値
+const MUSE_CARDIO_MET = { 'ランニング':8, 'ジョギング':7, 'バイク':7, 'ウォーキング':3.5, 'クロストレーナー':5, 'リカベントバイク':4.5, '買い物':3, 'その他':5 }; // index.htmlのCARDIO_METと同じ
+const MUSE_FAT_KCAL_PER_KG = 7200; // index.htmlのFAT_KCAL_PER_KGと同じ
+const MUSE_PARTS = ['胸','背中','脚','肩','腕','腹筋']; // index.htmlのPARTSと同じ
+
+function museNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : '';
+}
+function museDateOk(d) {
+  if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+  // 形だけでなく実在する日付かも確認する(例: 2026-13-99のような値を弾く)。
+  const [y, m, day] = d.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === day;
+}
+function museTodayStr() { return new Date().toISOString().slice(0, 10); }
+
+// セキュリティ: text/exercise/mealTypeなど「外部のAIエージェント経由で届く自由記述文字列」を
+// そのままスプレッドシートのセルに書き込むと、値が = + - @ で始まる場合にGoogle Sheets側が
+// 数式として解釈してしまう(いわゆるスプレッドシート/CSVインジェクション)。先頭にシングル
+// クォートを付けて「文字列として扱え」と明示することで無害化する。
+function museSafeCell(v) {
+  const s = String(v ?? '');
+  return /^[=+\-@]/.test(s) ? `'${s}` : s;
+}
+
+// シートが無ければ、見出し行付きで新規作成する(action=save側のシート追加ロジックと
+// 似ているが、こちらは1シートだけを対象にした簡易版)。
+async function museEnsureSheet(env, title, header) {
+  const meta = await sheetsFetch(env, '?fields=sheets.properties');
+  const found = (meta.sheets || []).find(s => s.properties.title === title);
+  if (found) return found.properties.sheetId;
+  const addRes = await sheetsFetch(env, ':batchUpdate', {
+    method: 'POST',
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title } } }] }),
+  });
+  const sheetId = addRes.replies[0].addSheet.properties.sheetId;
+  await sheetsFetch(env, `/values/${encodeURIComponent(a1Sheet(title) + '!A1')}?valueInputOption=RAW`, {
+    method: 'PUT', body: JSON.stringify({ values: [header] }),
+  });
+  await sheetsFetch(env, ':batchUpdate', {
+    method: 'POST',
+    body: JSON.stringify({ requests: [
+      { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } },
+      { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true } } }, fields: 'userEnteredFormat.textFormat.bold' } },
+    ] }),
+  });
+  return sheetId;
+}
+
+// 末尾に1行だけ追加する(クリア→書き直しはしない)。追記後にLAST_WRITE_ATを
+// 更新し、アプリ側の次の同期が自動的に競合として検知されるようにする。
+async function museAppendRow(env, title, header, row) {
+  await museEnsureSheet(env, title, header);
+  return museAppendRowNoEnsure(env, title, row);
+}
+
+// museEnsureSheetを呼ばない版。同じシートに複数行を連続で追加する場合(例: 筋トレの
+// セット数ぶんの行追加)に、1行ごとに無駄なメタデータ取得を繰り返さないための版。
+async function museAppendRowNoEnsure(env, title, row) {
+  await sheetsFetch(env, `/values/${encodeURIComponent(a1Sheet(title) + '!A1')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    method: 'POST', body: JSON.stringify({ values: [row] }),
+  });
+  const now = new Date().toISOString();
+  await env.SYNC_KV.put('LAST_WRITE_AT', now);
+  return now;
+}
+
+async function museSheetRows(env, title) {
+  let data;
+  try { data = await sheetsFetch(env, `/values/${encodeURIComponent(a1Sheet(title))}`); }
+  catch (e) { return []; } // シートがまだ無い場合は空として扱う
+  const values = data.values || [];
+  if (!values.length) return [];
+  return values.slice(1).filter(r => String(r[0] || '').trim() !== '');
+}
+
+async function museLatestWeightKg(env) {
+  const rows = await museSheetRows(env, '体重');
+  if (!rows.length) return null;
+  const sorted = [...rows].sort((a, b) => String(a[0]) < String(b[0]) ? 1 : -1);
+  const w = Number(sorted[0][1]);
+  return Number.isFinite(w) ? w : null;
+}
+
+async function handleMuseLogWeight(env, p) {
+  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
+  const weight = Number(p.weight);
+  if (!Number.isFinite(weight) || weight <= 0) return { status: 'error', message: 'weight(kg、数値)が必要です' };
+  const header = ['日付', '体重kg', '体脂肪率%', '腹囲cm'];
+  const row = [p.date, weight, p.bodyFat != null ? museNum(p.bodyFat) : '', p.waist != null ? museNum(p.waist) : ''];
+  const lastWriteAt = await museAppendRow(env, '体重', header, row);
+  return { status: 'ok', recorded: { date: p.date, weight, bodyFat: p.bodyFat ?? null, waist: p.waist ?? null }, lastWriteAt };
+}
+
+async function handleMuseLogMeal(env, p) {
+  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
+  if (!p.mealType) return { status: 'error', message: 'mealType(例: 朝食・昼食・夕食・間食)が必要です' };
+  if (!p.text) return { status: 'error', message: 'text(メニュー名)が必要です' };
+  const calories = p.calories != null ? museNum(p.calories) : 0;
+  const header = ['日付', '区分', 'メニュー', 'kcal', 'たんぱく質g', '脂質g', '炭水化物g'];
+  const row = [p.date, museSafeCell(p.mealType), museSafeCell(p.text), calories, museNum(p.protein), museNum(p.fat), museNum(p.carb)];
+  const lastWriteAt = await museAppendRow(env, '食事', header, row);
+  return { status: 'ok', recorded: { date: p.date, mealType: p.mealType, text: p.text, calories }, lastWriteAt };
+}
+
+async function handleMuseLogStrength(env, p) {
+  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
+  if (!MUSE_PARTS.includes(p.part)) return { status: 'error', message: `part は ${MUSE_PARTS.join('/')} のいずれかが必要です` };
+  const reps = Number(p.reps), weight = Number(p.weight);
+  if (!Number.isFinite(reps) || reps <= 0) return { status: 'error', message: 'reps(回数、数値)が必要です' };
+  if (!Number.isFinite(weight) || weight < 0) return { status: 'error', message: 'weight(kg、数値)が必要です' };
+  const setsRaw = p.sets != null ? Number(p.sets) : 1;
+  if (!Number.isFinite(setsRaw) || setsRaw <= 0) return { status: 'error', message: 'sets(セット数、数値)は1以上にしてください' };
+  // セキュリティ: setsに上限を設けないと、1回のリクエストで大量のAPI呼び出しが発生し、
+  // Workerの実行時間やGoogle Sheets APIのレート制限を使い果たすおそれがある(DoSリスク)。
+  // 実際の筋トレで現実的な最大値として20を上限にする。
+  const MUSE_MAX_SETS = 20;
+  if (setsRaw > MUSE_MAX_SETS) return { status: 'error', message: `sets(セット数)は${MUSE_MAX_SETS}以下にしてください` };
+  const sets = Math.round(setsRaw);
+  const exercise = museSafeCell(p.exercise || '');
+  const header = ['日付', '部位', '種目', '重量kg', '回数', '消費カロリーkcal'];
+  // シートの存在確認はループの外で1回だけ行う(毎回メタデータを取得しない)。
+  await museEnsureSheet(env, '筋トレ', header);
+  let lastWriteAt = null;
+  // index.htmlのhandleAddTraining()と同じく、1セット=1行として、セット数ぶん
+  // 同じ内容の行を追加する(データ構造を変えないため)。
+  for (let i = 0; i < sets; i++) {
+    lastWriteAt = await museAppendRowNoEnsure(env, '筋トレ', [p.date, p.part, exercise, weight, reps, MUSE_STRENGTH_KCAL_PER_SET]);
+  }
+  return { status: 'ok', recorded: { date: p.date, part: p.part, exercise: p.exercise || null, weight, reps, sets }, lastWriteAt };
+}
+
+async function handleMuseLogCardio(env, p) {
+  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
+  if (!p.exercise) return { status: 'error', message: 'exercise(種目名、例: ランニング・ウォーキング)が必要です' };
+  const minutes = Number(p.minutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) return { status: 'error', message: 'minutes(分、数値)が必要です' };
+  const weightKg = await museLatestWeightKg(env);
+  const met = MUSE_CARDIO_MET[p.exercise] || MUSE_CARDIO_MET['その他'];
+  // 体重が一度も記録されていない場合は計算できないため空欄にする(index.htmlのbuildPayload()と同じ考え方)。
+  const kcal = weightKg != null ? Math.round((met * 3.5 * weightKg / 200) * minutes) : '';
+  const header = ['日付', '種目', '時間分', '消費カロリーkcal'];
+  const lastWriteAt = await museAppendRow(env, '有酸素', header, [p.date, museSafeCell(p.exercise), minutes, kcal]);
+  return { status: 'ok', recorded: { date: p.date, exercise: p.exercise, minutes, kcal: kcal === '' ? null : kcal }, lastWriteAt };
+}
+
+async function handleMuseTodaySummary(env, p) {
+  const date = (p && museDateOk(p.date)) ? p.date : museTodayStr();
+  const meals = (await museSheetRows(env, '食事')).filter(r => r[0] === date);
+  const strength = (await museSheetRows(env, '筋トレ')).filter(r => r[0] === date);
+  const cardio = (await museSheetRows(env, '有酸素')).filter(r => r[0] === date);
+  const intakeKcal = meals.reduce((s, r) => s + (Number(r[3]) || 0), 0);
+  const strengthBurn = strength.reduce((s, r) => s + (Number(r[5]) || 0), 0);
+  const cardioBurn = cardio.reduce((s, r) => s + (Number(r[3]) || 0), 0);
+  return {
+    status: 'ok', date,
+    intakeKcal: Math.round(intakeKcal),
+    exerciseBurnKcal: Math.round(strengthBurn + cardioBurn),
+    mealsLogged: meals.length, strengthSetsLogged: strength.length, cardioSessionsLogged: cardio.length,
+    note: '摂取カロリーと、運動による消費カロリーだけの概算です。基礎代謝ぶんは含みません(プロフィール情報が端末内にしか無いため)。',
+  };
+}
+
+async function handleMuseWeightTrend(env, p) {
+  const days = (p && Number.isFinite(Number(p.days)) && Number(p.days) > 0) ? Math.min(Math.round(Number(p.days)), 180) : 14;
+  const rows = await museSheetRows(env, '体重');
+  const sorted = [...rows].sort((a, b) => String(a[0]) < String(b[0]) ? -1 : 1);
+  const cutoff = new Date(); cutoff.setUTCDate(cutoff.getUTCDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const recent = sorted.filter(r => String(r[0]) >= cutoffStr);
+  const points = recent.map(r => ({
+    date: r[0], weight: Number(r[1]) || null,
+    bodyFat: r[2] !== '' && r[2] != null ? Number(r[2]) : null,
+    waist: r[3] !== '' && r[3] != null ? Number(r[3]) : null,
+  }));
+  const first = points[0], last = points[points.length - 1];
+  const change = (first && last && points.length > 1) ? Math.round((last.weight - first.weight) * 10) / 10 : 0;
+  return { status: 'ok', days, count: points.length, points, change };
+}
+
+async function handleMuseRecentTraining(env, p) {
+  const days = (p && Number.isFinite(Number(p.days)) && Number(p.days) > 0) ? Math.min(Math.round(Number(p.days)), 90) : 7;
+  const cutoff = new Date(); cutoff.setUTCDate(cutoff.getUTCDate() - days + 1);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const strength = (await museSheetRows(env, '筋トレ')).filter(r => String(r[0]) >= cutoffStr)
+    .map(r => ({ date: r[0], part: r[1], exercise: r[2], weightKg: Number(r[3]) || null, reps: Number(r[4]) || null }));
+  const cardio = (await museSheetRows(env, '有酸素')).filter(r => String(r[0]) >= cutoffStr)
+    .map(r => ({ date: r[0], exercise: r[1], minutes: Number(r[2]) || null }));
+  return { status: 'ok', days, strength, cardio };
+}
+
+// index.html の estimateTdeeForWindow_() / estimateTdeeSummary_()(v6.13)と同じ考え方を、
+// スプレッドシートの行データから計算する版。
+function museWeightAvgInRange(rows, startStr, endStr) {
+  const inRange = rows.filter(r => r[0] >= startStr && r[0] <= endStr);
+  if (!inRange.length) return null;
+  const weight = inRange.reduce((s, r) => s + (Number(r[1]) || 0), 0) / inRange.length;
+  const withBf = inRange.filter(r => r[2] !== '' && r[2] != null);
+  const bodyFat = withBf.length ? withBf.reduce((s, r) => s + Number(r[2]), 0) / withBf.length : null;
+  return { weight, bodyFat };
+}
+function museAvgIntakeInRange(rows, startStr, endStr) {
+  const byDate = {};
+  rows.forEach(r => {
+    const c = Number(r[3]) || 0;
+    if (c <= 0) return;
+    if (r[0] < startStr || r[0] > endStr) return;
+    byDate[r[0]] = (byDate[r[0]] || 0) + c;
+  });
+  const days = Object.keys(byDate);
+  if (!days.length) return null;
+  const total = days.reduce((s, d) => s + byDate[d], 0);
+  return { avg: total / days.length, loggedDays: days.length };
+}
+function museEstimateTdeeWindow(weightRows, mealRows, weeks, todayStr) {
+  const today = new Date(todayStr + 'T00:00:00Z');
+  const windowStart = new Date(today); windowStart.setUTCDate(today.getUTCDate() - weeks * 7 + 1);
+  const earlyEnd = new Date(windowStart); earlyEnd.setUTCDate(windowStart.getUTCDate() + 6);
+  const lateStart = new Date(today); lateStart.setUTCDate(today.getUTCDate() - 6);
+  const windowStartStr = windowStart.toISOString().slice(0, 10);
+  const earlyEndStr = earlyEnd.toISOString().slice(0, 10);
+  const lateStartStr = lateStart.toISOString().slice(0, 10);
+
+  const early = museWeightAvgInRange(weightRows, windowStartStr, earlyEndStr);
+  const late = museWeightAvgInRange(weightRows, lateStartStr, todayStr);
+  if (!early || !late) return null;
+
+  const intake = museAvgIntakeInRange(mealRows, windowStartStr, todayStr);
+  if (!intake || intake.loggedDays < weeks * 7 * 0.5) return null;
+
+  const effectiveDays = Math.max(1, weeks * 7 - 7);
+  const weightLossKg = early.weight - late.weight;
+  const estimateByWeight = Math.round(intake.avg + (weightLossKg * MUSE_FAT_KCAL_PER_KG) / effectiveDays);
+  let estimateByBodyFat = null;
+  if (early.bodyFat != null && late.bodyFat != null) {
+    const fatLossKg = (early.weight * early.bodyFat / 100) - (late.weight * late.bodyFat / 100);
+    estimateByBodyFat = Math.round(intake.avg + (fatLossKg * MUSE_FAT_KCAL_PER_KG) / effectiveDays);
+  }
+  return { weeks, estimateByWeight, estimateByBodyFat };
+}
+
+async function handleMuseTdeeEstimate(env, p) {
+  const todayStr = (p && museDateOk(p.date)) ? p.date : museTodayStr();
+  const weightRows = await museSheetRows(env, '体重');
+  const mealRows = await museSheetRows(env, '食事');
+  const results = [3, 5, 7].map(w => museEstimateTdeeWindow(weightRows, mealRows, w, todayStr)).filter(Boolean);
+  if (!results.length) {
+    return { status: 'ok', available: false, message: '体重・食事の記録が3週間ぶんそろっていないため、計算できませんでした。' };
+  }
+  const avgByWeight = Math.round(results.reduce((s, r) => s + r.estimateByWeight, 0) / results.length);
+  const fatResults = results.filter(r => r.estimateByBodyFat != null);
+  const avgByBodyFat = fatResults.length
+    ? Math.round(fatResults.reduce((s, r) => s + r.estimateByBodyFat, 0) / fatResults.length)
+    : null;
+  return { status: 'ok', available: true, date: todayStr, avgByWeight, avgByBodyFat, windows: results };
 }
