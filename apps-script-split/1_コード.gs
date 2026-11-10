@@ -1,5 +1,5 @@
 /**
- * Training Log + AI (v44.1)  1/5  コード.gs — 設定値・入口・共通処理
+ * Training Log + AI (v44.2)  1/5  コード.gs — 設定値・入口・共通処理
  *
  * このコードは5つのファイルに分けてあります(スマホでは長い貼り付けが
  * 途中で切れることがあるため)。5つすべてを貼り付けて初めて動きます。
@@ -20,9 +20,18 @@ var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 var GROQ_VISION_MODELS = ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b'];
 
-var BACKEND_VERSION = 'v44.1';
+var BACKEND_VERSION = 'v44.2';
 
-function doGet() {
+function doGet(e) {
+  // Muse用: 読み取り系だけGETでも呼べる(?action=museHelp&token=合言葉)
+  try {
+    var p = (e && e.parameter) || {};
+    var expected = prop_('APP_TOKEN');
+    if (expected && p.token && safeEqual_(String(p.token), expected)
+        && (p.action === 'museHelp' || p.action === 'museTodaySummary' || p.action === 'museWeightTrend')) {
+      return json_(museRoute_(p.action, p));
+    }
+  } catch (err) {}
   return json_({ status: 'error', message: 'POST only' });
 }
 
@@ -32,7 +41,8 @@ function doPost(e) {
 
     var expected = prop_('APP_TOKEN');
     if (!expected) return json_({ status: 'error', message: 'サーバ側にAPP_TOKENが設定されていません' });
-    if (!body.token || !safeEqual_(String(body.token), expected)) {
+    var suppliedToken = body.token || (e.parameter && e.parameter.token) || '';
+    if (!suppliedToken || !safeEqual_(String(suppliedToken), expected)) {
       return json_({ status: 'error', message: '認証に失敗しました(トークンが一致しません)' });
     }
 
@@ -47,6 +57,8 @@ function doPost(e) {
 
     if (action === 'aiText')            return json_(handleAiText_(body));
     if (action === 'aiVision')          return json_(handleAiVision_(body));
+    var museRes = museRoute_(action, body.payload);
+    if (museRes) return json_(museRes);
     return json_({ status: 'error', message: '不明なaction: ' + action });
 
   } catch (err) {
