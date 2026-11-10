@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.1";
+const APP_VERSION = "v7.2";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -7294,41 +7294,66 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 // ============ シートの記録を自動で取り込む(v7.1) ============
 // Museなど、アプリ以外がシートに書いた記録を、アプリを開いたとき・戻ってきたときに自動で取り込む。
 // 以前は「設定 → シートから復元」を手で押さないと反映されなかった。
-// 【安全のため、次のどれかに当てはまるときは取り込まない】
-//  ・この端末がまだ一度も同期していない(=シートの状態を把握していない)
-//  ・この端末にまだシートへ送っていない変更がある(取り込むと消えてしまうため)
-//  ・同期中・保留中・読み込み失敗中
+// 端末にまだシートへ送っていない記録があっても、止めずに「合体」させる:
+//   シートの記録 + (シートにまだ無い端末の記録) を取り込み、そのあと合体した内容をシートへ送る。
+// 【取り込まないとき】この端末がまだ一度も同期していない / 同期中・保留中・読み込み失敗中
 let lastAutoPullAt = 0, autoPulling = false, toastTimer = null;
 function showToast_(text) {
   let el = document.getElementById("toast");
   if (!el) { el = document.createElement("div"); el.id = "toast"; document.body.appendChild(el); }
   el.textContent = text; el.classList.add("on");
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 4000);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 5000);
 }
-function hasUnsentChanges_() { return Object.keys(changedPayload_(false).payload).length > 0; }
+// 「同じ記録かどうか」を見る列数(消費カロリーなど、計算で変わる列は比べない)
+const PULL_KEY_COLS = { "筋トレ": 5, "有酸素": 3, "体重": 4, "食事": 7 };
+function pullRowKey_(name, row) {
+  return (row || []).slice(0, PULL_KEY_COLS[name] || 7).map(v => (v === null || v === undefined) ? "" : String(v)).join("\u0001");
+}
+// シートの内容に、シートにまだ無い端末の記録を足したものを返す。{ merged, localOnly(件数) }
+function mergeSheetWithLocal_(sheetPayload) {
+  const local = buildPayload();
+  const merged = {}; let localOnly = 0;
+  Object.keys(local).forEach(name => {
+    const sheet = sheetPayload[name] || { header: local[name].header, rows: [] };
+    const count = {};
+    (sheet.rows || []).forEach(r => { const k = pullRowKey_(name, r); count[k] = (count[k] || 0) + 1; });
+    const extra = [];
+    local[name].rows.forEach(r => {
+      const k = pullRowKey_(name, r);
+      if (count[k] > 0) count[k]--; else extra.push(r);
+    });
+    localOnly += extra.length;
+    merged[name] = { header: sheet.header && sheet.header.length ? sheet.header : local[name].header, rows: (sheet.rows || []).concat(extra) };
+  });
+  return { merged, localOnly };
+}
 async function autoPullFromSheet_(manual) {
   if (!gasConfigured() || !profile || autoPulling) return;
-  if (syncInFlight || syncTimer || syncPending || syncHoldReason_() || emptySyncBlocked) return;
-  if (!gasConfig.lastKnownWriteAt) { if (manual) showToast_("先に一度、同期を成功させてください"); return; }
+  if (syncInFlight || syncTimer || syncPending || syncHoldReason_() || emptySyncBlocked) { if (manual) showToast_("同期中のため、少し待ってからもう一度タップしてください"); return; }
+  if (!gasConfig.lastKnownWriteAt) { if (manual) showToast_("先に一度、同期を成功させてください(設定 → 今すぐ同期)"); return; }
   if (!manual && Date.now() - lastAutoPullAt < 20000) return;
-  if (hasUnsentChanges_()) { if (manual) showToast_("送信前の記録があるため、先に同期します"); if (manual) syncToSheet(); return; }
   autoPulling = true; lastAutoPullAt = Date.now();
   try {
     const data = await gasPost({ action: "load" });
-    if (!data || data.status !== "ok" || !data.payload) return;
+    if (!data || data.status !== "ok" || !data.payload) { if (manual) showToast_("シートの読み込みに失敗しました"); return; }
     if (!data.lastWriteAt || data.lastWriteAt === gasConfig.lastKnownWriteAt) { if (manual) showToast_("新しい記録はありません"); return; }
-    // 通信している間に端末側で記録が増えていたら、取り込まない(増えた記録を消さないため)
-    if (syncInFlight || syncTimer || hasUnsentChanges_()) return;
+    // 通信している間に同期が始まっていたら、今回は見送る(次の機会に取り込む)
+    if (syncInFlight || syncTimer) return;
     const before = entries.length + weightEntries.length + mealEntries.length;
-    applyPayload(data.payload);
+    const { merged, localOnly } = mergeSheetWithLocal_(data.payload);
+    applyPayload(merged);
     saveState();
-    try {
-      const cur = buildPayload();
-      sentSheetSigs = Object.keys(cur).reduce((a, k) => (a[k] = sheetSignature_(cur[k]), a), {});
-      saveSentSigs();
-    } catch (e) { sentSheetSigs = {}; saveSentSigs(); }
     gasConfig.lastKnownWriteAt = data.lastWriteAt; saveConfig();
     syncConflict = null; if (syncStatus === "conflict") syncStatus = "idle";
+    if (localOnly === 0) {
+      try {
+        const cur = buildPayload();
+        sentSheetSigs = Object.keys(cur).reduce((a, k) => (a[k] = sheetSignature_(cur[k]), a), {});
+        saveSentSigs();
+      } catch (e) { sentSheetSigs = {}; saveSentSigs(); }
+    } else {
+      scheduleSync();   // 端末にだけあった記録を、合体した内容といっしょにシートへ送る
+    }
     const diff = entries.length + weightEntries.length + mealEntries.length - before;
     const ae = document.activeElement;
     if (!(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName))) renderTabContent();   // 入力中は画面を作り直さない
@@ -7379,7 +7404,7 @@ if (!profile) {
   if (goals.weeklyFreq) onboardDraft.weeklyFreq = String(goals.weeklyFreq);
 }
 renderApp();
-setTimeout(() => autoPullFromSheet_(true), 800);
+setTimeout(() => autoPullFromSheet_(false), 800);
 </script>
 </body>
 </html>
