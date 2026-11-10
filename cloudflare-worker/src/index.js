@@ -669,7 +669,48 @@ function museDateOk(d) {
   const dt = new Date(Date.UTC(y, m - 1, day));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === day;
 }
-function museTodayStr() { return new Date().toISOString().slice(0, 10); }
+// v6.16: 日本時間(JST)の「今日」。以前はUTCで数えていたため、日本の午前0〜9時に記録すると
+// 前日の日付になってしまっていた。
+function museJst() { return new Date(Date.now() + 9 * 3600 * 1000); }
+function museTodayStr() { return museJst().toISOString().slice(0, 10); }
+// v6.16: Museが入力しやすいよう、日付は省略でき(省略=今日)、"今日""昨日""today""yesterday"や
+// "2026/11/3"、"11/3"のような書き方も受け付ける。解釈できなければnull。
+function museResolveDate(d) {
+  if (d == null || d === '') return museTodayStr();
+  const t = String(d).trim();
+  if (/^(today|今日|きょう)$/i.test(t)) return museTodayStr();
+  if (/^(yesterday|昨日|きのう)$/i.test(t)) return new Date(museJst().getTime() - 86400000).toISOString().slice(0, 10);
+  let m = t.match(/^(\d{4})[-\/.年](\d{1,2})[-\/.月](\d{1,2})日?$/);
+  if (!m) { const mm = t.match(/^(\d{1,2})[\/月](\d{1,2})日?$/); if (mm) m = [null, String(museJst().getUTCFullYear()), mm[1], mm[2]]; }
+  if (!m) return null;
+  const out = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+  return museDateOk(out) ? out : null;
+}
+// "65.2kg" "10回" "約30分" のような文字つきの数値も受け付ける。数値にできなければNaN。
+function museLoose(v) {
+  if (typeof v === 'number') return v;
+  const m = String(v ?? '').replace(/[０-９．]/g, c => c === '．' ? '.' : String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).match(/-?\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : NaN;
+}
+// 種目名から部位を推定(partを省略したとき用)。当てはまらなければnull。
+const MUSE_PART_HINTS = [
+  ['胸', /ベンチ|チェスト|ペック|フライ|クロスオーバー|プッシュアップ|腕立て|ディップ/],
+  ['背中', /ラット|プルダウン|ロウ|ローイング|懸垂|チンニング|デッドリフト|ストレートアーム|シュラッグ/],
+  ['脚', /スクワット|レッグ|ランジ|カーフ|ヒップ|キックバック|ブルガリアン/],
+  ['肩', /ショルダー|サイドレイズ|フェイスプル|リアレイズ|アーノルド|オーバーヘッドプレス/],
+  ['腕', /カール|トライセップ|プレスダウン|エクステンション|ハンマー/],
+  ['腹筋', /クランチ|腹筋|プランク|レッグレイズ|シットアップ|アブ/],
+];
+function museGuessPart(exercise) {
+  const e = String(exercise || '');
+  const hit = MUSE_PART_HINTS.find(([, re]) => re.test(e));
+  return hit ? hit[0] : null;
+}
+// 食事区分を省略したとき、日本時間の時刻から推定する(アプリ側のautoSelectMealTypeByTimeと同じ考え方)。
+function museGuessMealType() {
+  const h = museJst().getUTCHours();
+  return h >= 4 && h < 10 ? '朝食' : h >= 10 && h < 15 ? '昼食' : h >= 15 && h < 18 ? '間食' : '夕食';
+}
 
 // セキュリティ: text/exercise/mealTypeなど「外部のAIエージェント経由で届く自由記述文字列」を
 // そのままスプレッドシートのセルに書き込むと、値が = + - @ で始まる場合にGoogle Sheets側が
@@ -740,8 +781,10 @@ async function museLatestWeightKg(env) {
 }
 
 async function handleMuseLogWeight(env, p) {
-  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
-  const weight = Number(p.weight);
+  p = p || {};
+  p.date = museResolveDate(p.date);
+  if (!p.date) return { status: 'error', message: 'dateは省略(=今日)か、今日/昨日/2026-11-03のような形で指定してください' };
+  const weight = museLoose(p.weight);
   if (!Number.isFinite(weight) || weight <= 0) return { status: 'error', message: 'weight(kg、数値)が必要です' };
   const header = ['日付', '体重kg', '体脂肪率%', '腹囲cm'];
   const row = [p.date, weight, p.bodyFat != null ? museNum(p.bodyFat) : '', p.waist != null ? museNum(p.waist) : ''];
@@ -750,23 +793,28 @@ async function handleMuseLogWeight(env, p) {
 }
 
 async function handleMuseLogMeal(env, p) {
-  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
-  if (!p.mealType) return { status: 'error', message: 'mealType(例: 朝食・昼食・夕食・間食)が必要です' };
+  p = p || {};
+  p.date = museResolveDate(p.date);
+  if (!p.date) return { status: 'error', message: 'dateは省略(=今日)か、今日/昨日/2026-11-03のような形で指定してください' };
+  if (!p.mealType) p.mealType = museGuessMealType(); // 省略時は時刻から推定
   if (!p.text) return { status: 'error', message: 'text(メニュー名)が必要です' };
-  const calories = p.calories != null ? museNum(p.calories) : 0;
+  const calories = p.calories != null && Number.isFinite(museLoose(p.calories)) ? museLoose(p.calories) : 0;
   const header = ['日付', '区分', 'メニュー', 'kcal', 'たんぱく質g', '脂質g', '炭水化物g'];
-  const row = [p.date, museSafeCell(p.mealType), museSafeCell(p.text), calories, museNum(p.protein), museNum(p.fat), museNum(p.carb)];
+  const row = [p.date, museSafeCell(p.mealType), museSafeCell(p.text), calories, museNum(museLoose(p.protein)), museNum(museLoose(p.fat)), museNum(museLoose(p.carb))];
   const lastWriteAt = await museAppendRow(env, '食事', header, row);
   return { status: 'ok', recorded: { date: p.date, mealType: p.mealType, text: p.text, calories }, lastWriteAt };
 }
 
 async function handleMuseLogStrength(env, p) {
-  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
-  if (!MUSE_PARTS.includes(p.part)) return { status: 'error', message: `part は ${MUSE_PARTS.join('/')} のいずれかが必要です` };
-  const reps = Number(p.reps), weight = Number(p.weight);
+  p = p || {};
+  p.date = museResolveDate(p.date);
+  if (!p.date) return { status: 'error', message: 'dateは省略(=今日)か、今日/昨日/2026-11-03のような形で指定してください' };
+  if (!p.part) p.part = museGuessPart(p.exercise); // 省略時は種目名から推定
+  if (!MUSE_PARTS.includes(p.part)) return { status: 'error', message: `部位を判断できません。part を ${MUSE_PARTS.join('/')} のいずれかで指定してください` };
+  const reps = museLoose(p.reps), weight = p.weight == null || p.weight === '' ? 0 : museLoose(p.weight); // 重量の省略は自重(0kg)
   if (!Number.isFinite(reps) || reps <= 0) return { status: 'error', message: 'reps(回数、数値)が必要です' };
   if (!Number.isFinite(weight) || weight < 0) return { status: 'error', message: 'weight(kg、数値)が必要です' };
-  const setsRaw = p.sets != null ? Number(p.sets) : 1;
+  const setsRaw = p.sets != null ? museLoose(p.sets) : 1;
   if (!Number.isFinite(setsRaw) || setsRaw <= 0) return { status: 'error', message: 'sets(セット数、数値)は1以上にしてください' };
   // セキュリティ: setsに上限を設けないと、1回のリクエストで大量のAPI呼び出しが発生し、
   // Workerの実行時間やGoogle Sheets APIのレート制限を使い果たすおそれがある(DoSリスク)。
@@ -788,9 +836,11 @@ async function handleMuseLogStrength(env, p) {
 }
 
 async function handleMuseLogCardio(env, p) {
-  if (!p || !museDateOk(p.date)) return { status: 'error', message: 'date(YYYY-MM-DD形式)が必要です' };
+  p = p || {};
+  p.date = museResolveDate(p.date);
+  if (!p.date) return { status: 'error', message: 'dateは省略(=今日)か、今日/昨日/2026-11-03のような形で指定してください' };
   if (!p.exercise) return { status: 'error', message: 'exercise(種目名、例: ランニング・ウォーキング)が必要です' };
-  const minutes = Number(p.minutes);
+  const minutes = museLoose(p.minutes);
   if (!Number.isFinite(minutes) || minutes <= 0) return { status: 'error', message: 'minutes(分、数値)が必要です' };
   const weightKg = await museLatestWeightKg(env);
   const met = MUSE_CARDIO_MET[p.exercise] || MUSE_CARDIO_MET['その他'];

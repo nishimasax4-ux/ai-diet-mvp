@@ -151,6 +151,75 @@
   .cal-dot { width: 5px; height: 5px; border-radius: 999px; }
   .modal-overlay { position: fixed; inset: 0; background: rgba(20,18,14,0.45); display: flex; align-items: flex-end; justify-content: center; z-index: 50; }
   .modal-card { background: #FFFFFF; width: 100%; max-width: 480px; border-radius: 16px 16px 0 0; padding: 20px; max-height: 85vh; overflow-y: auto; }
+  /* ===== v6.16: 見やすさ重視のUI刷新 ===== */
+  body { font-size: 15px; background: #F3F5F9; }
+  #app { padding-bottom: 110px; }
+  h1 { font-size: 21px; }
+  .muted { font-size: 12.5px; }
+  .card { border-radius: 16px; padding: 16px; margin-bottom: 14px; border: none; box-shadow: 0 1px 3px rgba(16,24,40,.07), 0 1px 2px rgba(16,24,40,.04); }
+  .section-title { font-size: 14px; margin-bottom: 12px; }
+  .label { font-size: 12.5px; }
+  .kpi { border-radius: 14px; border: none; box-shadow: 0 1px 3px rgba(16,24,40,.07); padding: 12px 14px; }
+  .kpi .kpi-l { font-size: 12px; } .kpi .kpi-v { font-size: 24px; } .kpi .kpi-d { font-size: 12px; }
+  input, select, textarea { font-size: 16px; padding: 11px 12px; border-radius: 10px; }
+  .chip { font-size: 14px; padding: 9px 16px; }
+  .btn-primary { padding: 15px; font-size: 16px; border-radius: 14px; background: var(--slate); color: #fff; }
+  .tabbar { max-width: 480px; border-top: none; box-shadow: 0 -2px 12px rgba(16,24,40,.08); border-radius: 18px 18px 0 0; }
+  .tab-item { font-size: 12px; padding: 10px 4px 9px; }
+  .tab-item .ic { font-size: 23px; }
+  .tab-item.active { color: var(--slate); }
+  .tab-item.active .ic { transform: scale(1.1); }
+  .entry-row { font-size: 14.5px; }
+  .seg { display: flex; gap: 4px; background: #E4E9F1; border-radius: 12px; padding: 4px; margin: 4px 0 14px; overflow-x: auto; }
+  .seg-b { flex: 1 0 auto; background: none; border-radius: 9px; padding: 9px 10px; font-size: 13.5px; font-weight: 600; color: var(--ink-faint); white-space: nowrap; }
+  .seg-b.on { background: #fff; color: var(--slate); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+  .range { display: flex; gap: 4px; background: #E4E9F1; border-radius: 12px; padding: 4px; margin: 4px 0 14px; }
+  .range .seg-b { flex: 1; text-align: center; }
+  details.more { margin-bottom: 14px; }
+  details.more > summary { list-style: none; cursor: pointer; background: #fff; border-radius: 14px; padding: 14px 16px; font-size: 14px; font-weight: 600; box-shadow: 0 1px 3px rgba(16,24,40,.07); display: flex; justify-content: space-between; align-items: center; }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::after { content: "＋"; color: var(--ink-faint); font-weight: 400; }
+  details.more[open] > summary { margin-bottom: 12px; }
+  details.more[open] > summary::after { content: "－"; }
+  details.more.inner { margin-bottom: 10px; }
+  details.more.inner > summary { background: var(--paper); box-shadow: none; padding: 10px 14px; font-size: 13px; font-weight: 500; color: var(--ink-faint); }
+  .btn-link { display: block; width: 100%; background: none; color: var(--slate); font-size: 14px; font-weight: 600; padding: 12px; margin-bottom: 14px; text-align: center; }
+  .quick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+  .quick { background: var(--slate); color: #fff; border-radius: 16px; padding: 16px 6px; font-size: 14px; font-weight: 700; }
+  .quick span { display: block; font-size: 26px; margin-bottom: 4px; }
+  .hero { background: linear-gradient(135deg, #2C4A7C, #3B6BB5); color: #fff; }
+  .hero .muted { color: rgba(255,255,255,.78); } .hero .muted b { color: #fff; }
+  .hero-num { font-family: var(--font-mono); font-size: 46px; font-weight: 700; line-height: 1.05; }
+  .hero-num span { font-size: 17px; font-weight: 500; margin-left: 3px; opacity: .85; }
+  .hero-sub { font-family: var(--font-mono); font-size: 24px; font-weight: 700; }
+  .prog { height: 10px; background: rgba(255,255,255,.25); border-radius: 99px; margin-top: 14px; overflow: hidden; }
+  .prog > div { height: 100%; background: #fff; border-radius: 99px; }
+  .hero-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .pill { font-size: 12.5px; font-weight: 600; padding: 5px 11px; border-radius: 99px; background: rgba(255,255,255,.18); color: #fff; }
+  .pill.good { background: #fff; color: #17784f; }
+  .readout { min-height: 22px; margin-top: 8px; font-family: var(--font-mono); font-size: 13.5px; color: var(--ink-faint); text-align: center; }
+  .readout.on { color: var(--ink); font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12.5px; color: var(--ink-faint); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .legend i.ln { height: 3px; width: 16px; border-radius: 2px; }
+  .legend i.dot { border-radius: 50%; width: 8px; height: 8px; }
+  .legend i.dash { background: none !important; border-top: 2px dashed; height: 0; width: 16px; border-radius: 0; }
+  .tiles3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+  .tiles2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { background: var(--paper); border-radius: 14px; padding: 12px 14px; }
+  .tile-v { font-family: var(--font-mono); font-size: 24px; font-weight: 700; line-height: 1.2; margin-top: 2px; }
+  .tile-v span { font-size: 12px; font-weight: 500; color: var(--ink-faint); margin-left: 2px; }
+  .tiles3 .tile-v { font-size: 20px; }
+  .tile-d { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; margin-top: 3px; }
+  .tile-d span { font-weight: 400; color: var(--ink-faint); font-size: 11px; }
+  .tile-d.good { color: #17784f; } .tile-d.bad { color: var(--coral); } .tile-d.neutral { color: var(--ink-faint); font-weight: 400; }
+  .msg { font-size: 14.5px; line-height: 1.7; margin: 0 0 14px; padding: 12px 14px; background: #EAF3EE; border-radius: 12px; }
+
+  .kpi-grid[style*="repeat(3"] .kpi { padding: 11px 10px; }
+  .kpi-grid[style*="repeat(3"] .kpi-l { font-size: 11px; }
+  .kpi-grid[style*="repeat(3"] .kpi-v { font-size: 21px; }
+  .kpi .kpi-v span { white-space: nowrap; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -218,7 +287,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.15";
+const APP_VERSION = "v6.16";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -765,7 +834,7 @@ let stretchLog = {}; // "YYYY-MM-DD" -> [itemId, ...] その日にチェック�
 // 「📅 カレンダー」タブの4項目印で、ストレッチの記録日も見られるため)。
 let stretchTimer = null; // { itemId, remaining, intervalId } | null。実行中のタイマーは常に1つだけ。
 
-let activeTab = "today"; // today | meals | weight | training | stretch | settings
+let activeTab = "today"; // today | charts | meals | weight | training | stretch | calendar | settings
 let trainingSubTab = "strength"; // strength | cardio
 let selectedPart = "胸";
 let selectedCardio = "ランニング";
@@ -4006,6 +4075,290 @@ function finishOnboarding() {
   renderApp();
 }
 
+// ============ GRAPH TAB (v6.16: 見やすいグラフ専用タブ) ============
+// 旧グラフは文字が小さく(SVG内の文字が7px相当)、棒・線・目盛りが読み取りにくかった。
+// ここでは「実際の表示幅とほぼ等倍で描く」「文字は11px以上」「数字は大きく」「タップ/なぞると
+// その日の値が出る」を基本にした新しいグラフを作る。既存のデータ計算(computeCalorieBalanceHistory等)は
+// そのまま使うので、数字は他の画面と食い違わない。
+let chartRange = 30;            // 7 | 30 | 90 | 0(=全期間)
+const chartScrub = {};          // グラフID → なぞり表示用の座標データ
+const VIZ = { blue: "#2a78d6", orange: "#eb6834", green: "#1a9d6e", red: "#C4483A", ink2: "#5B6472", grid: "#E3E8F0" };
+
+function niceTicks_(min, max, n) {
+  if (max - min < 1e-9) { min -= 1; max += 1; }
+  const raw = (max - min) / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || raw;
+  const lo = Math.floor(min / step) * step, hi = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 1000) / 1000);
+  return ticks;
+}
+function mdLabel_(dateStr) { const d = new Date(dateStr + "T00:00:00"); return `${d.getMonth()+1}/${d.getDate()}`; }
+function chartCutoff_() {
+  if (!chartRange) return "0000-00-00";
+  const d = new Date(); d.setDate(d.getDate() - chartRange + 1);
+  return localDateStr(d);
+}
+// 折れ線(体重・体脂肪)。points=[{date,value}], avg=移動平均, goal=目標値(任意)
+function bigLineChart_(id, points, o) {
+  o = o || {};
+  const dec = o.dec == null ? 1 : o.dec, unit = o.unit || "", color = o.color || VIZ.blue;
+  if (points.length < 2) return `<p class="muted" style="padding:18px 0;text-align:center;">この期間に記録が2件以上あると、グラフが表示されます。</p>`;
+  const W = 340, H = 220, L = 42, R = 14, T = 16, B = 28;
+  const avg = o.avg && o.avg.length === points.length ? o.avg : null;
+  const vals = points.map(p => p.value).concat(avg ? avg.map(p => p.value) : []).concat(o.goal != null ? [o.goal] : []);
+  const ticks = niceTicks_(Math.min(...vals), Math.max(...vals), 4);
+  const lo = ticks[0], hi = ticks[ticks.length - 1];
+  const t0 = new Date(points[0].date).getTime(), t1 = new Date(points[points.length - 1].date).getTime();
+  const xOf = d => L + ((new Date(d).getTime() - t0) / Math.max(t1 - t0, 1)) * (W - L - R);
+  const yOf = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const grid = ticks.map(v => `<line x1="${L}" y1="${yOf(v)}" x2="${W-R}" y2="${yOf(v)}" stroke="${VIZ.grid}" stroke-width="1"/>
+    <text x="${L-6}" y="${yOf(v)+4}" font-size="11" fill="${VIZ.ink2}" text-anchor="end">${v.toFixed(dec)}</text>`).join("");
+  const xi = [0, Math.round((points.length-1)/3), Math.round((points.length-1)*2/3), points.length-1].filter((v,i,a) => a.indexOf(v) === i);
+  const xl = xi.map((i, k) => `<text x="${xOf(points[i].date)}" y="${H-8}" font-size="11" fill="${VIZ.ink2}" text-anchor="${k===0?"start":k===xi.length-1?"end":"middle"}">${mdLabel_(points[i].date)}</text>`).join("");
+  const step = Math.max(1, Math.ceil(points.length / 70));
+  const dots = points.map((p, i) => (i % step === 0 || i === points.length-1) ? `<circle cx="${xOf(p.date)}" cy="${yOf(p.value)}" r="${avg?2.5:4}" fill="${color}" opacity="${avg?0.35:1}" stroke="#fff" stroke-width="${avg?0:2}"/>` : "").join("");
+  const main = avg || points;
+  const line = `<polyline points="${main.map(p => `${xOf(p.date)},${yOf(p.value)}`).join(" ")}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const last = main[main.length - 1], lx = xOf(last.date), ly = yOf(last.value);
+  const lbl = `<circle cx="${lx}" cy="${ly}" r="5" fill="${color}" stroke="#fff" stroke-width="2.5"/>
+    <text x="${Math.min(lx, W-R-14)}" y="${ly-11}" font-size="13" font-weight="700" fill="#101828" text-anchor="middle">${last.value.toFixed(dec)}${unit}</text>`;
+  const goal = o.goal != null ? `<line x1="${L}" y1="${yOf(o.goal)}" x2="${W-R}" y2="${yOf(o.goal)}" stroke="${VIZ.orange}" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="${L+4}" y="${yOf(o.goal)-5}" font-size="11" font-weight="600" fill="${VIZ.orange}">目標 ${o.goal}${unit}</text>` : "";
+  chartScrub[id] = { W, pts: points.map((p, i) => ({ x: xOf(p.date), y: yOf((avg || points)[i].value),
+    text: `${mdLabel_(p.date)}  ${p.value.toFixed(dec)}${unit}` + (avg ? `(7日平均 ${avg[i].value.toFixed(dec)})` : "") })) };
+  return `<svg class="scrub" data-id="${id}" viewBox="0 0 ${W} ${H}" style="width:100%;display:block;touch-action:pan-y;">
+    ${grid}${goal}${line}${dots}${lbl}${xl}
+    <line id="${id}-cur" x1="0" y1="${T}" x2="0" y2="${H-B}" stroke="#101828" stroke-width="1" opacity="0"/>
+    <circle id="${id}-dot" cx="0" cy="0" r="5" fill="#fff" stroke="${color}" stroke-width="3" opacity="0"/></svg>
+    <div id="ro-${id}" class="readout">グラフをなぞると、その日の値が表示されます</div>`;
+}
+// 摂取(棒)と消費(線)の1日ごとのグラフ
+function intakeBurnChart_(id, hist) {
+  const withData = hist.filter(x => x.hasData);
+  if (!withData.length) return `<p class="muted" style="padding:18px 0;text-align:center;">食事にカロリーを入れると、摂取と消費のグラフが表示されます。</p>`;
+  const W = 340, H = 220, L = 42, R = 10, T = 16, B = 28;
+  const maxV = Math.max(...hist.map(x => Math.max(x.hasData ? x.intake : 0, x.tdeeAdjusted)), 1);
+  const ticks = niceTicks_(0, maxV * 1.05, 4), hi = ticks[ticks.length - 1];
+  const yOf = v => T + (1 - v / hi) * (H - T - B);
+  const slot = (W - L - R) / hist.length, bw = Math.max(2, Math.min(18, slot - (slot > 6 ? 3 : 1)));
+  const grid = ticks.map(v => `<line x1="${L}" y1="${yOf(v)}" x2="${W-R}" y2="${yOf(v)}" stroke="${VIZ.grid}"/>
+    <text x="${L-6}" y="${yOf(v)+4}" font-size="11" fill="${VIZ.ink2}" text-anchor="end">${v}</text>`).join("");
+  const bars = hist.map((x, i) => {
+    if (!x.hasData) return "";
+    const bx = L + i * slot + (slot - bw) / 2, y = yOf(x.intake);
+    return `<rect x="${bx}" y="${y}" width="${bw}" height="${Math.max(H-B-y, 1)}" rx="${bw>5?3:1}" fill="${x.intake > x.tdeeAdjusted ? VIZ.red : VIZ.blue}"/>`;
+  }).join("");
+  const line = `<polyline points="${hist.map((x, i) => `${L + i*slot + slot/2},${yOf(x.tdeeAdjusted)}`).join(" ")}" fill="none" stroke="${VIZ.orange}" stroke-width="2.5" stroke-linejoin="round"/>`;
+  const xi = [0, Math.round((hist.length-1)/2), hist.length-1].filter((v,i,a) => a.indexOf(v) === i);
+  const xl = xi.map((i, k) => `<text x="${L + i*slot + slot/2}" y="${H-8}" font-size="11" fill="${VIZ.ink2}" text-anchor="${k===0?"start":k===xi.length-1?"end":"middle"}">${mdLabel_(hist[i].date)}</text>`).join("");
+  chartScrub[id] = { W, pts: hist.map((x, i) => ({ x: L + i*slot + slot/2, y: yOf(x.hasData ? x.intake : x.tdeeAdjusted),
+    text: x.hasData ? `${mdLabel_(x.date)}  摂取${x.intake} / 消費${Math.round(x.tdeeAdjusted)} → ${x.balance > 0 ? "+" : "−"}${Math.abs(Math.round(x.balance))}kcal` : `${mdLabel_(x.date)}  カロリー未入力` })) };
+  return `<svg class="scrub" data-id="${id}" viewBox="0 0 ${W} ${H}" style="width:100%;display:block;touch-action:pan-y;">
+    ${grid}${bars}${line}${xl}
+    <line id="${id}-cur" x1="0" y1="${T}" x2="0" y2="${H-B}" stroke="#101828" stroke-width="1" opacity="0"/>
+    <circle id="${id}-dot" cx="0" cy="0" r="4" fill="#fff" stroke="#101828" stroke-width="2" opacity="0"/></svg>
+    <div class="legend"><span><i style="background:${VIZ.blue}"></i>摂取(消費以下)</span><span><i style="background:${VIZ.red}"></i>摂取(消費超え)</span><span><i class="ln" style="background:${VIZ.orange}"></i>消費(基礎+運動)</span></div>
+    <div id="ro-${id}" class="readout">グラフをなぞると、その日の値が表示されます</div>`;
+}
+// 週ごとの集計(月曜始まり)。体重平均・摂取平均・収支平均・トレ回数
+function weeklyStats_(n) {
+  const now = new Date(), dow = now.getDay();
+  const mon = new Date(now); mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1)); mon.setHours(0,0,0,0);
+  const canBal = weightEntries.length && getTargets();
+  const hist = canBal ? computeCalorieBalanceHistory(n * 7 + 7) : null;
+  const out = [];
+  for (let w = n - 1; w >= 0; w--) {
+    const s = new Date(mon); s.setDate(mon.getDate() - w * 7);
+    const e = new Date(s); e.setDate(s.getDate() + 7);
+    const sS = localDateStr(s), eS = localDateStr(e);
+    const ws = weightEntries.filter(x => x.date >= sS && x.date < eS);
+    const hs = hist ? hist.filter(x => x.date >= sS && x.date < eS && x.hasData) : [];
+    const days = new Set(entries.filter(x => x.date >= sS && x.date < eS).map(x => x.date));
+    out.push({ label: mdLabel_(sS), avgW: ws.length ? ws.reduce((a, b) => a + b.weight, 0) / ws.length : null,
+      avgIntake: hs.length ? Math.round(hs.reduce((a, b) => a + b.intake, 0) / hs.length) : null,
+      avgBal: hs.length ? Math.round(hs.reduce((a, b) => a + b.balance, 0) / hs.length) : null, train: days.size });
+  }
+  return out;
+}
+function deltaHtml_(cur, prev, unit, dec, lowerIsGood) {
+  if (cur == null || prev == null) return `<div class="tile-d neutral">先週のデータなし</div>`;
+  const d = cur - prev, abs = Math.abs(d);
+  if (abs < Math.pow(10, -dec) / 2) return `<div class="tile-d neutral">先週と同じ</div>`;
+  const good = lowerIsGood ? d < 0 : d > 0;
+  return `<div class="tile-d ${good ? "good" : "bad"}">${d < 0 ? "▼" : "▲"} ${abs.toFixed(dec)}${unit} <span>先週比</span></div>`;
+}
+function weekMessage_(cur, prev) {
+  const parts = [];
+  if (cur.avgW != null && prev.avgW != null) {
+    const d = round1_(cur.avgW - prev.avgW);
+    const toGoal = goals.weight < cur.avgW ? -1 : 1; // 減量なら-1
+    if (d === 0) parts.push("体重は先週と変わらず安定しています。");
+    else if ((d < 0 && toGoal < 0) || (d > 0 && toGoal > 0)) parts.push(`先週より${Math.abs(d).toFixed(1)}kg、目標に近づきました。`);
+    else parts.push(`先週より${Math.abs(d).toFixed(1)}kg動きましたが、日々の波の範囲です。1週間単位で見ていきましょう。`);
+  }
+  if (cur.train >= goals.weeklyFreq) parts.push(`今週のトレーニングは目標の${goals.weeklyFreq}回を達成しています。`);
+  else if (cur.train > 0) parts.push(`今週のトレーニングは${cur.train}回。あと${goals.weeklyFreq - cur.train}回で目標です。`);
+  else parts.push("今週はまだトレーニングの記録がありません。軽いものからで大丈夫です。");
+  return parts.join("");
+}
+function trainingProgressCardHtml() {
+  return `<div class="card">
+    <p class="section-title">📈 運動の進捗</p>
+    <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
+    ${weeklyBarSvg(weekBuckets(8), goals.weeklyFreq)}
+    ${progressBurnHtml()}
+    <p class="label" style="margin:14px 0 4px;">週間の移動距離(直近8週)</p>
+    ${weeklyDistanceBarSvg(weekDistanceBuckets(8))}
+  </div>`;
+}
+function chartsHtml() {
+  const sortedAll = [...weightEntries].sort((a, b) => a.date < b.date ? -1 : 1);
+  const latest = sortedAll[sortedAll.length - 1];
+  const rangeBtns = [[7, "7日"], [30, "30日"], [90, "90日"], [0, "全期間"]].map(([v, l]) =>
+    `<button class="seg-b ${chartRange === v ? "on" : ""}" data-action="set-chart-range" data-val="${v}">${l}</button>`).join("");
+  if (!latest) {
+    return `<div class="card hero"><p style="margin:0 0 6px;font-size:15px;font-weight:700;">まだ体重の記録がありません</p>
+      <p class="muted" style="margin:0 0 12px;">体重を1件記録すると、ここに推移グラフが出ます。</p>
+      <button class="btn-primary" data-tab="weight">体重を記録する</button></div>`;
+  }
+  // ---- ヒーロー(いまの体重と目標までの距離) ----
+  const all7 = movingAverage_(sortedAll.map(w => ({ date: w.date, value: w.weight })), 7);
+  const remaining = weightGoalRemaining_(latest.weight, goals.weight);
+  const startW = (sortedAll.filter(w => afterStatsStart_(w.date))[0] || sortedAll[0]);
+  const pct = startW && goals.weight !== startW.weight ? Math.round(Math.min(100, Math.max(0, (latest.weight - startW.weight) / (goals.weight - startW.weight) * 100))) : (startW ? 100 : 0);
+  const fromStart = round1_(latest.weight - startW.weight);
+  const weekAgo = (() => { const t = new Date(latest.date).getTime() - 7 * 86400000; for (let i = all7.length - 1; i >= 0; i--) if (new Date(all7[i].date).getTime() <= t) return all7[i].value; return null; })();
+  const wk = weekAgo != null ? round1_(all7[all7.length - 1].value - weekAgo) : null;
+  const hero = `<div class="card hero">
+    <div class="between" style="align-items:flex-end;">
+      <div><div class="muted">いまの体重(${mdLabel_(latest.date)})</div>
+        <div class="hero-num">${latest.weight}<span>kg</span></div></div>
+      <div style="text-align:right;"><div class="muted">目標 ${goals.weight}kg まで</div>
+        <div class="hero-sub">${remaining > 0 ? remaining + "kg" : "達成 🎉"}</div></div>
+    </div>
+    <div class="prog"><div style="width:${pct}%"></div></div>
+    <div class="between" style="margin-top:6px;"><span class="muted">開始 ${startW.weight}kg</span><span class="muted"><b>${pct}%</b> 達成</span></div>
+    <div class="hero-chips">
+      <span class="pill ${fromStart <= 0 ? "good" : "neutral"}">開始から ${fromStart > 0 ? "+" : fromStart < 0 ? "−" : "±"}${Math.abs(fromStart).toFixed(1)}kg</span>
+      ${wk != null ? `<span class="pill ${wk < 0 ? "good" : "neutral"}">1週間 ${wk > 0 ? "+" : wk < 0 ? "−" : "±"}${Math.abs(wk).toFixed(1)}kg</span>` : ""}
+    </div></div>`;
+  // ---- 体重グラフ ----
+  const cut = chartCutoff_();
+  const pts = sortedAll.filter(w => w.date >= cut).map(w => ({ date: w.date, value: w.weight }));
+  const avgAll = new Map(all7.map(p => [p.date, p.value]));
+  const avgPts = pts.map(p => ({ date: p.date, value: avgAll.get(p.date) }));
+  const weightCard = `<div class="card">
+    <p class="section-title">⚖️ 体重の推移</p>
+    ${bigLineChart_("w", pts, { unit: "kg", color: VIZ.blue, goal: goals.weight, avg: pts.length >= 4 ? avgPts : null })}
+    <div class="legend"><span><i class="ln" style="background:${VIZ.blue}"></i>7日平均(太い線)</span><span><i class="dot" style="background:${VIZ.blue};opacity:.4"></i>毎日の記録</span><span><i class="ln dash" style="border-color:${VIZ.orange}"></i>目標</span></div>
+    <p class="muted" style="margin:8px 0 0;">体重は水分や食事で±1kg動きます。太い線の傾向を見てください。</p></div>`;
+  // ---- 体脂肪 ----
+  const fatPts = sortedAll.filter(w => w.bodyFat != null && w.date >= cut).map(w => ({ date: w.date, value: w.bodyFat }));
+  const fatCard = fatPts.length >= 2 ? `<div class="card">
+    <p class="section-title">🧈 体脂肪率の推移</p>
+    ${bigLineChart_("f", fatPts, { unit: "%", color: VIZ.green })}</div>` : "";
+  // ---- 摂取と消費 ----
+  let balCard;
+  if (weightEntries.length && getTargets()) {
+    let days = chartRange;
+    if (!days) { const first = [...mealEntries.map(m => m.date)].sort()[0]; days = first ? Math.min(180, Math.max(7, Math.round((Date.now() - new Date(first).getTime()) / 86400000) + 1)) : 30; }
+    const hist = computeCalorieBalanceHistory(days);
+    const hd = hist.filter(x => x.hasData);
+    const avgI = hd.length ? Math.round(hd.reduce((a, b) => a + b.intake, 0) / hd.length) : null;
+    const avgB = hd.length ? Math.round(hd.reduce((a, b) => a + b.tdeeAdjusted, 0) / hd.length) : null;
+    const avgBal = hd.length ? avgI - avgB : null;
+    balCard = `<div class="card">
+      <p class="section-title">🔥 摂取と消費(1日ごと)</p>
+      <div class="tiles3">
+        <div><div class="muted">平均 摂取</div><div class="tile-v">${avgI != null ? avgI : "−"}<span>kcal</span></div></div>
+        <div><div class="muted">平均 消費</div><div class="tile-v">${avgB != null ? avgB : "−"}<span>kcal</span></div></div>
+        <div><div class="muted">平均 収支</div><div class="tile-v" style="color:${avgBal == null ? "inherit" : avgBal <= 0 ? VIZ.green : VIZ.red};">${avgBal != null ? (avgBal > 0 ? "+" : "−") + Math.abs(avgBal) : "−"}<span>kcal</span></div></div>
+      </div>
+      ${intakeBurnChart_("b", hist)}
+      <p class="muted" style="margin:8px 0 0;">カロリー未入力の日は集計から除いています。運動の消費は種目・時間からの概算です。</p></div>`;
+  } else {
+    balCard = `<div class="card"><p class="section-title">🔥 摂取と消費</p><p class="muted">設定でプロフィールを入力し、体重を記録すると表示されます。</p></div>`;
+  }
+  // ---- 週平均(モチベーション) ----
+  const ws = weeklyStats_(8), cur = ws[ws.length - 1], prev = ws[ws.length - 2];
+  const wkPts = ws.map((w, i) => w.avgW != null ? { i, v: w.avgW } : null).filter(Boolean);
+  const weeklyCard = `<div class="card">
+    <p class="section-title">📅 今週のまとめ(週平均)</p>
+    <p class="msg">${esc(weekMessage_(cur, prev))}</p>
+    <div class="tiles2">
+      <div class="tile"><div class="muted">週平均 体重</div><div class="tile-v">${cur.avgW != null ? cur.avgW.toFixed(1) : "−"}<span>kg</span></div>${deltaHtml_(cur.avgW, prev.avgW, "kg", 1, goals.weight < (cur.avgW || 0))}</div>
+      <div class="tile"><div class="muted">週平均 摂取</div><div class="tile-v">${cur.avgIntake != null ? cur.avgIntake : "−"}<span>kcal</span></div>${deltaHtml_(cur.avgIntake, prev.avgIntake, "kcal", 0, true)}</div>
+      <div class="tile"><div class="muted">週平均 収支</div><div class="tile-v">${cur.avgBal != null ? (cur.avgBal > 0 ? "+" : "−") + Math.abs(cur.avgBal) : "−"}<span>kcal</span></div>${deltaHtml_(cur.avgBal, prev.avgBal, "kcal", 0, true)}</div>
+      <div class="tile"><div class="muted">トレーニング</div><div class="tile-v">${cur.train}<span>/${goals.weeklyFreq}回</span></div>${deltaHtml_(cur.train, prev.train, "回", 0, false)}</div>
+    </div>
+    ${wkPts.length >= 2 ? `<p class="label" style="margin:14px 0 2px;">週平均体重の推移(8週)</p>${weekAvgChart_(ws)}` : ""}
+    <p class="label" style="margin:14px 0 6px;">週ごとのトレーニング回数(点線=目標)</p>${weekTrainChart_(ws)}
+  </div>`;
+  const details = `<details class="more"><summary>もっと詳しく(体組成・筋肉・PFC・累計など)</summary>
+    ${bodyCompositionCardHtml()}${waistCardHtml()}${muscleCardHtml()}${muscleRateCardHtml()}${weeklyPfcCardHtml()}${calorieTotalsCardHtml()}${tdeeEstimateCardHtml_()}${trainingProgressCardHtml()}</details>`;
+  return `<div class="range">${rangeBtns}</div>${hero}${weeklyCard}${weightCard}${balCard}${fatCard}${details}`;
+}
+function weekAvgChart_(ws) {
+  const pts = ws.map((w, i) => ({ date: localDateStr(new Date(Date.now() - (ws.length - 1 - i) * 7 * 86400000)), value: w.avgW, label: w.label })).filter(p => p.value != null);
+  const W = 340, H = 150, L = 12, R = 12, T = 22, B = 24;
+  const vs = pts.map(p => p.value), lo = Math.min(...vs) - 0.3, hi = Math.max(...vs) + 0.3;
+  const n = ws.length, xOf = i => L + (i / (n - 1)) * (W - L - R), yOf = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const idx = ws.map((w, i) => w.avgW != null ? i : -1).filter(i => i >= 0);
+  const line = `<polyline points="${idx.map(i => `${xOf(i)},${yOf(ws[i].avgW)}`).join(" ")}" fill="none" stroke="${VIZ.blue}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const dots = idx.map((i, k) => `<circle cx="${xOf(i)}" cy="${yOf(ws[i].avgW)}" r="${k===idx.length-1?5:4}" fill="${VIZ.blue}" stroke="#fff" stroke-width="2"/>
+    <text x="${xOf(i)}" y="${yOf(ws[i].avgW)-9}" font-size="11" font-weight="${k===idx.length-1?700:500}" fill="#101828" text-anchor="middle">${ws[i].avgW.toFixed(1)}</text>`).join("");
+  const xl = ws.map((w, i) => `<text x="${xOf(i)}" y="${H-6}" font-size="10.5" fill="${VIZ.ink2}" text-anchor="middle">${w.label}</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;">${line}${dots}${xl}</svg>`;
+}
+function weekTrainChart_(ws) {
+  const W = 340, H = 120, L = 12, R = 12, T = 18, B = 22;
+  const mx = Math.max(goals.weeklyFreq, ...ws.map(w => w.train), 1) + 0.5;
+  const slot = (W - L - R) / ws.length, bw = Math.min(26, slot - 8), yOf = v => T + (1 - v / mx) * (H - T - B);
+  const bars = ws.map((w, i) => {
+    const x = L + i * slot + (slot - bw) / 2, y = yOf(w.train), ok = w.train >= goals.weeklyFreq;
+    return (w.train > 0 ? `<rect x="${x}" y="${y}" width="${bw}" height="${H-B-y}" rx="4" fill="${ok ? VIZ.green : VIZ.blue}"/>` : `<rect x="${x}" y="${H-B-2}" width="${bw}" height="2" rx="1" fill="${VIZ.grid}"/>`) +
+      `<text x="${x+bw/2}" y="${(w.train>0?y:H-B)-5}" font-size="11" font-weight="600" fill="#101828" text-anchor="middle">${w.train}</text>` +
+      `<text x="${x+bw/2}" y="${H-6}" font-size="10.5" fill="${VIZ.ink2}" text-anchor="middle">${w.label}</text>`;
+  }).join("");
+  const g = `<line x1="${L}" y1="${yOf(goals.weeklyFreq)}" x2="${W-R}" y2="${yOf(goals.weeklyFreq)}" stroke="${VIZ.orange}" stroke-width="1.5" stroke-dasharray="5 4"/>`;
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;">${g}${bars}</svg>
+    <div class="legend"><span><i style="background:${VIZ.green}"></i>目標達成の週</span><span><i style="background:${VIZ.blue}"></i>未達の週</span></div>`;
+}
+// グラフのなぞり操作(指・マウスを動かすと、その日の値が下に出る)
+(function bindScrub_() {
+  const app = document.getElementById("app");
+  function move(e) {
+    const svg = e.target.closest && e.target.closest("svg.scrub");
+    if (!svg) return;
+    const reg = chartScrub[svg.dataset.id]; if (!reg) return;
+    const r = svg.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width * reg.W;
+    let best = reg.pts[0];
+    for (const p of reg.pts) if (Math.abs(p.x - x) < Math.abs(best.x - x)) best = p;
+    const id = svg.dataset.id;
+    const cur = document.getElementById(id + "-cur"), dot = document.getElementById(id + "-dot"), ro = document.getElementById("ro-" + id);
+    if (cur) { cur.setAttribute("x1", best.x); cur.setAttribute("x2", best.x); cur.setAttribute("opacity", "0.25"); }
+    if (dot) { dot.setAttribute("cx", best.x); dot.setAttribute("cy", best.y); dot.setAttribute("opacity", "1"); }
+    if (ro) { ro.textContent = best.text; ro.classList.add("on"); }
+  }
+  app.addEventListener("pointermove", move);
+  app.addEventListener("pointerdown", move);
+})();
+
+// ============ タブのまとめ(v6.16: 下のタブ7つ→4つ) ============
+const TAB_GROUPS = {
+  record: { items: [["meals","🍽️ 食事"],["training","🏋️ 運動"],["weight","⚖️ からだ"]], last: "meals" },
+  more:   { items: [["calendar","📅 カレンダー"],["settings","⚙️ 設定"]], last: "calendar" },
+};
+function groupOfTab_(tab) { return Object.keys(TAB_GROUPS).find(k => TAB_GROUPS[k].items.some(i => i[0] === tab)) || tab; }
+function groupNavHtml_() {
+  const g = TAB_GROUPS[groupOfTab_(activeTab)];
+  if (!g) return "";
+  return `<div class="seg">${g.items.map(([t, l]) => `<button class="seg-b ${activeTab === t ? "on" : ""}" data-tab="${t}">${l}</button>`).join("")}</div>`;
+}
+
 // ============ MAIN APP SHELL ============
 function renderApp() {
   if (!profile) { renderOnboarding(); return; }
@@ -4018,13 +4371,10 @@ function renderApp() {
     <div id="data-warning"></div>
     <div id="tab-content"></div>
     <div class="tabbar">
-      <button class="tab-item" data-tab="today"><span class="ic">🏠</span>今日</button>
-      <button class="tab-item" data-tab="meals"><span class="ic">🍽️</span>食事</button>
-      <button class="tab-item" data-tab="weight"><span class="ic">⚖️</span>からだ</button>
-      <button class="tab-item" data-tab="training"><span class="ic">🏋️</span>運動</button>
-      <button class="tab-item" data-tab="stretch"><span class="ic">🧘</span>ストレッチ</button>
-      <button class="tab-item" data-tab="calendar"><span class="ic">📅</span>カレンダー</button>
-      <button class="tab-item" data-tab="settings"><span class="ic">⚙️</span>設定</button>
+      <button class="tab-item" data-tab="today"><span class="ic">🏠</span>ホーム</button>
+      <button class="tab-item" data-tab="record"><span class="ic">✏️</span>記録</button>
+      <button class="tab-item" data-tab="charts"><span class="ic">📈</span>グラフ</button>
+      <button class="tab-item" data-tab="more"><span class="ic">☰</span>その他</button>
     </div>`;
   renderSyncStatus();
   renderDataWarning();
@@ -4032,17 +4382,19 @@ function renderApp() {
   updateTabbarActive();
 }
 function updateTabbarActive() {
-  document.querySelectorAll(".tab-item").forEach(el => el.classList.toggle("active", el.dataset.tab === activeTab));
+  document.querySelectorAll(".tab-item").forEach(el => el.classList.toggle("active", el.dataset.tab === groupOfTab_(activeTab)));
 }
 function renderTabContent() {
   const el = document.getElementById("tab-content");
-  if (activeTab === "today") el.innerHTML = todayHtml();
+  if (activeTab === "charts") el.innerHTML = chartsHtml();
+  else if (activeTab === "today") el.innerHTML = todayHtml();
   else if (activeTab === "meals") el.innerHTML = mealsHtml();
   else if (activeTab === "weight") el.innerHTML = weightHtml();
   else if (activeTab === "training") el.innerHTML = trainingHtml();
   else if (activeTab === "stretch") el.innerHTML = stretchHtml();
   else if (activeTab === "calendar") el.innerHTML = calendarTabHtml();
   else if (activeTab === "settings") el.innerHTML = settingsHtml();
+  el.innerHTML = groupNavHtml_() + el.innerHTML;
   bindTrainingFormWidgets();
   bindSettingsWidgets();
 }
@@ -4056,6 +4408,9 @@ function autoSelectMealTypeByTime() {
   else selectedMealType = "夕食";
 }
 function switchTab(tab) {
+  if (TAB_GROUPS[tab]) tab = TAB_GROUPS[tab].last;           // 「記録」「その他」→最後に開いた画面
+  const grp = TAB_GROUPS[groupOfTab_(tab)];
+  if (grp) grp.last = tab;
   if (tab === "settings" && !backendChecked) checkBackendVersion_();
   // ストレッチタブから離れるときは、実行中のタイマーを止める(画面に出ない状態で
   // カウントダウンが進み続け、戻ってきたら勝手に完了扱いになる、という驚きを避けるため)。
@@ -4121,72 +4476,55 @@ function todayHtml() {
       </div>
     </div>
 
-    <div class="card">
-      <div class="row">
-        <span style="font-size:18px;">🔥</span>
-        <div style="flex:1;">
-          <div class="row" style="gap:4px;align-items:baseline;">
-            <span class="mono" style="font-size:20px;font-weight:700;">${streak}</span>
-            <span class="muted">日連続(昨日まで)</span>
-          </div>
-          <div class="row" style="gap:6px;margin-top:6px;">${dots}</div>
-        </div>
-      </div>
+    <div class="quick-grid">
+      <button class="quick" data-tab="meals"><span>🍽️</span>食事</button>
+      <button class="quick" data-tab="weight"><span>⚖️</span>体重</button>
+      <button class="quick" data-tab="training"><span>🏋️</span>運動</button>
     </div>
 
     <div class="card">
-      <p class="section-title">🤖 AIのひとこと</p>
-      <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${
-        aiAdvice ? esc(aiAdvice.text).replace(/\n/g, "<br>") : esc(generateDailyAdvice())
-      }</p>
-      <div class="wrap" style="margin-bottom:10px;">
-        <button class="chip" data-action="fetch-ai-advice">${aiAdviceStatus === "loading" ? "🔄 AIに問い合わせ中..." : (aiAdvice ? "🤖 AIコメントを更新" : "🤖 AIにコメントをもらう")}</button>
-      </div>
-      ${aiAdviceStatus === "error" && aiAdviceError ? `<p style="font-size:11px;margin:0 0 10px;color:var(--coral);line-height:1.5;">${esc(aiAdviceError)}</p>` : ""}
-      <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
+      <div class="between" style="gap:10px;">
         <div style="flex:1;min-width:0;">
           <span class="muted">今日のおすすめ</span>
-          <p style="margin:2px 0 0;font-weight:700;font-size:13.5px;line-height:1.4;">${esc(workout.displayName)} <span class="mono muted" style="font-weight:400;">(${esc(workout.displayDetail)}・${esc(workout.intensity)})</span></p>
+          <p style="margin:2px 0 0;font-weight:700;font-size:15px;line-height:1.4;">${esc(workout.displayName)} <span class="mono muted" style="font-weight:400;">(${esc(workout.displayDetail)}・${esc(workout.intensity)})</span></p>
         </div>
         <button class="chip active-b" data-action="quicklog-workout" style="flex:0 0 auto;">記録する</button>
       </div>
       ${(() => { const adj = recentFeelingAdjustment_(); return adj !== 0
-        ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">直近の筋トレの感想が「${adj < 0 ? "キツめ" : "余裕"}」続きだったので、強度を${adj < 0 ? "少し下げて" : "少し上げて"}提案しています。</p>`
-        : ""; })()}
-      <p class="muted" style="font-size:10.5px;margin:8px 0 0;">${aiAdvice
-        ? "※AIによる生成コメントです(あくまで一般的な目安。体調に不安があるときは医療機関へ)"
-        : "※ルールベースの簡易アドバイスです(外部AIには接続していません)"}</p>
+        ? `<p class="muted" style="margin:8px 0 0;line-height:1.6;">直近の筋トレの感想が「${adj < 0 ? "キツめ" : "余裕"}」続きだったので、強度を${adj < 0 ? "少し下げて" : "少し上げて"}います。</p>` : ""; })()}
     </div>
 
     <div class="card">
-      <p class="section-title">📊 今日の状況</p>
-      <div style="margin-bottom:12px;">
-        <div class="between" style="margin-bottom:4px;"><span class="muted">体重目標</span><span class="mono" style="font-size:12px;">${weightPct!=null?weightPct+"%":"未記録"}</span></div>
-        ${weightPct!=null ? meterHtml(weightPct, 100, "var(--sand)") : ""}
-      </div>
-      <div>
-        <div class="between" style="margin-bottom:4px;"><span class="muted">週間トレーニング</span><span class="mono" style="font-size:12px;">${thisWeek.count}/${goals.weeklyFreq}回</span></div>
-        ${meterHtml(thisWeek.count, goals.weeklyFreq, "var(--coral)")}
-        ${(() => { const dl = daysLeftInWeek(); return dl > 0 && thisWeek.count < goals.weeklyFreq
-          ? `<p class="muted" style="font-size:10.5px;margin:4px 0 0;">今週(月曜始まり)はあと${dl}日あります。まだ来ていない曜日は数えられないため、週の途中は分母より小さく出ます</p>`
-          : ""; })()}
-      </div>
-    </div>
-
-    <div class="card">
-      <p class="section-title">📉 カロリー収支の推移(直近14日)</p>
-      ${balanceHistory ? `
-        ${balanceBarSvg(balanceHistory)}
-        <p class="muted" style="font-size:10.5px;margin:4px 0 12px;">🟦 消費が上回った日(赤字) ／ 🟧 摂取が上回った日(黒字)。基礎消費(基礎代謝+日常生活)に、その日の運動の消費を上乗せして概算しています。</p>
-        <div class="between" style="background:var(--paper);border-radius:10px;padding:10px 12px;gap:10px;">
-          <span style="font-size:16px;">${balanceAdvice.icon}</span>
-          <p style="margin:0;font-size:13px;line-height:1.6;flex:1;">${esc(balanceAdvice.text)}</p>
+      <div class="row">
+        <span style="font-size:22px;">🔥</span>
+        <div style="flex:1;">
+          <div class="row" style="gap:4px;align-items:baseline;">
+            <span class="mono" style="font-size:24px;font-weight:700;">${streak}</span>
+            <span class="muted">日連続(昨日まで)</span>
+          </div>
+          <div class="row" style="gap:8px;margin-top:6px;">${dots}</div>
         </div>
-        <p class="muted" style="font-size:10.5px;margin:8px 0 0;">※ルールベースの概算です(外部AIには接続していません)。運動の消費カロリーは種目・時間からの簡易推定です。</p>
-      ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、カロリー収支の推移とアドバイスが表示されます。</p>'}
+      </div>
     </div>
 
-    ${calorieTotalsCardHtml()}`;
+    ${balanceHistory ? `<div class="card">
+      <div class="between" style="gap:10px;">
+        <p style="margin:0;font-size:13.5px;line-height:1.6;flex:1;">${balanceAdvice.icon} ${esc(balanceAdvice.text)}</p>
+        <button class="chip" data-tab="charts" style="flex:0 0 auto;">📈 グラフ</button>
+      </div></div>` : ""}
+
+    <details class="more"><summary>🤖 AIのひとこと</summary>
+      <div class="card">
+      <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${
+        aiAdvice ? esc(aiAdvice.text).replace(/\n/g, "<br>") : esc(generateDailyAdvice())
+      }</p>
+      <div class="wrap" style="margin-bottom:6px;">
+        <button class="chip" data-action="fetch-ai-advice">${aiAdviceStatus === "loading" ? "🔄 AIに問い合わせ中..." : (aiAdvice ? "🤖 AIコメントを更新" : "🤖 AIにコメントをもらう")}</button>
+      </div>
+      ${aiAdviceStatus === "error" && aiAdviceError ? `<p style="font-size:11px;margin:0 0 6px;color:var(--coral);line-height:1.5;">${esc(aiAdviceError)}</p>` : ""}
+      <p class="muted" style="margin:6px 0 0;">${aiAdvice ? "※AIによる生成コメントです(あくまで一般的な目安)" : "※ルールベースの簡易アドバイスです"}</p>
+      </div>
+    </details>`;
 }
 
 // ============ MEALS TAB ============
@@ -4270,29 +4608,6 @@ function mealsHtml() {
   const mealBtns = MEAL_TYPES.map(m => `<button class="chip ${selectedMealType===m?"active":""}" data-action="select-meal-type" data-val="${m}">${m}</button>`).join("");
 
   return `
-    <div class="kpi-grid">
-      <div class="kpi">
-        <div class="kpi-l">今日のカロリー</div>
-        <div class="kpi-v">${todayCal}<span>${targets ? `/${targets.effectiveTarget}` : ""}kcal</span></div>
-        <div class="kpi-d ${targets ? (todayCal <= targets.effectiveTarget ? "good" : "bad") : "neutral"}">${targets ? (todayCal <= targets.effectiveTarget ? `残り${targets.effectiveTarget - todayCal}kcal` : `超過${todayCal - targets.effectiveTarget}kcal`) : "未設定"}</div>
-      </div>
-      <div class="kpi">
-        <div class="kpi-l">たんぱく質</div>
-        <div class="kpi-v">${todayProtein}<span>${targets ? `/${targets.targetProtein}g` : "g"}</span></div>
-        <div class="kpi-d neutral">${targets ? Math.round(todayProtein / targets.targetProtein * 100) + "%" : ""}</div>
-      </div>
-      <div class="kpi">
-        <div class="kpi-l">脂質</div>
-        <div class="kpi-v">${todayFat}<span>${targets ? `/${targets.targetFat}g` : "g"}</span></div>
-        <div class="kpi-d neutral">${targets ? Math.round(todayFat / targets.targetFat * 100) + "%" : ""}</div>
-      </div>
-      <div class="kpi">
-        <div class="kpi-l">炭水化物</div>
-        <div class="kpi-v">${todayCarb}<span>${targets ? `/${targets.targetCarb}g` : "g"}</span></div>
-        <div class="kpi-d neutral">${targets ? Math.round(todayCarb / targets.targetCarb * 100) + "%" : ""}</div>
-      </div>
-    </div>
-
     <div class="card">
       <p class="section-title">食事を記録</p>
       <div class="wrap" style="margin-bottom:10px;" id="meal-type-buttons">
@@ -4311,8 +4626,9 @@ function mealsHtml() {
       <button type="button" class="chip" data-action="ai-lookup-nutrition" data-target="meal" style="margin-bottom:4px;">🔍 AIで栄養を調べる</button>
       <p id="ai-lookup-meal-status" class="muted" style="font-size:10.5px;margin:0 0 8px;"></p>
       <div class="wrap" id="meal-save-master" style="margin-bottom:8px;"></div>
-      <input type="date" id="meal-date-input" data-entry-date="meal" value="${entryDate("meal")}" class="mono" style="margin-bottom:8px;">
-      ${entryDateNoticeHtml("meal")}
+      <details class="more inner" ${isPastEntryDate("meal") ? "open" : ""}><summary>日付を変える(今日以外に記録)</summary>
+      <input type="date" id="meal-date-input" data-entry-date="meal" value="${entryDate("meal")}" class="mono" style="margin:8px 0;">
+      ${entryDateNoticeHtml("meal")}</details>
       <p class="label" style="margin:0 0 4px;">カロリー</p>
       <div class="row" style="margin-bottom:8px;">
         <input type="number" id="meal-cal-input" placeholder="kcal" class="mono">
@@ -4330,8 +4646,6 @@ function mealsHtml() {
       <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
     </div>
 
-    ${photoCardHtml()}
-
     <div class="card">
       <p class="section-title">🍽️ 今日の食事</p>
       ${targets ? `
@@ -4345,19 +4659,8 @@ function mealsHtml() {
         </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
     </div>
 
-    ${weeklyPfcCardHtml()}
-    ${mealAiAdviceCardHtml()}
-
-    <div class="card">
-      <p class="section-title">📊 摂取カロリーと消費カロリー(直近14日)</p>
-      ${intakeHistory ? `
-        ${intakeTdeeChartSvg(intakeHistory)}
-        <p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.6;">
-          棒 = その日の摂取カロリー(🟦 消費より少ない日 ／ 🟧 消費を上回った日)。<br>
-          🔴 赤い線 = その日の消費カロリー(基礎消費 + 運動の消費)。棒が線より下なら赤字、上なら黒字です。
-        </p>
-      ` : '<p class="muted" style="font-size:11px;margin:0;">設定タブでプロフィールと体重を入力すると、摂取と消費のグラフが表示されます。</p>'}
-    </div>
+    <button class="btn-link" data-tab="charts">📈 摂取と消費のグラフを見る →</button>
+    <details class="more"><summary>📷 写真から入力 / 🤖 PFCのAIアドバイス</summary>${photoCardHtml()}${mealAiAdviceCardHtml()}</details>
 
     <div class="card">
       <p class="section-title">📖 食事の履歴</p>
@@ -4789,16 +5092,6 @@ function weightHtml() {
         <div class="kpi-v">${latest && latest.waist != null ? latest.waist : "−"}<span>cm</span></div>
         <div class="kpi-d neutral">${latest && latest.waist != null ? latest.date : "任意項目"}</div>
       </div>
-      <div class="kpi">
-        <div class="kpi-l">骨格筋量</div>
-        <div class="kpi-v">${latestMuscleKg != null ? latestMuscleKg : "−"}<span>kg</span></div>
-        <div class="kpi-d neutral">${latestMuscleKg != null ? latest.date : "任意項目"}</div>
-      </div>
-      <div class="kpi">
-        <div class="kpi-l">骨格筋率</div>
-        <div class="kpi-v">${latest && latest.muscleRate != null ? latest.muscleRate : "−"}<span>%</span></div>
-        <div class="kpi-d neutral">${latest && latest.muscleRate != null ? latest.date : "任意項目"}</div>
-      </div>
       ${bmiTile}
     </div>
 
@@ -4813,6 +5106,9 @@ function weightHtml() {
           <label class="label">体重 (kg)</label>
           <input type="number" step="0.1" id="weight-value-input" placeholder="例: 65.0" class="mono" value="${formSrc ? formSrc.weight : ""}">
         </div>
+      </div>
+      <details class="more inner" ${formSrc && (formSrc.bodyFat != null || formSrc.waist != null || formSrc.muscleRate != null) ? "open" : ""}><summary>体脂肪・腹囲などを入力(任意)</summary>
+      <div class="field-row" style="margin:8px 0 10px;">
         <div class="f-val">
           <label class="label">体脂肪率 (%・任意)</label>
           <input type="number" step="0.1" id="weight-bodyfat-input" placeholder="例: 29.0" class="mono" value="${formSrc && formSrc.bodyFat != null ? formSrc.bodyFat : ""}">
@@ -4825,61 +5121,18 @@ function weightHtml() {
           <label class="label">骨格筋率 (%・任意)</label>
           <input type="number" step="0.1" id="weight-muscle-rate-input" placeholder="例: 29.0" class="mono" value="${formSrc && formSrc.muscleRate != null ? formSrc.muscleRate : ""}">
         </div>
-      </div>
+      </div></details>
       <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">体脂肪率は任意です。記録すると、基礎代謝を体組成から計算する式(Katch-McArdle)に自動で切り替わり、目標カロリーとたんぱく質の目安がより実態に近づきます。腹囲・骨格筋率も任意で、体組成計の表示値をそのまま記録できます(骨格筋率はこの端末の中だけに保存され、Google Sheetsへの同期対象には含まれません)。骨格筋量(kg)は入力欄を設けず、体重×骨格筋率から自動で計算して表示します。</p>
       ${entryDateNoticeHtml("weight")}
       <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
       ${list}
     </div>
 
-    ${omronImportCardHtml()}
+    <details class="more"><summary>体組成計のCSVを取り込む</summary>${omronImportCardHtml()}</details>
 
-    <div class="card">
-      <div class="between" style="margin-bottom:8px;">
-        <p class="section-title" style="margin:0;">⚖️ 体重の推移</p>
-        <span class="muted">${latest ? `目標まで ${remaining > 0 ? remaining+"kg" : "達成"}` : "未記録"}</span>
-      </div>
-      ${(() => {
-        // v6.4: 以前は腹囲を記録している日があれば同じグラフに重ねていたが(2軸グラフ)、
-        // 単位の違う2本の線が分かりにくいとのご要望があり、体重だけのグラフに戻した。
-        // 腹囲の推移は、このすぐ下にある「📏 腹囲の推移」カード(waistCardHtml)で
-        // 引き続き見られる。
-        const avg = points.length >= 3 ? movingAverage_(points, 7) : null;
-        const chart = lineChartSvg(points, "var(--slate)", goals.weight, avg);
-        // v6.5: 「開始日からの増減」は7日平均(avg)が無くても(記録が2件だけでも)
-        // 出したいので、avgに依存しない最新の実測値(latestVal)を基準に色を決める。
-        // points自体が0件(まだ体重を一度も記録していない)こともあるため、その場合は
-        // latestValをnullにしておく(sinceStartChangeHtml_はpoints.length<2なら
-        // 何も返さないので、colorFnは呼ばれない)。
-        const latestVal = points.length ? points[points.length-1].value : null;
-        const sinceStart = sinceStartChangeHtml_(points, "kg", d => weightTrendColor_(d, latestVal, goals.weight));
-        if (!avg) return chart + sinceStart;
-        const cur = avg[avg.length-1].value;
-        // 7日前の平均と比べた変化。日々の増減ではなく傾向として見せる。
-        const weekAgoIdx = (() => {
-          const t = new Date(points[points.length-1].date).getTime() - 7*86400000;
-          for (let i = avg.length-1; i >= 0; i--) if (new Date(avg[i].date).getTime() <= t) return i;
-          return 0;
-        })();
-        const diff = round1_(cur - avg[weekAgoIdx].value);
-        const trend = avg.length > weekAgoIdx + 1
-          ? `<span class="mono" style="color:${weightTrendColor_(diff, cur, goals.weight)};">${diff < 0 ? "−" : diff > 0 ? "+" : "±"}${Math.abs(diff).toFixed(1)}kg</span> <span class="muted">/ 1週間</span>`
-          : `<span class="muted">記録が増えると週ごとの変化が出ます</span>`;
-        return chart + `<div class="between" style="margin-top:6px;">
-          ${trendLegendHtml("var(--slate)")}
-          <span style="font-size:12px;">${trend}</span>
-        </div>
-        ${sinceStart}
-        <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">体重は水分や食事で1日のうちでも±1kg程度動きます。太い線(7日平均)のほうが実際の傾向をよく表します。</p>`;
-      })()}
-      ${latest ? bmiBlockHtml() : ""}
-    </div>
+    <button class="btn-link" data-tab="charts">📈 体重・体脂肪・腹囲の推移をグラフで見る →</button>
 
-    ${bodyCompositionCardHtml()}
-    ${waistCardHtml()}
-    ${muscleCardHtml()}
-    ${muscleRateCardHtml()}
-
+    <details class="more"><summary>📤 SNSに経過をポスト</summary>
     <div class="card">
       <p class="section-title">📤 SNSに経過をポスト</p>
       <p class="label" style="margin:0 0 4px;">集計の範囲</p>
@@ -4901,7 +5154,7 @@ function weightHtml() {
       <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
       <p class="muted" style="font-size:10.5px;margin:6px 0 0;">「データ重視」は記録開始からの経過、「体重×食事」「体重×運動」は締め日までの直近7日間を分析した内容です。朝のうちに投稿するなど、今日の記録がまだ揃っていないときは「昨日まで」を選ぶと、昨日までのデータで文章を作れます。タップすると投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
       ` : `<p class="muted" style="font-size:11.5px;margin:0;">${shareAsOf === "yesterday" && weightEntries.length ? "昨日までの体重の記録がありません。「今日まで」に切り替えると、今日の記録を含めて作成できます。" : "体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。"}</p>`}
-    </div>`;
+    </div></details>`;
 }
 
 // ============ TRAINING TAB(筋トレ・有酸素の記録 + 進捗 + 履歴) ============
@@ -4914,31 +5167,14 @@ function trainingHtml() {
   const burnTotal14 = burnHistory14.reduce((s,x) => s + x.total, 0);
   const burnActiveDays14 = burnHistory14.filter(x => x.total > 0).length;
   return `
-    <div class="kpi-grid">
-      <div class="kpi">
-        <div class="kpi-l">今週のトレーニング</div>
-        <div class="kpi-v">${thisWeekTraining.count}<span>/${goals.weeklyFreq}回</span></div>
-        <div class="kpi-d ${thisWeekTraining.count >= goals.weeklyFreq ? "good" : "neutral"}">${thisWeekTraining.count >= goals.weeklyFreq ? "達成" : `残り${daysLeftInWeek()}日`}</div>
-      </div>
-      <div class="kpi">
-        <div class="kpi-l">消費カロリー(14日)</div>
-        <div class="kpi-v">${burnTotal14}<span>kcal</span></div>
-        <div class="kpi-d neutral">運動した日 ${burnActiveDays14}/14日</div>
-      </div>
-    </div>
-
-    ${bodyPartStatusHtml()}
-
-    ${strengthPlanCardHtml()}
-
     <div class="card">
       <div class="row" style="margin-bottom:14px;">
         <button class="sub-tab-btn ${trainingSubTab==="strength"?"active-a":""}" data-action="select-training-type" data-val="strength">🏋️ 筋トレ</button>
         <button class="sub-tab-btn ${trainingSubTab==="cardio"?"active-b":""}" data-action="select-training-type" data-val="cardio">💨 有酸素</button>
       </div>
-      <label class="label">日付</label>
-      <input type="date" id="date-input" data-entry-date="training" value="${entryDate("training")}" style="margin-bottom:10px;">
-      ${entryDateNoticeHtml("training")}
+      <details class="more inner" ${isPastEntryDate("training") ? "open" : ""}><summary>日付を変える(今日以外に記録)</summary>
+      <input type="date" id="date-input" data-entry-date="training" value="${entryDate("training")}" style="margin:8px 0 10px;">
+      ${entryDateNoticeHtml("training")}</details>
       <div id="strength-fields" class="${trainingSubTab==="strength"?"":"hidden"}">
         <label class="label">部位</label>
         <div class="wrap" id="part-buttons" style="margin-bottom:10px;"></div>
@@ -5005,6 +5241,26 @@ function trainingHtml() {
       <button class="btn-primary" data-action="add-training">＋ 記録する</button>
     </div>
 
+    <details class="more"><summary>🎯 おすすめ・部位ごとの実施状況</summary>
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">今週のトレーニング</div>
+        <div class="kpi-v">${thisWeekTraining.count}<span>/${goals.weeklyFreq}回</span></div>
+        <div class="kpi-d ${thisWeekTraining.count >= goals.weeklyFreq ? "good" : "neutral"}">${thisWeekTraining.count >= goals.weeklyFreq ? "達成" : `残り${daysLeftInWeek()}日`}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">消費カロリー(14日)</div>
+        <div class="kpi-v">${burnTotal14}<span>kcal</span></div>
+        <div class="kpi-d neutral">運動した日 ${burnActiveDays14}/14日</div>
+      </div>
+    </div>
+
+    ${bodyPartStatusHtml()}
+
+    ${strengthPlanCardHtml()}
+
+    </details>
+
     <div class="card">
       <p class="section-title">📋 よく使う運動メニュー</p>
       ${routineMaster.length ? routineMaster.map(r => `
@@ -5026,14 +5282,7 @@ function trainingHtml() {
       ) : '<p class="muted" style="font-size:11px;margin:4px 0 0;">今日トレーニングを記録すると、その内容をメニューとして保存できます。</p>'}
     </div>
 
-    <div class="card">
-      <p class="section-title">📈 進捗</p>
-      <p class="label" style="margin-bottom:4px;">週間トレーニング頻度(直近8週・点線は目標)</p>
-      ${weeklyBarSvg(weekBuckets(8), goals.weeklyFreq)}
-      ${progressBurnHtml()}
-      <p class="label" style="margin:14px 0 4px;">週間の移動距離(ランニング・ウォーキング合計/直近8週)</p>
-      ${weeklyDistanceBarSvg(weekDistanceBuckets(8))}
-    </div>
+    <button class="btn-link" data-tab="charts">📈 運動の進捗をグラフで見る →</button>
 
     <div id="history-section"></div>`;
 }
@@ -6524,6 +6773,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   const today = localDateStr();
 
   if (action === "go-settings") { switchTab("settings"); }
+  else if (action === "set-chart-range") { chartRange = Number(t.dataset.val); renderTabContent(); }
   else if (action === "quicklog-workout") {
     const w = pickWorkout();
     if (w.type === "strength") {
