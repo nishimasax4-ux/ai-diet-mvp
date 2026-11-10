@@ -220,7 +220,7 @@
   .kpi-grid[style*="repeat(3"] .kpi-l { font-size: 11px; }
   .kpi-grid[style*="repeat(3"] .kpi-v { font-size: 21px; }
   .kpi .kpi-v span { white-space: nowrap; font-size: 11px; }
-  #toast { position: fixed; left: 50%; top: calc(14px + env(safe-area-inset-top, 0px)); transform: translate(-50%, -80px); background: #101828; color: #fff; padding: 11px 18px; border-radius: 99px; font-size: 14px; z-index: 90; transition: transform .25s; max-width: 90%; text-align: center; }
+  #toast { position: fixed; left: 50%; top: calc(14px + env(safe-area-inset-top, 0px)); transform: translate(-50%, -80px); background: #101828; color: #fff; padding: 11px 18px; border-radius: 16px; white-space: pre-line; text-align: left; font-size: 12px; max-width: 92vw; line-height: 1.5; z-index: 90; transition: transform .25s; }
   #toast.on { transform: translate(-50%, 0); }
 </style>
 </head>
@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.5";
+const APP_VERSION = "v7.7";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -7299,14 +7299,14 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 // 【取り込まないとき】この端末がまだ一度も同期していない / 同期中・保留中・読み込み失敗中
 let lastAutoPullAt = 0, autoPulling = false, toastTimer = null;
 let stampSupported = null, lastCleanStamp = null;   // 軽い更新確認が使えるか / 前回「新しい記録なし」だったときのシートの状態
-function showToast_(text) {
+function showToast_(text, ms) {
   let el = document.getElementById("toast");
   if (!el) { el = document.createElement("div"); el.id = "toast"; document.body.appendChild(el); }
   el.textContent = text; el.classList.add("on");
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 5000);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), ms || 5000);
 }
 // 「同じ記録かどうか」を見る列数(消費カロリーなど、計算で変わる列は比べない)
-const PULL_KEY_COLS = { "筋トレ": 5, "有酸素": 3, "体重": 4, "食事": 7 };
+const PULL_KEY_COLS = { "筋トレ": 5, "有酸素": 3, "体重": 1, "食事": 7 };   // 体重は1日1件なので日付だけで見る(体脂肪などの書式違いで二重になるのを防ぐ)
 function pullCellKey_(v, i) {
   if (v === null || v === undefined) return "";
   if (i === 0) return String(v).trim().slice(0, 10).replace(/\//g, "-").replace(/-(\d)(?=-|$)/g, "-0$1");   // 日付: 2026/1/5 も 2026-01-05 も同じ扱い
@@ -7321,7 +7321,7 @@ function pullRowKey_(name, row) {
 // シートの内容に、シートにまだ無い端末の記録を足したものを返す。{ merged, localOnly(件数) }
 function mergeSheetWithLocal_(sheetPayload) {
   const local = buildPayload();
-  const merged = {}; let localOnly = 0, sheetOnly = 0;
+  const merged = {}; let localOnly = 0, sheetOnly = 0; const diag = [];
   Object.keys(local).forEach(name => {
     const sheet = sheetPayload[name] || { header: local[name].header, rows: [] };
     const count = {};
@@ -7334,10 +7334,13 @@ function mergeSheetWithLocal_(sheetPayload) {
     localOnly += extra.length;
     const lc = {};
     local[name].rows.forEach(r => { const k = pullRowKey_(name, r); lc[k] = (lc[k] || 0) + 1; });
-    (sheet.rows || []).forEach(r => { const k = pullRowKey_(name, r); if (lc[k] > 0) lc[k]--; else sheetOnly++; });
+    let so = 0, sampleSheet = null;
+    (sheet.rows || []).forEach(r => { const k = pullRowKey_(name, r); if (lc[k] > 0) lc[k]--; else { sheetOnly++; so++; if (!sampleSheet) sampleSheet = k; } });
+    diag.push({ name, sheet: (sheet.rows || []).length, local: local[name].rows.length, so, lo: extra.length,
+      sSample: sampleSheet, lSample: extra.length ? pullRowKey_(name, extra[0]) : null });
     merged[name] = { header: sheet.header && sheet.header.length ? sheet.header : local[name].header, rows: (sheet.rows || []).concat(extra) };
   });
-  return { merged, localOnly, sheetOnly };
+  return { merged, localOnly, sheetOnly, diag };
 }
 async function autoPullFromSheet_(manual) {
   if (!gasConfigured() || !profile || autoPulling) return;
@@ -7363,10 +7366,13 @@ async function autoPullFromSheet_(manual) {
     // 通信している間に同期が始まっていたら、今回は見送る(次の機会に取り込む)
     if (syncInFlight || syncTimer) return;
     const before = entries.length + weightEntries.length + mealEntries.length;
-    const { merged, localOnly, sheetOnly } = mergeSheetWithLocal_(data.payload);
+    const { merged, localOnly, sheetOnly, diag } = mergeSheetWithLocal_(data.payload);
     // 【安全弁】差が大きすぎるときは、キーの食い違い(書式の違いなど)で記録が二重になる恐れがあるため、何もせず中止する
     if (sheetOnly > 30 || localOnly > 30) {
-      showToast_(`差が大きいため自動取り込みを中止しました(シート側+${sheetOnly}件/端末側+${localOnly}件)。設定の「シートから復元」を使ってください`);
+      const fmt = k => k == null ? "-" : k.replace(/\u0001/g, "|");
+      const lines = diag.filter(d => d.so || d.lo).map(d => `${d.name} シート${d.sheet}件/端末${d.local}件 例 シート[${fmt(d.sSample)}] 端末[${fmt(d.lSample)}]`);
+      try { localStorage.setItem("training-log-pull-diag", lines.join("\n")); } catch (e) {}
+      showToast_(`差が大きいため自動取り込みを中止しました。\n${lines.join("\n")}`, 30000);
       return;
     }
     // 更新時刻が同じでも、シートに端末に無い行があれば取り込む(Apps Script側が更新時刻を書かない場合の対策)
