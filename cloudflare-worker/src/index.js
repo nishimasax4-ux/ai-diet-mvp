@@ -85,6 +85,8 @@ export default {
       if (action === 'aiVision') return json(await handleAiVision(env, body));
       // v6.15: Meta Muse(やその他の外部AIエージェント)向けの読み書きアクション。
       // 詳しくはこのファイル末尾の「Muse向けアクション」のコメントを参照。
+      if (action === 'museHelp') return json(museHelp());
+      if (action === 'museLog') return json(await handleMuseLog(env, body.payload));
       if (action === 'museLogWeight') return json(await handleMuseLogWeight(env, body.payload));
       if (action === 'museLogMeal') return json(await handleMuseLogMeal(env, body.payload));
       if (action === 'museLogStrength') return json(await handleMuseLogStrength(env, body.payload));
@@ -669,11 +671,11 @@ function museDateOk(d) {
   const dt = new Date(Date.UTC(y, m - 1, day));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === day;
 }
-// v6.16: 日本時間(JST)の「今日」。以前はUTCで数えていたため、日本の午前0〜9時に記録すると
+// v7.0: 日本時間(JST)の「今日」。以前はUTCで数えていたため、日本の午前0〜9時に記録すると
 // 前日の日付になってしまっていた。
 function museJst() { return new Date(Date.now() + 9 * 3600 * 1000); }
 function museTodayStr() { return museJst().toISOString().slice(0, 10); }
-// v6.16: Museが入力しやすいよう、日付は省略でき(省略=今日)、"今日""昨日""today""yesterday"や
+// v7.0: Museが入力しやすいよう、日付は省略でき(省略=今日)、"今日""昨日""today""yesterday"や
 // "2026/11/3"、"11/3"のような書き方も受け付ける。解釈できなければnull。
 function museResolveDate(d) {
   if (d == null || d === '') return museTodayStr();
@@ -849,6 +851,45 @@ async function handleMuseLogCardio(env, p) {
   const header = ['日付', '種目', '時間分', '消費カロリーkcal'];
   const lastWriteAt = await museAppendRow(env, '有酸素', header, [p.date, museSafeCell(p.exercise), minutes, kcal]);
   return { status: 'ok', recorded: { date: p.date, exercise: p.exercise, minutes, kcal: kcal === '' ? null : kcal }, lastWriteAt };
+}
+
+// v7.0: Museに「使い方」を自分で読ませるためのアクション。ユーザーはURLと合言葉を渡して
+// 「museHelpを呼んで使い方を読んで」と頼むだけでよい(アクション一覧を貼り付ける必要がない)。
+function museHelp() {
+  return {
+    status: 'ok',
+    usage: 'POST このURL に JSON {"action": ..., "payload": {...}} を送る。認証は Authorization: Bearer 合言葉。',
+    tip: '記録は museLog が一番かんたん。1回の呼び出しで体重・食事・筋トレ・有酸素をまとめて記録できる。dateは省略すると日本時間の今日。',
+    actions: {
+      museLog: { payload: { items: [
+        { type: 'weight', weight: '72.4', bodyFat: '24.1(任意)', waist: '(任意)' },
+        { type: 'meal', text: '鶏むね肉のサラダ', mealType: '省略可(時刻から自動)', calories: '450', protein: '', fat: '', carb: '' },
+        { type: 'strength', exercise: 'チェストプレス', part: '省略可(種目名から推定)', weight: '30(省略=自重)', reps: '10', sets: '3' },
+        { type: 'cardio', exercise: 'ウォーキング', minutes: '30' } ], date: '省略可(今日/昨日/2026-11-03)。items内に個別指定も可' }, note: 'items最大10件。結果は1件ずつ返る' },
+      museTodaySummary: { payload: { date: '省略可' }, note: '今日の摂取・運動消費の概算' },
+      museWeightTrend: { payload: { days: '省略可(14)' } },
+      museRecentTraining: { payload: { days: '省略可(7)' } },
+      museTdeeEstimate: { payload: {} },
+    },
+    single: 'museLogWeight / museLogMeal / museLogStrength / museLogCardio でも1件ずつ記録できる(museLogと同じ項目)',
+  };
+}
+// v7.0: 複数の記録を1回で。{items:[{type:'weight'|'meal'|'strength'|'cardio', ...}], date?}
+async function handleMuseLog(env, p) {
+  const items = p && Array.isArray(p.items) ? p.items : null;
+  if (!items || !items.length) return { status: 'error', message: 'items(配列)が必要です。museHelpで例を確認できます' };
+  if (items.length > 10) return { status: 'error', message: 'itemsは10件までです' };
+  const handlers = { weight: handleMuseLogWeight, meal: handleMuseLogMeal, strength: handleMuseLogStrength, cardio: handleMuseLogCardio };
+  const results = [];
+  for (const it of items) {
+    const h = it && handlers[it.type];
+    if (!h) { results.push({ status: 'error', message: 'typeは weight/meal/strength/cardio のいずれかです' }); continue; }
+    const { type, ...rest } = it;
+    if (rest.date == null && p.date != null) rest.date = p.date;
+    try { results.push({ type, ...(await h(env, rest)) }); }
+    catch (e) { results.push({ type, status: 'error', message: String(e && e.message ? e.message : e) }); }
+  }
+  return { status: results.every(r => r.status === 'ok') ? 'ok' : 'partial', results };
 }
 
 async function handleMuseTodaySummary(env, p) {

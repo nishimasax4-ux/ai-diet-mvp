@@ -151,7 +151,7 @@
   .cal-dot { width: 5px; height: 5px; border-radius: 999px; }
   .modal-overlay { position: fixed; inset: 0; background: rgba(20,18,14,0.45); display: flex; align-items: flex-end; justify-content: center; z-index: 50; }
   .modal-card { background: #FFFFFF; width: 100%; max-width: 480px; border-radius: 16px 16px 0 0; padding: 20px; max-height: 85vh; overflow-y: auto; }
-  /* ===== v6.16: 見やすさ重視のUI刷新 ===== */
+  /* ===== v7.0: 見やすさ重視のUI刷新 ===== */
   body { font-size: 15px; background: #F3F5F9; }
   #app { padding-bottom: 110px; }
   h1 { font-size: 21px; }
@@ -287,7 +287,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v6.16";
+const APP_VERSION = "v7.0";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -4075,7 +4075,7 @@ function finishOnboarding() {
   renderApp();
 }
 
-// ============ GRAPH TAB (v6.16: 見やすいグラフ専用タブ) ============
+// ============ GRAPH TAB (v7.0: 見やすいグラフ専用タブ) ============
 // 旧グラフは文字が小さく(SVG内の文字が7px相当)、棒・線・目盛りが読み取りにくかった。
 // ここでは「実際の表示幅とほぼ等倍で描く」「文字は11px以上」「数字は大きく」「タップ/なぞると
 // その日の値が出る」を基本にした新しいグラフを作る。既存のデータ計算(computeCalorieBalanceHistory等)は
@@ -4347,7 +4347,7 @@ function weekTrainChart_(ws) {
   app.addEventListener("pointerdown", move);
 })();
 
-// ============ タブのまとめ(v6.16: 下のタブ7つ→4つ) ============
+// ============ タブのまとめ(v7.0: 下のタブ7つ→4つ) ============
 const TAB_GROUPS = {
   record: { items: [["meals","🍽️ 食事"],["training","🏋️ 運動"],["weight","⚖️ からだ"]], last: "meals" },
   more:   { items: [["calendar","📅 カレンダー"],["settings","⚙️ 設定"]], last: "calendar" },
