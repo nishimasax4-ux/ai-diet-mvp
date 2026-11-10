@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.2";
+const APP_VERSION = "v7.3";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -7312,7 +7312,7 @@ function pullRowKey_(name, row) {
 // シートの内容に、シートにまだ無い端末の記録を足したものを返す。{ merged, localOnly(件数) }
 function mergeSheetWithLocal_(sheetPayload) {
   const local = buildPayload();
-  const merged = {}; let localOnly = 0;
+  const merged = {}; let localOnly = 0, sheetOnly = 0;
   Object.keys(local).forEach(name => {
     const sheet = sheetPayload[name] || { header: local[name].header, rows: [] };
     const count = {};
@@ -7323,9 +7323,12 @@ function mergeSheetWithLocal_(sheetPayload) {
       if (count[k] > 0) count[k]--; else extra.push(r);
     });
     localOnly += extra.length;
+    const lc = {};
+    local[name].rows.forEach(r => { const k = pullRowKey_(name, r); lc[k] = (lc[k] || 0) + 1; });
+    (sheet.rows || []).forEach(r => { const k = pullRowKey_(name, r); if (lc[k] > 0) lc[k]--; else sheetOnly++; });
     merged[name] = { header: sheet.header && sheet.header.length ? sheet.header : local[name].header, rows: (sheet.rows || []).concat(extra) };
   });
-  return { merged, localOnly };
+  return { merged, localOnly, sheetOnly };
 }
 async function autoPullFromSheet_(manual) {
   if (!gasConfigured() || !profile || autoPulling) return;
@@ -7336,14 +7339,15 @@ async function autoPullFromSheet_(manual) {
   try {
     const data = await gasPost({ action: "load" });
     if (!data || data.status !== "ok" || !data.payload) { if (manual) showToast_("シートの読み込みに失敗しました"); return; }
-    if (!data.lastWriteAt || data.lastWriteAt === gasConfig.lastKnownWriteAt) { if (manual) showToast_("新しい記録はありません"); return; }
     // 通信している間に同期が始まっていたら、今回は見送る(次の機会に取り込む)
     if (syncInFlight || syncTimer) return;
     const before = entries.length + weightEntries.length + mealEntries.length;
-    const { merged, localOnly } = mergeSheetWithLocal_(data.payload);
+    const { merged, localOnly, sheetOnly } = mergeSheetWithLocal_(data.payload);
+    // 更新時刻が同じでも、シートに端末に無い行があれば取り込む(Apps Script側が更新時刻を書かない場合の対策)
+    if (sheetOnly === 0 && (!data.lastWriteAt || data.lastWriteAt === gasConfig.lastKnownWriteAt)) { if (manual) showToast_("新しい記録はありません"); return; }
     applyPayload(merged);
     saveState();
-    gasConfig.lastKnownWriteAt = data.lastWriteAt; saveConfig();
+    if (data.lastWriteAt) gasConfig.lastKnownWriteAt = data.lastWriteAt; saveConfig();
     syncConflict = null; if (syncStatus === "conflict") syncStatus = "idle";
     if (localOnly === 0) {
       try {
