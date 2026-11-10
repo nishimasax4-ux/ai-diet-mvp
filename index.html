@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.3";
+const APP_VERSION = "v7.5";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -1857,7 +1857,7 @@ async function checkBackendVersion_() {
   if (activeTab === "settings") renderTabContent();
 }
 
-const SYNC_DEBOUNCE_MS = 2500;
+const SYNC_DEBOUNCE_MS = 5000;   // v7.4: 連続入力をまとめて1回で送る(通信回数を減らす)
 let syncTimer = null;
 let syncInFlight = false;
 let syncPending = false;
@@ -7298,6 +7298,7 @@ document.getElementById("modal-root").addEventListener("click", (e) => {
 //   シートの記録 + (シートにまだ無い端末の記録) を取り込み、そのあと合体した内容をシートへ送る。
 // 【取り込まないとき】この端末がまだ一度も同期していない / 同期中・保留中・読み込み失敗中
 let lastAutoPullAt = 0, autoPulling = false, toastTimer = null;
+let stampSupported = null, lastCleanStamp = null;   // 軽い更新確認が使えるか / 前回「新しい記録なし」だったときのシートの状態
 function showToast_(text) {
   let el = document.getElementById("toast");
   if (!el) { el = document.createElement("div"); el.id = "toast"; document.body.appendChild(el); }
@@ -7306,8 +7307,16 @@ function showToast_(text) {
 }
 // 「同じ記録かどうか」を見る列数(消費カロリーなど、計算で変わる列は比べない)
 const PULL_KEY_COLS = { "筋トレ": 5, "有酸素": 3, "体重": 4, "食事": 7 };
+function pullCellKey_(v, i) {
+  if (v === null || v === undefined) return "";
+  if (i === 0) return String(v).trim().slice(0, 10).replace(/\//g, "-").replace(/-(\d)(?=-|$)/g, "-0$1");   // 日付: 2026/1/5 も 2026-01-05 も同じ扱い
+  if (typeof v === "number") return String(Math.round(v * 100) / 100);
+  const t = String(v).normalize("NFKC").trim();
+  if (t !== "" && /^-?\d+(\.\d+)?$/.test(t)) return String(Math.round(Number(t) * 100) / 100);
+  return t;
+}
 function pullRowKey_(name, row) {
-  return (row || []).slice(0, PULL_KEY_COLS[name] || 7).map(v => (v === null || v === undefined) ? "" : String(v)).join("\u0001");
+  return (row || []).slice(0, PULL_KEY_COLS[name] || 7).map(pullCellKey_).join("\u0001");
 }
 // シートの内容に、シートにまだ無い端末の記録を足したものを返す。{ merged, localOnly(件数) }
 function mergeSheetWithLocal_(sheetPayload) {
@@ -7334,21 +7343,39 @@ async function autoPullFromSheet_(manual) {
   if (!gasConfigured() || !profile || autoPulling) return;
   if (syncInFlight || syncTimer || syncPending || syncHoldReason_() || emptySyncBlocked) { if (manual) showToast_("同期中のため、少し待ってからもう一度タップしてください"); return; }
   if (!gasConfig.lastKnownWriteAt) { if (manual) showToast_("先に一度、同期を成功させてください(設定 → 今すぐ同期)"); return; }
-  if (!manual && Date.now() - lastAutoPullAt < 20000) return;
+  if (!manual && (Date.now() - lastAutoPullAt < 60000 || navigator.onLine === false)) return;   // v7.4: 自動確認は最短60秒おき・オフライン時は何もしない
   autoPulling = true; lastAutoPullAt = Date.now();
   try {
+    // v7.4: まず軽い確認(更新時刻と行数だけ)。前回「新しい記録なし」と確認した状態と同じなら、全データは読まない。
+    let stampKey = null;
+    if (stampSupported !== false) {
+      try {
+        const st = await gasPost({ action: "stamp" }, 15000);
+        if (st && st.status === "ok" && st.rows) {
+          stampSupported = true;
+          stampKey = String(st.lastWriteAt) + "|" + JSON.stringify(st.rows);
+          if (stampKey === lastCleanStamp) { if (manual) showToast_("新しい記録はありません"); return; }
+        } else { stampSupported = false; }
+      } catch (e) { stampSupported = false; }   // 古いApps Scriptなどで使えないときは、従来どおり全データで確認
+    }
     const data = await gasPost({ action: "load" });
     if (!data || data.status !== "ok" || !data.payload) { if (manual) showToast_("シートの読み込みに失敗しました"); return; }
     // 通信している間に同期が始まっていたら、今回は見送る(次の機会に取り込む)
     if (syncInFlight || syncTimer) return;
     const before = entries.length + weightEntries.length + mealEntries.length;
     const { merged, localOnly, sheetOnly } = mergeSheetWithLocal_(data.payload);
+    // 【安全弁】差が大きすぎるときは、キーの食い違い(書式の違いなど)で記録が二重になる恐れがあるため、何もせず中止する
+    if (sheetOnly > 30 || localOnly > 30) {
+      showToast_(`差が大きいため自動取り込みを中止しました(シート側+${sheetOnly}件/端末側+${localOnly}件)。設定の「シートから復元」を使ってください`);
+      return;
+    }
     // 更新時刻が同じでも、シートに端末に無い行があれば取り込む(Apps Script側が更新時刻を書かない場合の対策)
-    if (sheetOnly === 0 && (!data.lastWriteAt || data.lastWriteAt === gasConfig.lastKnownWriteAt)) { if (manual) showToast_("新しい記録はありません"); return; }
+    if (sheetOnly === 0 && (!data.lastWriteAt || data.lastWriteAt === gasConfig.lastKnownWriteAt)) { if (stampKey) lastCleanStamp = stampKey; if (manual) showToast_("新しい記録はありません"); return; }
     applyPayload(merged);
     saveState();
     if (data.lastWriteAt) gasConfig.lastKnownWriteAt = data.lastWriteAt; saveConfig();
     syncConflict = null; if (syncStatus === "conflict") syncStatus = "idle";
+    lastCleanStamp = null;
     if (localOnly === 0) {
       try {
         const cur = buildPayload();
