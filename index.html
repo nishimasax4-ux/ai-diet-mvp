@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.8";
+const APP_VERSION = "v7.9";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -7323,7 +7323,7 @@ function pullRowKey_(name, row) {
 // シートの内容に、シートにまだ無い端末の記録を足したものを返す。{ merged, localOnly(件数) }
 function mergeSheetWithLocal_(sheetPayload) {
   const local = buildPayload();
-  const merged = {}; let localOnly = 0, sheetOnly = 0; const diag = [];
+  const merged = {}; let localOnly = 0, sheetOnly = 0, localFill = 0; const diag = [];
   Object.keys(local).forEach(name => {
     const sheet = sheetPayload[name] || { header: local[name].header, rows: [] };
     if (name === "体重") {
@@ -7332,7 +7332,7 @@ function mergeSheetWithLocal_(sheetPayload) {
       (sheet.rows || []).forEach(r => { if (r && r[0]) byDate[pullCellKey_(r[0], 0)] = r.slice(0, 5); });
       const lmap = {};
       local[name].rows.forEach(r => { lmap[pullCellKey_(r[0], 0)] = r; });
-      const rowsOut = []; let sd = 0, ld = 0, sSample = null;
+      const rowsOut = []; let sd = 0, ld = 0, sSample = null, ldRows = 0;
       Object.keys(byDate).forEach(k => {
         const sr = byDate[k], lr = lmap[k];
         if (!lr) { sd++; if (!sSample) sSample = k; rowsOut.push(sr); return; }
@@ -7346,9 +7346,9 @@ function mergeSheetWithLocal_(sheetPayload) {
         if (lDiff) ld++;
         rowsOut.push(out);
       });
-      Object.keys(lmap).forEach(k => { if (!byDate[k]) { ld++; rowsOut.push(lmap[k]); } });
-      sheetOnly += sd; localOnly += ld;
-      diag.push({ name, sheet: (sheet.rows || []).length, local: local[name].rows.length, so: sd, lo: ld, sSample, lSample: null });
+      Object.keys(lmap).forEach(k => { if (!byDate[k]) { ldRows++; rowsOut.push(lmap[k]); } });
+      sheetOnly += sd; localFill += ld; localOnly += ldRows;   // 空欄を端末の値で補うだけの分は「差が大きい」の判定に含めない
+      diag.push({ name, sheet: (sheet.rows || []).length, local: local[name].rows.length, so: sd, lo: ldRows, sSample, lSample: null });
       merged[name] = { header: local[name].header, rows: rowsOut };
       return;
     }
@@ -7368,7 +7368,7 @@ function mergeSheetWithLocal_(sheetPayload) {
       sSample: sampleSheet, lSample: extra.length ? pullRowKey_(name, extra[0]) : null });
     merged[name] = { header: sheet.header && sheet.header.length ? sheet.header : local[name].header, rows: (sheet.rows || []).concat(extra) };
   });
-  return { merged, localOnly, sheetOnly, diag };
+  return { merged, localOnly, sheetOnly, diag, localFill };
 }
 async function autoPullFromSheet_(manual) {
   if (!gasConfigured() || !profile || autoPulling) return;
@@ -7394,7 +7394,7 @@ async function autoPullFromSheet_(manual) {
     // 通信している間に同期が始まっていたら、今回は見送る(次の機会に取り込む)
     if (syncInFlight || syncTimer) return;
     const before = entries.length + weightEntries.length + mealEntries.length;
-    const { merged, localOnly, sheetOnly, diag } = mergeSheetWithLocal_(data.payload);
+    const { merged, localOnly, sheetOnly, diag, localFill } = mergeSheetWithLocal_(data.payload);
     // 【安全弁】差が大きすぎるときは、キーの食い違い(書式の違いなど)で記録が二重になる恐れがあるため、何もせず中止する
     if (sheetOnly > 30 || localOnly > 30) {
       const fmt = k => k == null ? "-" : k.replace(/\u0001/g, "|");
@@ -7404,13 +7404,13 @@ async function autoPullFromSheet_(manual) {
       return;
     }
     // 更新時刻が同じでも、シートに端末に無い行があれば取り込む(Apps Script側が更新時刻を書かない場合の対策)
-    if (sheetOnly === 0 && (!data.lastWriteAt || data.lastWriteAt === gasConfig.lastKnownWriteAt)) { if (stampKey) lastCleanStamp = stampKey; if (manual) showToast_("新しい記録はありません"); return; }
+    if (sheetOnly === 0 && localFill === 0 && (!data.lastWriteAt || data.lastWriteAt === gasConfig.lastKnownWriteAt)) { if (stampKey) lastCleanStamp = stampKey; if (manual) showToast_("新しい記録はありません"); return; }
     applyPayload(merged);
     saveState();
     if (data.lastWriteAt) gasConfig.lastKnownWriteAt = data.lastWriteAt; saveConfig();
     syncConflict = null; if (syncStatus === "conflict") syncStatus = "idle";
     lastCleanStamp = null;
-    if (localOnly === 0) {
+    if (localOnly === 0 && localFill === 0) {
       try {
         const cur = buildPayload();
         sentSheetSigs = Object.keys(cur).reduce((a, k) => (a[k] = sheetSignature_(cur[k]), a), {});
