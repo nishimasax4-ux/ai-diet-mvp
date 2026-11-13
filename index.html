@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.7";
+const APP_VERSION = "v7.8";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -1682,14 +1682,14 @@ function buildPayload() {
       cardio.push([e.date, e.exercise, num_(e.minutes), kcal]);
     }
   });
-  weightEntries.forEach(w => weight.push([w.date, num_(w.weight), w.bodyFat != null ? num_(w.bodyFat) : "", w.waist != null ? num_(w.waist) : ""]));
+  weightEntries.forEach(w => weight.push([w.date, num_(w.weight), w.bodyFat != null ? num_(w.bodyFat) : "", w.waist != null ? num_(w.waist) : "", w.muscleRate != null ? num_(w.muscleRate) : ""]));
   mealEntries.forEach(m => meals.push([m.date, m.mealType, m.text, num_(m.calories), num_(m.protein), num_(m.fat), num_(m.carb)]));
   const byDate = (a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
   [strength, cardio, weight, meals].forEach(a => a.sort(byDate));
   return {
     "筋トレ": { header: ["日付","部位","種目","重量kg","回数","消費カロリーkcal"], rows: strength },
     "有酸素": { header: ["日付","種目","時間分","消費カロリーkcal"], rows: cardio },
-    "体重":   { header: ["日付","体重kg","体脂肪率%","腹囲cm"], rows: weight },
+    "体重":   { header: ["日付","体重kg","体脂肪率%","腹囲cm","骨格筋率%"], rows: weight },
     "食事":   { header: ["日付","区分","メニュー","kcal","たんぱく質g","脂質g","炭水化物g"], rows: meals },
   };
 }
@@ -1714,6 +1714,8 @@ function applyPayload(payload) {
     const rec = { date: String(r[0]).slice(0,10), weight: Number(r[1]) || 0 };
     if (bf != null && Number.isFinite(bf) && bf > 0) rec.bodyFat = bf;
     if (waist != null && Number.isFinite(waist) && waist > 0) rec.waist = waist;
+    const mr = (r[4] === "" || r[4] == null) ? undefined : Number(r[4]);   // v7.8: 骨格筋率もシートに保存(Museからも入力できる)
+    if (mr != null && Number.isFinite(mr) && mr >= MUSCLE_RATE_MIN && mr <= MUSCLE_RATE_MAX) rec.muscleRate = Math.round(mr * 10) / 10;
     nextWeights.push(rec);
   });
   (payload["食事"] && payload["食事"].rows || []).forEach(r => {
@@ -1729,7 +1731,7 @@ function applyPayload(payload) {
     const old = oldWeightByDate[rec.date];
     if (!old) return;
     if (old.muscle != null) rec.muscle = old.muscle;
-    if (old.muscleRate != null) rec.muscleRate = old.muscleRate;
+    if (old.muscleRate != null && rec.muscleRate == null) rec.muscleRate = old.muscleRate;
   });
   const cardioKey = e => `${e.date}|${e.exercise}|${Number(e.minutes) || 0}`;
   const oldDistance = {};
@@ -7324,6 +7326,32 @@ function mergeSheetWithLocal_(sheetPayload) {
   const merged = {}; let localOnly = 0, sheetOnly = 0; const diag = [];
   Object.keys(local).forEach(name => {
     const sheet = sheetPayload[name] || { header: local[name].header, rows: [] };
+    if (name === "体重") {
+      // 体重は1日1件。日付ごとに、シートの値を優先しつつ、シートが空欄の項目は端末の値で補う。
+      const byDate = {};
+      (sheet.rows || []).forEach(r => { if (r && r[0]) byDate[pullCellKey_(r[0], 0)] = r.slice(0, 5); });
+      const lmap = {};
+      local[name].rows.forEach(r => { lmap[pullCellKey_(r[0], 0)] = r; });
+      const rowsOut = []; let sd = 0, ld = 0, sSample = null;
+      Object.keys(byDate).forEach(k => {
+        const sr = byDate[k], lr = lmap[k];
+        if (!lr) { sd++; if (!sSample) sSample = k; rowsOut.push(sr); return; }
+        const out = [sr[0]]; let sDiff = false, lDiff = false;
+        for (let i = 1; i < 5; i++) {
+          const sv = pullCellKey_(sr[i], i), lv = pullCellKey_(lr[i], i);
+          if (sv === "") { out.push(lv === "" ? "" : lr[i]); if (lv !== "") lDiff = true; }
+          else { out.push(sr[i]); if (sv !== lv) { sDiff = true; if (!sSample) sSample = k + ":" + sv + "≠" + lv; } }
+        }
+        if (sDiff) sd++;
+        if (lDiff) ld++;
+        rowsOut.push(out);
+      });
+      Object.keys(lmap).forEach(k => { if (!byDate[k]) { ld++; rowsOut.push(lmap[k]); } });
+      sheetOnly += sd; localOnly += ld;
+      diag.push({ name, sheet: (sheet.rows || []).length, local: local[name].rows.length, so: sd, lo: ld, sSample, lSample: null });
+      merged[name] = { header: local[name].header, rows: rowsOut };
+      return;
+    }
     const count = {};
     (sheet.rows || []).forEach(r => { const k = pullRowKey_(name, r); count[k] = (count[k] || 0) + 1; });
     const extra = [];
