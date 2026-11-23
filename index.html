@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.9";
+const APP_VERSION = "v7.10";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -4217,6 +4217,51 @@ function trainingProgressCardHtml() {
     ${weeklyDistanceBarSvg(weekDistanceBuckets(8))}
   </div>`;
 }
+// ---- 推定1RM(v7.10) ----
+// 1RM = 1回だけ持ち上げられる最大の重さ。毎回測ると危険なので、重さと回数から推定する(Epley式: 重量×(1+回数÷30))。
+// 回数が多すぎると精度が落ちるため、12回までのセットだけを使う。自重(0kg)は対象外。
+let e1rmExercise = null;
+function e1rmOf_(weight, reps) { return weight * (1 + reps / 30); }
+function e1rmSeries_(exercise) {
+  const best = {};
+  entries.forEach(e => {
+    if (e.type !== "strength" || e.exercise !== exercise) return;
+    const w = Number(e.weight), r = Number(e.reps);
+    if (!(w > 0) || !(r >= 1 && r <= 12)) return;
+    const v = e1rmOf_(w, r);
+    if (!best[e.date] || v > best[e.date]) best[e.date] = v;
+  });
+  return Object.keys(best).sort().map(d => ({ date: d, value: Math.round(best[d] * 10) / 10 }));
+}
+function e1rmCardHtml_() {
+  const count = {};
+  const recentCut = localDateStr(new Date(Date.now() - 120 * 86400000));
+  entries.forEach(e => { if (e.type === "strength" && e.exercise && Number(e.weight) > 0 && Number(e.reps) >= 1 && Number(e.reps) <= 12 && e.date >= recentCut) count[e.exercise] = (count[e.exercise] || 0) + 1; });
+  const names = Object.keys(count).sort((a, b) => count[b] - count[a]).slice(0, 8);
+  if (!names.length) return `<div class="card"><p class="section-title">💪 筋トレの推定1RM</p><p class="muted" style="margin:0;">重量つきの筋トレ(12回まで)を記録すると、種目ごとの「推定1RM」の推移が出ます。1RM＝1回だけ持ち上げられる最大の重さのことです。</p></div>`;
+  if (!e1rmExercise || !names.includes(e1rmExercise)) e1rmExercise = names[0];
+  const all = e1rmSeries_(e1rmExercise);
+  const cut = chartCutoff_();
+  const pts = all.filter(p => p.date >= cut);
+  const cur = all.length ? all[all.length - 1] : null;
+  const pb = all.reduce((a, p) => (!a || p.value > a.value) ? p : a, null);
+  const first = pts.length >= 2 ? pts[0] : null;
+  const diff = first && cur ? Math.round((cur.value - first.value) * 10) / 10 : null;
+  const chips = names.map(n => `<button class="seg-b ${n === e1rmExercise ? "on" : ""}" data-action="set-e1rm-ex" data-val="${esc(n)}">${esc(n)}</button>`).join("");
+  const target = cur ? Math.round(cur.value * 0.75 / 2.5) * 2.5 : null;
+  return `<div class="card">
+    <p class="section-title">💪 筋トレの推定1RM</p>
+    <div class="range" style="flex-wrap:wrap;margin-bottom:10px;">${chips}</div>
+    <div class="tiles3">
+      <div><div class="muted">いまの推定</div><div class="tile-v">${cur ? cur.value.toFixed(1) : "−"}<span>kg</span></div></div>
+      <div><div class="muted">自己ベスト</div><div class="tile-v">${pb ? pb.value.toFixed(1) : "−"}<span>kg</span></div></div>
+      <div><div class="muted">期間の変化</div><div class="tile-v" style="color:${diff == null ? "inherit" : diff >= 0 ? VIZ.green : VIZ.red};">${diff == null ? "−" : (diff > 0 ? "+" : diff < 0 ? "−" : "±") + Math.abs(diff).toFixed(1)}<span>kg</span></div></div>
+    </div>
+    ${bigLineChart_("e1", pts, { unit: "kg", color: VIZ.orange })}
+    ${target ? `<p class="muted" style="margin:8px 0 0;">目安: 推定1RMの約75%＝<b>${target}kg</b>で8〜10回が、筋肥大のねらいめです。</p>` : ""}
+    <p class="muted" style="margin:4px 0 0;">推定1RM＝重量×(1+回数÷30)。その日のいちばん高いセットで計算しています(12回まで・自重は対象外)。</p>
+  </div>`;
+}
 function chartsHtml() {
   const sortedAll = [...weightEntries].sort((a, b) => a.date < b.date ? -1 : 1);
   const latest = sortedAll[sortedAll.length - 1];
@@ -4302,7 +4347,7 @@ function chartsHtml() {
   </div>`;
   const details = `<details class="more"><summary>もっと詳しく(体組成・筋肉・PFC・累計など)</summary>
     ${bodyCompositionCardHtml()}${waistCardHtml()}${muscleCardHtml()}${muscleRateCardHtml()}${weeklyPfcCardHtml()}${calorieTotalsCardHtml()}${tdeeEstimateCardHtml_()}${trainingProgressCardHtml()}</details>`;
-  return `<div class="range">${rangeBtns}</div>${hero}${weeklyCard}${weightCard}${balCard}${fatCard}${details}`;
+  return `<div class="range">${rangeBtns}</div>${hero}${weeklyCard}${weightCard}${balCard}${fatCard}${e1rmCardHtml_()}${details}`;
 }
 function weekAvgChart_(ws) {
   const pts = ws.map((w, i) => ({ date: localDateStr(new Date(Date.now() - (ws.length - 1 - i) * 7 * 86400000)), value: w.avgW, label: w.label })).filter(p => p.value != null);
@@ -6777,6 +6822,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   const today = localDateStr();
 
   if (action === "go-settings") { switchTab("settings"); }
+  else if (action === "set-e1rm-ex") { e1rmExercise = t.dataset.val; renderTabContent(); }
   else if (action === "set-chart-range") { chartRange = Number(t.dataset.val); renderTabContent(); }
   else if (action === "quicklog-workout") {
     const w = pickWorkout();
