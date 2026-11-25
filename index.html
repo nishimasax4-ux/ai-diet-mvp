@@ -148,6 +148,16 @@
   .cal-cell.today { border-color: var(--ink); font-weight: 700; }
   .cal-cell.selected { background: var(--line); }
   .cal-dots { display: flex; gap: 2px; margin-top: 2px; min-height: 5px; }
+  /* v7.13: 日付のマスの中に折れ線と数値を重ねるカレンダー(あすけん風) */
+  .cal-wrap { position: relative; }
+  .cal-grid.g { gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+  .cal-grid.g .cal-cell { aspect-ratio: 0.76; border-radius: 0; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: transparent; align-items: flex-start; justify-content: space-between; padding: 3px 4px 3px; position: relative; }
+  .cal-grid.g .cal-cell > span { font-size: 11px; color: var(--ink-soft); line-height: 1; }
+  .cal-grid.g .cal-cell.today > span { background: var(--ink); color: #fff; border-radius: 4px; padding: 1px 3px; }
+  .cal-grid.g .cal-cell.selected { background: rgba(42,120,214,.12); }
+  .cal-grid.g .cal-cell.today { border-color: var(--line); }
+  .cal-grid.g .cal-dots { margin: 0 auto; }
+  .cal-svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
   .cal-dot { width: 5px; height: 5px; border-radius: 999px; }
   .modal-overlay { position: fixed; inset: 0; background: rgba(20,18,14,0.45); display: flex; align-items: flex-end; justify-content: center; z-index: 50; }
   .modal-card { background: #FFFFFF; width: 100%; max-width: 480px; border-radius: 16px 16px 0 0; padding: 20px; max-height: 85vh; overflow-y: auto; }
@@ -289,7 +299,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.12";
+const APP_VERSION = "v7.13";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -5689,7 +5699,8 @@ function calendarGridHtml() {
   // 「全てのデータ」を見る場所になったため)。
   const stretchDates = new Set(Object.keys(stretchLog).filter(d => (stretchLog[d] || []).length > 0));
   let cells = "";
-  for (let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell" style="visibility:hidden;"></div>`;
+  for (let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell" style="pointer-events:none;"></div>`;
+  const tailBlank = (7 - ((startWeekday + daysInMonth) % 7)) % 7;
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
     const dots = [];
@@ -5701,6 +5712,7 @@ function calendarGridHtml() {
       <span>${d}</span><div class="cal-dots">${dots.join("")}</div>
     </div>`;
   }
+  for (let i = 0; i < tailBlank; i++) cells += `<div class="cal-cell" style="pointer-events:none;"></div>`;
   const weekHead = WEEKDAY.map(w => `<div style="text-align:center;font-size:10px;color:var(--ink-faint);">${w}</div>`).join("");
   return `
     <div class="between" style="margin-bottom:8px;">
@@ -5709,7 +5721,7 @@ function calendarGridHtml() {
       <button data-action="cal-next" style="background:none;border:none;font-size:16px;padding:4px 10px;">›</button>
     </div>
     <div class="cal-grid" style="margin-bottom:4px;">${weekHead}</div>
-    <div class="cal-grid">${cells}</div>`;
+    <div class="cal-wrap"><div class="cal-grid g">${cells}</div>${calendarOverlaySvg_(startWeekday, Math.ceil((startWeekday + daysInMonth) / 7))}</div>`;
 }
 
 // ============ v7.12: 週のまとめ通知 / 記録忘れ / 目標の予測日 / バックアップ通知 / カレンダーのグラフ ============
@@ -5798,17 +5810,61 @@ const CAL_METRICS = { weight: ["体重", "kg", "weight", VIZ.blue], bodyFat: ["�
 function calendarGraphHtml_() {
   const y = calMonth.getFullYear(), m = calMonth.getMonth() + 1;
   const first = `${y}-${String(m).padStart(2, "0")}-01`, last = `${y}-${String(m).padStart(2, "0")}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
-  const [label, unit, key, color] = CAL_METRICS[calMetric];
+  const [label, unit, key] = CAL_METRICS[calMetric];
   const chips = Object.keys(CAL_METRICS).map(k => `<button class="seg-b ${k === calMetric ? "on" : ""}" data-action="set-cal-metric" data-val="${k}">${CAL_METRICS[k][0]}</button>`).join("");
-  const pts = weightEntries.filter(w => w[key] != null && Number(w[key]) > 0 && w.date >= first && w.date <= last)
-    .sort((a, b) => a.date < b.date ? -1 : 1).map(w => ({ date: w.date, value: Number(w[key]) }));
-  let sum = "";
+  const pts = calPoints_();
+  let sum = `<p class="muted" style="margin:6px 0 0;">${m}月の${label}の記録が2件以上あると、折れ線が出ます。</p>`;
   if (pts.length >= 2) {
     const d = round1_(pts[pts.length - 1].value - pts[0].value);
     sum = `<p class="muted" style="margin:6px 0 0;">${m}月の${label}: ${pts[0].value}${unit} → ${pts[pts.length - 1].value}${unit} (<b style="color:${d <= 0 ? VIZ.green : VIZ.red};">${(d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(d).toFixed(1)}${unit}</b>)</p>`;
   }
-  return `<div class="range" style="margin-bottom:8px;">${chips}</div>
-    ${bigLineChart_("cal", pts, { unit, color })}${sum}`;
+  return `<div class="range" style="margin-bottom:6px;">${chips}</div>${sum}`;
+}
+// 表示中の月の、選んだ項目の記録(日付順)
+function calPoints_() {
+  const y = calMonth.getFullYear(), m = calMonth.getMonth() + 1;
+  const first = `${y}-${String(m).padStart(2, "0")}-01`, last = `${y}-${String(m).padStart(2, "0")}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  const key = CAL_METRICS[calMetric][2];
+  return weightEntries.filter(w => w[key] != null && Number(w[key]) > 0 && w.date >= first && w.date <= last)
+    .sort((a, b) => a.date < b.date ? -1 : 1).map(w => ({ date: w.date, day: Number(w.date.slice(8, 10)), value: Number(w[key]) }));
+}
+// マスの上に重ねる折れ線と数値。行(週)をまたぐ線は、行の端で切って次の行の端から続ける。
+function calendarOverlaySvg_(startWeekday, rows) {
+  const pts = calPoints_();
+  if (!pts.length) return "";
+  const CW = 330 / 7, CH = CW / 0.76, W = 330, H = CH * rows;
+  const [, unit, , color] = CAL_METRICS[calMetric];
+  const dec = calMetric === "weight" || calMetric === "bodyFat" || calMetric === "waist" || calMetric === "muscleRate" ? 1 : 0;
+  const vs = pts.map(p => p.value);
+  let lo = Math.min(...vs), hi = Math.max(...vs);
+  if (hi - lo < 0.5) { const mid = (hi + lo) / 2; lo = mid - 0.25; hi = mid + 0.25; }
+  const top = 20, bot = 16;   // 日付の下〜印(ドット)の上に収める
+  const vy = v => top + (1 - (v - lo) / (hi - lo)) * (CH - top - bot);
+  // 日付→(行, 列)。グリッド上の連続位置 g = startWeekday + day - 1
+  const pos = p => { const g = startWeekday + p.day - 1; return { g, row: Math.floor(g / 7), col: g % 7, v: p.value }; };
+  const P = pts.map(pos);
+  const xOf = (col) => (col + 0.5) * CW;
+  const yOf = (row, v) => row * CH + vy(v);
+  let lines = "";
+  for (let i = 0; i < P.length - 1; i++) {
+    const a = P[i], b = P[i + 1];
+    const valAt = (u) => a.v + (b.v - a.v) * ((u - a.g - 0.5) / (b.g - a.g));   // マス基準の位置uでの値(直線補間。マスの中心は i+0.5、行の端は 7×行)
+    if (a.row === b.row) {
+      lines += `<line x1="${xOf(a.col)}" y1="${yOf(a.row, a.v)}" x2="${xOf(b.col)}" y2="${yOf(b.row, b.v)}"/>`;
+    } else {
+      // a の行の右端まで
+      const gR = (a.row + 1) * 7;   // 行の右端(次の行の左端と同じ位置)
+      lines += `<line x1="${xOf(a.col)}" y1="${yOf(a.row, a.v)}" x2="${W}" y2="${yOf(a.row, valAt(gR))}"/>`;
+      for (let r = a.row + 1; r < b.row; r++) {   // 間の行(何週間も記録がないとき)
+        lines += `<line x1="0" y1="${yOf(r, valAt(r * 7))}" x2="${W}" y2="${yOf(r, valAt((r + 1) * 7))}"/>`;
+      }
+      lines += `<line x1="0" y1="${yOf(b.row, valAt(b.row * 7))}" x2="${xOf(b.col)}" y2="${yOf(b.row, b.v)}"/>`;
+    }
+  }
+  const last = P[P.length - 1];
+  const dots = P.map((p, i) => `<circle cx="${xOf(p.col)}" cy="${yOf(p.row, p.v)}" r="${i === P.length - 1 ? 4 : 3}" fill="${i === P.length - 1 ? "#fff" : color}" stroke="${color}" stroke-width="${i === P.length - 1 ? 2 : 1}"/>`).join("");
+  const labels = P.map(p => `<text x="${xOf(p.col)}" y="${yOf(p.row, p.v) - 6}" text-anchor="middle" font-size="10" fill="#101828" paint-order="stroke" stroke="#fff" stroke-width="2.5" stroke-linejoin="round">${p.v.toFixed(dec)}</text>`).join("");
+  return `<svg class="cal-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><g stroke="${color}" stroke-width="1.6" stroke-linecap="round">${lines}</g>${dots}${labels}</svg>`;
 }
 
 // ============ カレンダータブ(v5.13、v5.14で1日表示に変更) ============
