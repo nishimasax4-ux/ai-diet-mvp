@@ -289,7 +289,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.10";
+const APP_VERSION = "v7.12";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -869,7 +869,11 @@ let trainingHistoryOpenDates = new Set();
 let trainingHistoryShowAll = false; // v5.7: 運動履歴(10日より前)の展開状態
 let mealHistoryShowAll = false; // v5.7: 食事履歴(10日より前)の展開状態
 let selectedShareVariant = "data"; // v5.9: SNS投稿文の選択中バリアント(v5.11: data/meal/exercise)
-let shareAsOf = "today"; // v5.11: SNS投稿文の集計の締め日("today"=今日まで / "yesterday"=昨日まで)
+let shareAsOf = "yesterday";   // v7.11: 「昨日まで」をふだんの初期値に
+let sharePeriod = "total";      // v7.11: "total"=記録開始からの累計 / "week"=直近1週間
+let shareMonth = "last";        // v7.11: 月間まとめ: "last"=先月 / "this"=今月(昨日まで)
+let shareOpen = false;          // v7.11: 投稿カードの開閉(選ぶたびに閉じてしまう不具合の修正)
+//  // v5.11: SNS投稿文の集計の締め日("today"=今日まで / "yesterday"=昨日まで)
 let omronImportPreview = null; // v5.10: オムロンCSV取り込みの確認待ちプレビュー({rows, newCount, updateCount, skipped, fields})
 let omronImportMessage = null; // v5.10: オムロンCSV取り込みの結果メッセージ
 let omronImportError = false;
@@ -3439,6 +3443,7 @@ function exportJson() {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    try { localStorage.setItem("training-log-last-backup", localDateStr()); } catch (e2) {}
     dataOpMessage = "書き出しました。ファイルアプリなどに保存してください。"; dataOpError = false;
   } catch (e) {
     dataOpMessage = "書き出しに失敗しました: " + (e && e.message ? e.message : String(e)); dataOpError = true;
@@ -4292,7 +4297,8 @@ function chartsHtml() {
     <div class="hero-chips">
       <span class="pill ${fromStart <= 0 ? "good" : "neutral"}">開始から ${fromStart > 0 ? "+" : fromStart < 0 ? "−" : "±"}${Math.abs(fromStart).toFixed(1)}kg</span>
       ${wk != null ? `<span class="pill ${wk < 0 ? "good" : "neutral"}">1週間 ${wk > 0 ? "+" : wk < 0 ? "−" : "±"}${Math.abs(wk).toFixed(1)}kg</span>` : ""}
-    </div></div>`;
+    </div>
+    ${goalEtaText_() ? `<p class="muted" style="margin:10px 0 0;color:#fff;opacity:.92;">${goalEtaText_()}</p>` : ""}</div>`;
   // ---- 体重グラフ ----
   const cut = chartCutoff_();
   const pts = sortedAll.filter(w => w.date >= cut).map(w => ({ date: w.date, value: w.weight }));
@@ -4507,6 +4513,7 @@ function todayHtml() {
   const avgBalance7 = balanceWithData.length ? Math.round(balanceWithData.slice(-7).reduce((s,x) => s + x.balance, 0) / Math.min(7, balanceWithData.length)) : null;
 
   return `
+    ${nudgeBannerHtml_()}${weekPostBannerHtml_()}${monthPostBannerHtml_()}${backupBannerHtml_()}
     <div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr);">
       <div class="kpi">
         <div class="kpi-l">体重目標</div>
@@ -4878,15 +4885,21 @@ function buildXShareBase_(untilDate) {
   const hashtag = trendDiff < 0 ? "#ダイエット記録" : trendDiff > 0 ? "#増量記録" : "#からだの記録";
   const isToday = until === localDateStr();
   // 分析系(②③)の集計期間: 締め日を含む直近7日間。
-  const periodStart = shiftDateStr_(until, -6);
+  const total = sharePeriod === "total";
+  const periodStart = total ? start.date : shiftDateStr_(until, -6);
+  const periodDays = Math.max(1, Math.round((new Date(until) - new Date(periodStart)) / 86400000) + 1);
   return { sortedAsc, start, latest, trendDiff, title, hashtag,
-    until, isToday, dayLabel: isToday ? "今日" : "昨日", periodStart,
+    until, isToday, dayLabel: isToday ? "今日" : "昨日", periodStart, total, periodDays,
     periodLabel: `${shortMD_(periodStart)}〜${shortMD_(until)}` };
 }
 // 直近7日間の体重の変化(②③で共通)。7日前以前の最後の記録を基準にし、無ければ
 // 期間内の最初の記録を基準にする。比べられる記録が無ければ diff は null。
 function shareWeekWeight_(base) {
   const { sortedAsc, latest, until } = base;
+  if (base.total) {   // 累計: 記録開始からの変化
+    if (base.start.date === latest.date) return { baseline: null, latest, diff: null };
+    return { baseline: base.start, latest, diff: round1_(latest.weight - base.start.weight) };
+  }
   const weekAgo = shiftDateStr_(until, -7);
   let baseline = [...sortedAsc].reverse().find(w => w.date <= weekAgo);
   if (!baseline) baseline = sortedAsc.find(w => w.date > weekAgo);
@@ -4897,6 +4910,13 @@ function shareWeightLine_(ww) {
   if (ww.diff == null) return `体重: ${ww.latest.weight}kg`;
   const diffStr = (ww.diff > 0 ? "+" : ww.diff < 0 ? "−" : "±") + Math.abs(ww.diff).toFixed(1);
   return `体重: ${ww.baseline.weight}kg → ${ww.latest.weight}kg (${diffStr}kg)`;
+}
+// 「8/13から」の体重の増減(v7.11: すべての投稿に入れる)
+function shareSinceLine_(base) {
+  const { start, latest } = base;
+  if (!start || start.date === latest.date) return `体重: ${latest.weight}kg`;
+  const d = round1_(latest.weight - start.weight);
+  return `${shortMD_(start.date)}から: ${start.weight}kg → ${latest.weight}kg (${(d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(d).toFixed(1)}kg)`;
 }
 // 体重の動きを、目標(減量/増量)に照らして一言で表す。
 function shareWeightPhrase_(ww) {
@@ -4911,11 +4931,16 @@ function shareWeightPhrase_(ww) {
 function buildXShareTextData_(base) {
   const { sortedAsc, start, latest, title, hashtag, until, dayLabel } = base;
   const lines = [title];
-  if (sortedAsc.length >= 2 && start.date !== latest.date) {
+  if (!base.total && sortedAsc.length >= 2 && start.date !== latest.date) {
+    // 1週間モード: 直近1週間の変化 + 開始からの増減
+    const ww = shareWeekWeight_(base);
+    if (ww.diff != null) lines.push(`直近1週間: ${ww.baseline.weight}kg → ${ww.latest.weight}kg (${(ww.diff > 0 ? "+" : ww.diff < 0 ? "−" : "±") + Math.abs(ww.diff).toFixed(1)}kg)`);
+    lines.push(shareSinceLine_(base));
+  } else if (sortedAsc.length >= 2 && start.date !== latest.date) {
     const days = Math.round((new Date(latest.date) - new Date(start.date)) / 86400000) + 1;
     const diff = round1_(latest.weight - start.weight);
-    const diffStr = (diff > 0 ? "+" : "") + diff.toFixed(1);
-    lines.push(`体重: ${start.weight}kg → ${latest.weight}kg (${diffStr}kg)`);
+    const diffStr = (diff > 0 ? "+" : diff < 0 ? "−" : "±") + Math.abs(diff).toFixed(1);
+    lines.push(`${shortMD_(start.date)}から: ${start.weight}kg → ${latest.weight}kg (${diffStr}kg)`);
     lines.push(`記録${days}日目`);
   } else {
     lines.push(`体重: ${latest.weight}kg`);
@@ -4974,7 +4999,9 @@ function buildXShareTextData_(base) {
 function buildXShareTextMeal_(base) {
   const { until, periodStart, periodLabel, hashtag } = base;
   const ww = shareWeekWeight_(base);
-  const lines = [`体重×食事の振り返り 🍽️ (${periodLabel})`, shareWeightLine_(ww)];
+  const lines = [`体重×食事の振り返り 🍽️ (${periodLabel})`];
+  if (!base.total) lines.push(shareWeightLine_(ww).replace(/^体重:/, "直近1週間:"));
+  lines.push(shareSinceLine_(base));
   const byDate = {};
   mealEntries.filter(m => m.date >= periodStart && m.date <= until).forEach(m => {
     const d = byDate[m.date] || (byDate[m.date] = { cal: 0, p: 0, f: 0, c: 0 });
@@ -4986,13 +5013,13 @@ function buildXShareTextMeal_(base) {
   const days = Object.keys(byDate);
   const phrases = [];
   if (!days.length) {
-    lines.push("この7日間は食事の記録がありません");
+    lines.push("この期間は食事の記録がありません");
   } else {
     const n = days.length;
     const sum = k => days.reduce((s, d) => s + byDate[d][k], 0);
     const avg = { cal: Math.round(sum("cal") / n), p: Math.round(sum("p") / n), f: Math.round(sum("f") / n), c: Math.round(sum("c") / n) };
     const t = getTargets();
-    lines.push(`食事の記録: ${n}日 / 7日`);
+    lines.push(`食事の記録: ${n}日 / ${base.periodDays}日`);
     if (avg.cal > 0) lines.push(`平均摂取: ${avg.cal.toLocaleString()}kcal${t ? ` (目標${Math.round(t.targetCalories).toLocaleString()})` : ""}`);
     const hasPfc = avg.p + avg.f + avg.c > 0;
     if (hasPfc) {
@@ -5032,14 +5059,16 @@ function buildXShareTextMeal_(base) {
 function buildXShareTextExercise_(base) {
   const { until, periodStart, periodLabel, hashtag, latest } = base;
   const ww = shareWeekWeight_(base);
-  const lines = [`体重×運動の振り返り 🏋️ (${periodLabel})`, shareWeightLine_(ww)];
+  const lines = [`体重×運動の振り返り 🏋️ (${periodLabel})`];
+  if (!base.total) lines.push(shareWeightLine_(ww).replace(/^体重:/, "直近1週間:"));
+  lines.push(shareSinceLine_(base));
   const inPeriod = entries.filter(e => e.date >= periodStart && e.date <= until);
   const activeDays = new Set(inPeriod.map(e => e.date)).size;
   const phrases = [];
   if (!inPeriod.length) {
-    lines.push("この7日間は運動の記録がありません");
+    lines.push("この期間は運動の記録がありません");
   } else {
-    lines.push(`運動した日: ${activeDays}日 / 7日`);
+    lines.push(`運動した日: ${activeDays}日 / ${base.periodDays}日`);
     const strength = inPeriod.filter(e => e.type === "strength");
     if (strength.length) {
       const partCount = {};
@@ -5054,10 +5083,11 @@ function buildXShareTextExercise_(base) {
       lines.push(`有酸素: ${Math.round(minutes)}分${km > 0 ? `・${round1_(km)}km` : ""}`);
     }
     let burn = 0;
-    for (let i = 0; i < 7; i++) burn += estimateExerciseBurnForDate(shiftDateStr_(until, -i), latest.weight);
+    for (let i = 0; i < Math.min(base.periodDays, 400); i++) burn += estimateExerciseBurnForDate(shiftDateStr_(until, -i), latest.weight);
     if (burn > 0) lines.push(`運動の消費: 約${Math.round(burn).toLocaleString()}kcal`);
     const freq = Number(goals.weeklyFreq) || 0;
-    if (freq > 0) phrases.push(activeDays >= freq ? `週${freq}日の目標を達成` : `週${freq}日の目標まであと${freq - activeDays}日`);
+    if (freq > 0 && !base.total) phrases.push(activeDays >= freq ? `週${freq}日の目標を達成` : `週${freq}日の目標まであと${freq - activeDays}日`);
+    else if (freq > 0) { const perWeek = round1_(activeDays / (base.periodDays / 7)); phrases.push(`週平均${perWeek}日(目標${freq}日)`); }
     // 締め日にまだ運動していなくても連続記録が途切れて見えないよう、その場合は前日から数える
     // (今日タブの🔥表示と同じ考え方)。
     const streak = calcStreak(entries, entries.some(e => e.date === until) ? until : shiftDateStr_(until, -1));
@@ -5069,14 +5099,56 @@ function buildXShareTextExercise_(base) {
   lines.push(hashtag);
   return lines.join("\n");
 }
+// 月間まとめ(v7.11): 前の月(または今月の昨日まで)の体重・食事・運動を1本にまとめる。毎月1日に前月分を投稿する用。
+function monthRange_(which) {
+  const now = new Date();
+  let y = now.getFullYear(), m = now.getMonth() + 1;   // 今月
+  if (which === "last") { m -= 1; if (m === 0) { m = 12; y -= 1; } }
+  const first = `${y}-${String(m).padStart(2, "0")}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  let end = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  if (which !== "last") end = yesterdayDateStr() < first ? first : yesterdayDateStr();
+  return { y, m, first, end, days: Math.round((new Date(end) - new Date(first)) / 86400000) + 1 };
+}
+function buildXShareTextMonth_() {
+  const r = monthRange_(shareMonth);
+  const base = buildXShareBase_(r.end);
+  if (!base) return null;
+  const { sortedAsc, hashtag } = base;
+  const inMonth = sortedAsc.filter(w => w.date >= r.first && w.date <= r.end);
+  const before = [...sortedAsc].reverse().find(w => w.date < r.first);
+  const lines = [`${r.m}月のまとめ 📅`];
+  if (inMonth.length) {
+    const from = before || inMonth[0], to = inMonth[inMonth.length - 1];
+    if (from.date !== to.date) {
+      const d = round1_(to.weight - from.weight);
+      lines.push(`${r.m}月の体重: ${from.weight}kg → ${to.weight}kg (${(d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(d).toFixed(1)}kg)`);
+    } else lines.push(`${r.m}月の体重: ${to.weight}kg`);
+  }
+  lines.push(shareSinceLine_(base));
+  const mealDays = {};
+  mealEntries.filter(m => m.date >= r.first && m.date <= r.end).forEach(m => { mealDays[m.date] = (mealDays[m.date] || 0) + (Number(m.calories) || 0); });
+  const md = Object.keys(mealDays).filter(d => mealDays[d] > 0);
+  if (md.length) lines.push(`平均摂取: ${Math.round(md.reduce((a, d) => a + mealDays[d], 0) / md.length).toLocaleString()}kcal (記録${md.length}日)`);
+  const ex = entries.filter(e => e.date >= r.first && e.date <= r.end);
+  const exDays = new Set(ex.map(e => e.date)).size;
+  const sets = ex.filter(e => e.type === "strength").length;
+  const mins = Math.round(ex.filter(e => e.type === "cardio").reduce((a, e) => a + (Number(e.minutes) || 0), 0));
+  if (ex.length) lines.push(`運動した日: ${exDays}日 / ${r.days}日${sets ? `・筋トレ${sets}セット` : ""}${mins ? `・有酸素${mins}分` : ""}`);
+  lines.push(hashtag);
+  return lines.join("\n");
+}
 function buildXShareTextVariants(untilDate) {
   const base = buildXShareBase_(untilDate || shareUntilDate_());
   if (!base) return null;
-  return [
+  const out = [
     { id: "data", label: "データ重視", text: buildXShareTextData_(base) },
     { id: "meal", label: "体重×食事", text: buildXShareTextMeal_(base) },
     { id: "exercise", label: "体重×運動", text: buildXShareTextExercise_(base) },
   ];
+  const mt = buildXShareTextMonth_();
+  if (mt) out.push({ id: "month", label: "月間まとめ", text: mt });
+  return out;
 }
 function openXShare(text) {
   if (!text) return;
@@ -5181,14 +5253,24 @@ function weightHtml() {
 
     <button class="btn-link" data-tab="charts">📈 体重・体脂肪・腹囲の推移をグラフで見る →</button>
 
-    <details class="more"><summary>📤 SNSに経過をポスト</summary>
+    <details class="more" id="share-details" ${shareOpen ? "open" : ""}><summary>📤 SNSに経過をポスト</summary>
     <div class="card">
-      <p class="section-title">📤 SNSに経過をポスト</p>
-      <p class="label" style="margin:0 0 4px;">集計の範囲</p>
+      ${selectedShareVariant === "month" ? `
+      <p class="label" style="margin:0 0 4px;">どの月</p>
       <div class="wrap" style="margin-bottom:8px;">
-        <button type="button" class="chip ${shareAsOf==="today"?"active-b":""}" data-action="select-share-asof" data-val="today">今日まで</button>
+        <button type="button" class="chip ${shareMonth==="last"?"active-b":""}" data-action="select-share-month" data-val="last">先月</button>
+        <button type="button" class="chip ${shareMonth==="this"?"active-b":""}" data-action="select-share-month" data-val="this">今月(昨日まで)</button>
+      </div>` : `
+      <p class="label" style="margin:0 0 4px;">いつまで</p>
+      <div class="wrap" style="margin-bottom:8px;">
         <button type="button" class="chip ${shareAsOf==="yesterday"?"active-b":""}" data-action="select-share-asof" data-val="yesterday">昨日まで</button>
+        <button type="button" class="chip ${shareAsOf==="today"?"active-b":""}" data-action="select-share-asof" data-val="today">今日まで</button>
       </div>
+      <p class="label" style="margin:0 0 4px;">どの期間</p>
+      <div class="wrap" style="margin-bottom:8px;">
+        <button type="button" class="chip ${sharePeriod==="total"?"active-b":""}" data-action="select-share-period" data-val="total">累計(${goals.statsStartDate ? shortMD_(goals.statsStartDate) : "開始"}から)</button>
+        <button type="button" class="chip ${sharePeriod==="week"?"active-b":""}" data-action="select-share-period" data-val="week">1週間</button>
+      </div>`}
       ${activeShareVariant ? `
       <p class="label" style="margin:0 0 4px;">投稿の内容</p>
       <div class="wrap" style="margin-bottom:8px;">
@@ -5201,9 +5283,26 @@ function weightHtml() {
       </div>
       <button type="button" class="chip" data-action="copy-x-share" style="width:100%;">📋 文章だけコピー</button>
       <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
-      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">「データ重視」は記録開始からの経過、「体重×食事」「体重×運動」は締め日までの直近7日間を分析した内容です。朝のうちに投稿するなど、今日の記録がまだ揃っていないときは「昨日まで」を選ぶと、昨日までのデータで文章を作れます。タップすると投稿画面が開き、この文章が入力された状態になります。内容を確認・編集して、最後はご自身で投稿してください(自動では投稿されません)。</p>
+      <p class="muted" style="font-size:10.5px;margin:6px 0 0;">どの投稿にも、記録開始日からの体重の増減が入ります。「累計」は記録開始から、「1週間」は直近7日間の内容です。「月間まとめ」は毎月1日ごろに、先月分を投稿する用です。朝のうちに投稿するなど今日の記録が揃っていないときは「昨日まで」がおすすめです。</p>
       ` : `<p class="muted" style="font-size:11.5px;margin:0;">${shareAsOf === "yesterday" && weightEntries.length ? "昨日までの体重の記録がありません。「今日まで」に切り替えると、今日の記録を含めて作成できます。" : "体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。"}</p>`}
     </div></details>`;
+}
+
+// 投稿カードの開閉を覚えておく(選ぶたびに画面を作り直しても、閉じないようにする)
+document.addEventListener("toggle", (e) => { if (e.target && e.target.id === "share-details") shareOpen = e.target.open; }, true);
+// 毎月1日〜5日に、「先月のまとめを投稿しよう」を今日タブに出す(投稿した/閉じたら、その月は出さない)
+function monthPostKey_() { const r = monthRange_("last"); return r.y + "-" + r.m; }
+function monthPostBannerHtml_() {
+  const d = new Date();
+  if (d.getDate() > 5 || !weightEntries.length) return "";
+  let done = null; try { done = localStorage.getItem("training-log-month-post"); } catch (e) {}
+  if (done === monthPostKey_()) return "";
+  const r = monthRange_("last");
+  return `<div class="card" style="border:2px solid ${VIZ.orange};">
+    <p class="section-title" style="margin:0 0 6px;">📅 ${r.m}月のまとめを投稿しましょう</p>
+    <p class="muted" style="margin:0 0 10px;">先月の体重・食事・運動をまとめた文章を作ります。</p>
+    <div class="row"><button class="btn-primary" data-action="open-month-post" style="flex:1;">投稿文を見る</button>
+    <button class="chip" data-action="dismiss-month-post">今月は見送る</button></div></div>`;
 }
 
 // ============ TRAINING TAB(筋トレ・有酸素の記録 + 進捗 + 履歴) ============
@@ -5613,6 +5712,105 @@ function calendarGridHtml() {
     <div class="cal-grid">${cells}</div>`;
 }
 
+// ============ v7.12: 週のまとめ通知 / 記録忘れ / 目標の予測日 / バックアップ通知 / カレンダーのグラフ ============
+function lsGet_(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet_(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+// 月曜・火曜に「先週のまとめを投稿しましょう」を出す(投稿した/見送ったら、その週は出さない)
+function mondayKey_() { const d = new Date(); const back = (d.getDay() + 6) % 7; return shiftDateStr_(localDateStr(), -back); }
+function weekPostBannerHtml_() {
+  const wd = new Date().getDay();
+  if ((wd !== 1 && wd !== 2) || weightEntries.length < 2) return "";
+  if (lsGet_("training-log-week-post") === mondayKey_()) return "";
+  return `<div class="card" style="border:2px solid ${VIZ.blue};">
+    <p class="section-title" style="margin:0 0 6px;">📝 先週のまとめを投稿しましょう</p>
+    <p class="muted" style="margin:0 0 10px;">先週1週間の体重の増減と、8/13からの増減をまとめます。</p>
+    <div class="row"><button class="btn-primary" data-action="open-week-post" style="flex:1;">投稿文を見る</button>
+    <button class="chip" data-action="dismiss-week-post">見送る</button></div></div>`;
+}
+// 夜になっても体重・食事が未入力のとき、ホームに出す(アプリが開かれているときだけ。通知は飛ばない)
+function nudgeBannerHtml_() {
+  const now = new Date();
+  if (now.getHours() < 19) return "";
+  const today = localDateStr();
+  if (lsGet_("training-log-nudge") === today) return "";
+  const recent = shiftDateStr_(today, -7);
+  if (!weightEntries.some(w => w.date >= recent) && !mealEntries.some(m => m.date >= recent)) return "";   // しばらく使っていない人には出さない
+  const miss = [];
+  if (!weightEntries.some(w => w.date === today)) miss.push(["weight", "⚖️ 体重"]);
+  if (!mealEntries.some(m => m.date === today)) miss.push(["meals", "🍽️ 食事"]);
+  if (!miss.length) return "";
+  return `<div class="card" style="border:2px solid ${VIZ.red};">
+    <p class="section-title" style="margin:0 0 6px;">🕖 今日の記録がまだです</p>
+    <div class="row">${miss.map(([t, l]) => `<button class="btn-primary" data-tab="${t}" style="flex:1;">${l}を記録</button>`).join("")}
+    <button class="chip" data-action="dismiss-nudge">今日はいい</button></div></div>`;
+}
+// 30日以上バックアップしていないとき
+function backupBannerHtml_() {
+  if (entries.length + weightEntries.length + mealEntries.length < 30) return "";
+  const last = lsGet_("training-log-last-backup");
+  const snooze = lsGet_("training-log-backup-snooze");
+  if (snooze && snooze >= localDateStr()) return "";
+  const days = last ? Math.round((new Date(localDateStr()) - new Date(last)) / 86400000) : null;
+  if (days != null && days < 30) return "";
+  return `<div class="card" style="border:2px solid ${VIZ.green};">
+    <p class="section-title" style="margin:0 0 6px;">💾 バックアップしましょう</p>
+    <p class="muted" style="margin:0 0 10px;">${days == null ? "まだバックアップをしていません。" : `最後のバックアップから${days}日たちました。`}記録をファイルに保存しておくと、もしものときに戻せます。</p>
+    <div class="row"><button class="btn-primary" data-action="export-json" style="flex:1;">⬇️ 今すぐ書き出す</button>
+    <button class="chip" data-action="snooze-backup">1週間あとで</button></div></div>`;
+}
+// 目標体重に届く日の予測。直近4週間の体重を直線であてはめて、同じペースが続いた場合の日付を出す。
+function goalEta_() {
+  const pts = [...weightEntries].filter(w => w.weight > 0 && afterStatsStart_(w.date)).sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!pts.length || !goals.weight) return null;
+  const latest = pts[pts.length - 1];
+  if (Math.abs(latest.weight - goals.weight) < 0.05 || (goals.weight < latest.weight ? false : latest.weight >= goals.weight)) return { state: "reached" };
+  const cut = shiftDateStr_(localDateStr(), -28);
+  const recent = pts.filter(w => w.date >= cut);
+  if (recent.length < 7) return { state: "short" };
+  const t0 = new Date(recent[0].date).getTime();
+  const xs = recent.map(w => (new Date(w.date).getTime() - t0) / 86400000), ys = recent.map(w => w.weight);
+  if (xs[xs.length - 1] < 14) return { state: "short" };
+  const n = xs.length, mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  const sxx = xs.reduce((a, x) => a + (x - mx) * (x - mx), 0), sxy = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0);
+  const slope = sxy / sxx;                              // kg/日
+  const fitNow = my + slope * (xs[xs.length - 1] - mx);   // いまの当てはめ値
+  const wantLose = goals.weight < fitNow;
+  if ((wantLose && slope > -0.004) || (!wantLose && slope < 0.004)) return { state: "flat", perWeek: round1_(slope * 7) };
+  const days = Math.ceil((goals.weight - fitNow) / slope);
+  if (days > 730) return { state: "far", perWeek: round1_(slope * 7) };
+  const d = new Date(); d.setDate(d.getDate() + days);
+  return { state: "ok", date: localDateStr(d), days, perWeek: round1_(slope * 7) };
+}
+function goalEtaText_() {
+  const e = goalEta_();
+  if (!e || e.state === "reached") return "";
+  const sgn = v => (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v).toFixed(1);
+  if (e.state === "short") return "📅 目標までの予測は、2週間ぶんの体重(7回以上)がたまると出ます。";
+  if (e.state === "flat") return `📅 直近4週間は横ばい〜増加ぎみ(週${sgn(e.perWeek)}kg)のため、目標日の予測は出せません。`;
+  if (e.state === "far") return `📅 直近のペース(週${sgn(e.perWeek)}kg)だと、目標まで2年以上かかる計算です。`;
+  const [, m, dd] = e.date.split("-").map(Number);
+  const part = dd <= 10 ? "上旬" : dd <= 20 ? "中旬" : "下旬";
+  return `📅 直近4週間のペース(週${sgn(e.perWeek)}kg)が続くと、${e.date.slice(0, 4)}年${m}月${part}ごろに${goals.weight}kgです(あと約${e.days}日)。`;
+}
+// カレンダーの上に出す、1か月ぶんの折れ線グラフ(あすけん風)
+let calMetric = "weight";
+const CAL_METRICS = { weight: ["体重", "kg", "weight", VIZ.blue], bodyFat: ["体脂肪率", "%", "bodyFat", VIZ.green], waist: ["腹囲", "cm", "waist", VIZ.orange], muscleRate: ["骨格筋率", "%", "muscleRate", VIZ.red] };
+function calendarGraphHtml_() {
+  const y = calMonth.getFullYear(), m = calMonth.getMonth() + 1;
+  const first = `${y}-${String(m).padStart(2, "0")}-01`, last = `${y}-${String(m).padStart(2, "0")}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  const [label, unit, key, color] = CAL_METRICS[calMetric];
+  const chips = Object.keys(CAL_METRICS).map(k => `<button class="seg-b ${k === calMetric ? "on" : ""}" data-action="set-cal-metric" data-val="${k}">${CAL_METRICS[k][0]}</button>`).join("");
+  const pts = weightEntries.filter(w => w[key] != null && Number(w[key]) > 0 && w.date >= first && w.date <= last)
+    .sort((a, b) => a.date < b.date ? -1 : 1).map(w => ({ date: w.date, value: Number(w[key]) }));
+  let sum = "";
+  if (pts.length >= 2) {
+    const d = round1_(pts[pts.length - 1].value - pts[0].value);
+    sum = `<p class="muted" style="margin:6px 0 0;">${m}月の${label}: ${pts[0].value}${unit} → ${pts[pts.length - 1].value}${unit} (<b style="color:${d <= 0 ? VIZ.green : VIZ.red};">${(d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(d).toFixed(1)}${unit}</b>)</p>`;
+  }
+  return `<div class="range" style="margin-bottom:8px;">${chips}</div>
+    ${bigLineChart_("cal", pts, { unit, color })}${sum}`;
+}
+
 // ============ カレンダータブ(v5.13、v5.14で1日表示に変更) ============
 // 「全ての記録をカレンダーからボタン一つで見られるようにしてほしい」というご要望に対応。
 // 以前は運動タブの履歴に「カレンダー」表示が埋もれていて、しかも日付をタップしても
@@ -5727,6 +5925,8 @@ function calendarTabHtml() {
     <div class="card">
       <p class="section-title">📅 カレンダー</p>
       <p class="muted" style="font-size:10.5px;margin:0 0 8px;line-height:1.6;">印: 🔴運動 / 🟡からだ / 🔵食事 / 🔷ストレッチ。日付をタップすると、その日の記録を項目ごとに見られます。</p>
+      ${calendarGraphHtml_()}
+      <div style="height:12px;"></div>
       ${calendarGridHtml()}
     </div>
     <p class="mono" style="font-weight:700;font-size:14px;margin:0 0 8px;">${selected}(${WEEKDAY[dd.getDay()]})${isToday ? " ・今日" : ""}</p>
@@ -6945,13 +7145,24 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "add-meal") { handleAddMeal(); }
   else if (action === "add-weight") { handleAddWeight(); }
   else if (action === "select-share-variant") { selectedShareVariant = t.dataset.val; renderTabContent(); }
+  else if (action === "select-share-period") { sharePeriod = t.dataset.val === "week" ? "week" : "total"; renderTabContent(); }
+  else if (action === "select-share-month") { shareMonth = t.dataset.val === "this" ? "this" : "last"; renderTabContent(); }
+  else if (action === "open-month-post") { selectedShareVariant = "month"; shareMonth = "last"; shareOpen = true; switchTab("weight"); }
+  else if (action === "dismiss-month-post") { try { localStorage.setItem("training-log-month-post", monthPostKey_()); } catch (e) {} renderTabContent(); }
+  else if (action === "set-cal-metric") { calMetric = t.dataset.val; renderTabContent(); }
+  else if (action === "open-week-post") { selectedShareVariant = "data"; sharePeriod = "week"; shareAsOf = "yesterday"; shareOpen = true; lsSet_("training-log-week-post", mondayKey_()); switchTab("weight"); }
+  else if (action === "dismiss-week-post") { lsSet_("training-log-week-post", mondayKey_()); renderTabContent(); }
+  else if (action === "dismiss-nudge") { lsSet_("training-log-nudge", localDateStr()); renderTabContent(); }
+  else if (action === "snooze-backup") { lsSet_("training-log-backup-snooze", shiftDateStr_(localDateStr(), 7)); renderTabContent(); }
   else if (action === "select-share-asof") { shareAsOf = t.dataset.val === "yesterday" ? "yesterday" : "today"; renderTabContent(); }
   else if (action === "open-x-share") {
     const el = document.getElementById("x-share-text");
+    if (selectedShareVariant === "month") { try { localStorage.setItem("training-log-month-post", monthPostKey_()); } catch (e) {} }
     openXShare(el ? el.value : null);
   }
   else if (action === "open-bluesky-share") {
     const el = document.getElementById("x-share-text");
+    if (selectedShareVariant === "month") { try { localStorage.setItem("training-log-month-post", monthPostKey_()); } catch (e) {} }
     openBlueskyShare(el ? el.value : null);
   }
   else if (action === "copy-x-share") {
