@@ -150,6 +150,7 @@
   .cal-dots { display: flex; gap: 2px; margin-top: 2px; min-height: 5px; }
   /* v7.13: 日付のマスの中に折れ線と数値を重ねるカレンダー(あすけん風) */
   .cal-wrap { position: relative; }
+  .view-only .del-btn { display: none; }   /* ホームは見るだけ。直すのは履歴タブ */
   .cal-grid.g { gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
   .cal-grid.g .cal-cell { aspect-ratio: 0.76; border-radius: 0; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: transparent; align-items: flex-start; justify-content: space-between; padding: 3px 4px 3px; position: relative; }
   .cal-grid.g .cal-cell > span { font-size: 11px; color: var(--ink-soft); line-height: 1; }
@@ -299,7 +300,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.13";
+const APP_VERSION = "v7.16";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -4308,7 +4309,8 @@ function chartsHtml() {
       <span class="pill ${fromStart <= 0 ? "good" : "neutral"}">開始から ${fromStart > 0 ? "+" : fromStart < 0 ? "−" : "±"}${Math.abs(fromStart).toFixed(1)}kg</span>
       ${wk != null ? `<span class="pill ${wk < 0 ? "good" : "neutral"}">1週間 ${wk > 0 ? "+" : wk < 0 ? "−" : "±"}${Math.abs(wk).toFixed(1)}kg</span>` : ""}
     </div>
-    ${goalEtaText_() ? `<p class="muted" style="margin:10px 0 0;color:#fff;opacity:.92;">${goalEtaText_()}</p>` : ""}</div>`;
+    ${goalEtaText_() ? `<p class="muted" style="margin:10px 0 0;color:#fff;opacity:.92;">${goalEtaText_()}</p>` : ""}
+    <button class="btn-primary" data-action="open-post" style="width:100%;margin-top:12px;background:#fff;color:var(--slate);">📤 この経過をSNSにポスト</button></div>`;
   // ---- 体重グラフ ----
   const cut = chartCutoff_();
   const pts = sortedAll.filter(w => w.date >= cut).map(w => ({ date: w.date, value: w.weight }));
@@ -4415,12 +4417,11 @@ function weekTrainChart_(ws) {
 // ============ タブのまとめ(v7.1: 下のタブ7つ→4つ) ============
 const TAB_GROUPS = {
   record: { items: [["meals","🍽️ 食事"],["training","🏋️ 運動"],["weight","⚖️ からだ"]], last: "meals" },
-  more:   { items: [["calendar","📅 カレンダー"],["settings","⚙️ 設定"]], last: "calendar" },
-};
+  };
 function groupOfTab_(tab) { return Object.keys(TAB_GROUPS).find(k => TAB_GROUPS[k].items.some(i => i[0] === tab)) || tab; }
 function groupNavHtml_() {
   const g = TAB_GROUPS[groupOfTab_(activeTab)];
-  if (!g) return "";
+  if (!g || g.items.length < 2) return "";
   return `<div class="seg">${g.items.map(([t, l]) => `<button class="seg-b ${activeTab === t ? "on" : ""}" data-tab="${t}">${l}</button>`).join("")}</div>`;
 }
 
@@ -4439,7 +4440,7 @@ function renderApp() {
       <button class="tab-item" data-tab="today"><span class="ic">🏠</span>ホーム</button>
       <button class="tab-item" data-tab="record"><span class="ic">✏️</span>記録</button>
       <button class="tab-item" data-tab="charts"><span class="ic">📈</span>グラフ</button>
-      <button class="tab-item" data-tab="more"><span class="ic">☰</span>その他</button>
+      <button class="tab-item" data-tab="history"><span class="ic">🗂️</span>履歴</button>
     </div>`;
   renderSyncStatus();
   renderDataWarning();
@@ -4451,6 +4452,7 @@ function updateTabbarActive() {
 }
 function renderTabContent() {
   const el = document.getElementById("tab-content");
+  if (activeTab === "calendar") activeTab = "today";   // v7.14: カレンダーはホームに移動した
   if (activeTab === "charts") el.innerHTML = chartsHtml();
   else if (activeTab === "today") el.innerHTML = todayHtml();
   else if (activeTab === "meals") el.innerHTML = mealsHtml();
@@ -4458,6 +4460,7 @@ function renderTabContent() {
   else if (activeTab === "training") el.innerHTML = trainingHtml();
   else if (activeTab === "stretch") el.innerHTML = stretchHtml();
   else if (activeTab === "calendar") el.innerHTML = calendarTabHtml();
+  else if (activeTab === "history") el.innerHTML = historyHtml();
   else if (activeTab === "settings") el.innerHTML = settingsHtml();
   el.innerHTML = groupNavHtml_() + el.innerHTML;
   bindTrainingFormWidgets();
@@ -4547,6 +4550,7 @@ function todayHtml() {
       <button class="quick" data-tab="weight"><span>⚖️</span>体重</button>
       <button class="quick" data-tab="training"><span>🏋️</span>運動</button>
     </div>
+    <button class="btn-primary" data-action="open-post" style="width:100%;margin:-4px 0 14px;">📤 いまの経過をSNSにポスト</button>
 
     <div class="card">
       <div class="between" style="gap:10px;">
@@ -4579,6 +4583,7 @@ function todayHtml() {
         <button class="chip" data-tab="charts" style="flex:0 0 auto;">📈 グラフ</button>
       </div></div>` : ""}
 
+    ${calendarTabHtml(true)}
     <details class="more"><summary>🤖 AIのひとこと</summary>
       <div class="card">
       <p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">${
@@ -4708,7 +4713,7 @@ function mealsHtml() {
           <input type="number" id="meal-carb-input" placeholder="炭水化物" class="mono">
         </div>
       </div>
-      <p class="muted" style="font-size:10.5px;margin:0 0 8px;">カロリーを入れておくと、「今日」タブのカロリー収支グラフに反映されます。分からないときは「🔍 AIで栄養を調べる」で自動入力できます。</p>
+      <p class="muted" style="font-size:10.5px;margin:0 0 8px;">カロリーを入れておくと、「グラフ」タブのカロリー収支に反映されます。分からないときは「🔍 AIで栄養を調べる」で自動入力できます。</p>
       <button class="btn-primary" data-action="add-meal">＋ 記録する</button>
     </div>
 
@@ -4725,13 +4730,7 @@ function mealsHtml() {
         </div>` : `<p class="mono" style="font-size:18px;font-weight:700;margin:0;">${todayCal} kcal</p><p class="muted" style="font-size:11px;margin:4px 0 0;">設定タブでプロフィールを入力すると目標が計算されます</p>`}
     </div>
 
-    <button class="btn-link" data-tab="charts">📈 摂取と消費のグラフを見る →</button>
-    <details class="more"><summary>📷 写真から入力 / 🤖 PFCのAIアドバイス</summary>${photoCardHtml()}${mealAiAdviceCardHtml()}</details>
-
-    <div class="card">
-      <p class="section-title">📖 食事の履歴</p>
-      <div id="meal-history-section">${mealHistoryHtml()}</div>
-    </div>`;
+    <details class="more"><summary>📷 写真から入力 / 🤖 PFCのAIアドバイス</summary>${photoCardHtml()}${mealAiAdviceCardHtml()}</details>`;
 }
 // 食事を日付ごとにグループ化して新しい順に表示する。「今日の食事」カードは
 // 今日の分だけをまとめて表示するのに対し、こちらは過去に記録した食事も日付付きで
@@ -5182,8 +5181,6 @@ function weightHtml() {
   const formSrc = weightFormSource_(); // v5.11: 過去の日付を選んでいるときは、その日の記録で入力欄を埋める
   const remaining = latest ? weightGoalRemaining_(latest.weight, goals.weight) : null;
   const points = sortedAsc.map(w => ({ date: w.date, value: w.weight }));
-  const shareVariants = buildXShareTextVariants();
-  const activeShareVariant = shareVariants ? (shareVariants.find(v => v.id === selectedShareVariant) || shareVariants[0]) : null;
   const list = sortedDesc.slice(0,8).map(w => `
     <div class="entry-row">
       <span class="mono muted" style="flex:1;">${w.date}</span>
@@ -5256,14 +5253,37 @@ function weightHtml() {
       <p class="muted" style="font-size:10.5px;margin:0 0 10px;line-height:1.6;">体脂肪率は任意です。記録すると、基礎代謝を体組成から計算する式(Katch-McArdle)に自動で切り替わり、目標カロリーとたんぱく質の目安がより実態に近づきます。腹囲・骨格筋率も任意で、体組成計の表示値をそのまま記録できます(骨格筋率はこの端末の中だけに保存され、Google Sheetsへの同期対象には含まれません)。骨格筋量(kg)は入力欄を設けず、体重×骨格筋率から自動で計算して表示します。</p>
       ${entryDateNoticeHtml("weight")}
       <button class="btn-primary" data-action="add-weight">＋ 記録する</button>
-      ${list}
     </div>
 
     <details class="more"><summary>体組成計のCSVを取り込む</summary>${omronImportCardHtml()}</details>
 
-    <button class="btn-link" data-tab="charts">📈 体重・体脂肪・腹囲の推移をグラフで見る →</button>
+    <button class="btn-link" data-tab="charts">📈 体重・体脂肪・腹囲の推移をグラフで見る →</button>`;
+}
 
-    <details class="more" id="share-details" ${shareOpen ? "open" : ""}><summary>📤 SNSに経過をポスト</summary>
+// 体重の履歴(閲覧用): 新しい順。編集・削除はここから。
+let weightHistoryShowAll = false;
+function weightHistoryHtml_() {
+  const sortedDesc = [...weightEntries].sort((a, b) => a.date < b.date ? 1 : -1);
+  if (!sortedDesc.length) return `<p class="muted">まだ体重の記録がありません。</p>`;
+  const shown = weightHistoryShowAll ? sortedDesc : sortedDesc.slice(0, 30);
+  const rows = shown.map(w => {
+    const dd = new Date(w.date + "T00:00:00");
+    return `<div class="entry-row">
+      <span class="mono muted" style="flex:0 0 auto;">${w.date.slice(5)}(${WEEKDAY[dd.getDay()]})</span>
+      <span class="mono" style="flex:1;text-align:right;">${w.weight}kg${w.bodyFat != null ? ` <span class="muted">${w.bodyFat}%</span>` : ""}${w.waist != null ? ` <span class="muted">腹囲${w.waist}cm</span>` : ""}${w.muscleRate != null ? ` <span class="muted">筋${w.muscleRate}%</span>` : ""}</span>
+      <button class="del-btn" data-action="edit-weight" data-date="${w.date}">✏️</button>
+      <button class="del-btn" data-action="del-weight" data-date="${w.date}">🗑️</button>
+    </div>`;
+  }).join("");
+  const more = sortedDesc.length > 30 ? `<button type="button" class="chip" data-action="toggle-weight-history-show-all" style="margin-top:8px;">${weightHistoryShowAll ? "▲ 直近30件だけ表示" : `▼ すべて表示(${sortedDesc.length}件)`}</button>` : "";
+  return rows + more;
+}
+// SNS投稿カード(履歴タブの「投稿」で表示)
+function shareCardHtml_() {
+  const shareVariants = buildXShareTextVariants();
+  const activeShareVariant = shareVariants ? (shareVariants.find(v => v.id === selectedShareVariant) || shareVariants[0]) : null;
+  return `
+    <div id="share-details">
     <div class="card">
       ${selectedShareVariant === "month" ? `
       <p class="label" style="margin:0 0 4px;">どの月</p>
@@ -5295,11 +5315,11 @@ function weightHtml() {
       <p id="x-share-status" class="muted" style="font-size:10.5px;margin:6px 0 0;"></p>
       <p class="muted" style="font-size:10.5px;margin:6px 0 0;">どの投稿にも、記録開始日からの体重の増減が入ります。「累計」は記録開始から、「1週間」は直近7日間の内容です。「月間まとめ」は毎月1日ごろに、先月分を投稿する用です。朝のうちに投稿するなど今日の記録が揃っていないときは「昨日まで」がおすすめです。</p>
       ` : `<p class="muted" style="font-size:11.5px;margin:0;">${shareAsOf === "yesterday" && weightEntries.length ? "昨日までの体重の記録がありません。「今日まで」に切り替えると、今日の記録を含めて作成できます。" : "体重を記録すると、ここに経過をSNSへ投稿するための文章が自動で作られます。"}</p>`}
-    </div></details>`;
+    </div></div>`;
 }
 
 // 投稿カードの開閉を覚えておく(選ぶたびに画面を作り直しても、閉じないようにする)
-document.addEventListener("toggle", (e) => { if (e.target && e.target.id === "share-details") shareOpen = e.target.open; }, true);
+
 // 毎月1日〜5日に、「先月のまとめを投稿しよう」を今日タブに出す(投稿した/閉じたら、その月は出さない)
 function monthPostKey_() { const r = monthRange_("last"); return r.y + "-" + r.m; }
 function monthPostBannerHtml_() {
@@ -5440,9 +5460,7 @@ function trainingHtml() {
       ) : '<p class="muted" style="font-size:11px;margin:4px 0 0;">今日トレーニングを記録すると、その内容をメニューとして保存できます。</p>'}
     </div>
 
-    <button class="btn-link" data-tab="charts">📈 運動の進捗をグラフで見る →</button>
-
-    <div id="history-section"></div>`;
+    `;
 }
 // 部位ごとの実施状況の一覧(v46.12)。「どの部位をしばらくやっていないか」は
 // 履歴を遡らないと分からなかったため、部位ごとに最終実施日・経過日数・
@@ -5973,7 +5991,8 @@ function calendarDayKpiHtml_(d) {
     ${exerciseBurn > 0 && dayTarget != null ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">摂取カロリーの目標には、この日の運動による消費(${Math.round(exerciseBurn)}kcal)をそのまま上乗せしています。</p>` : ""}
     ${mismatch ? `<p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">⚠️ 「摂取カロリー」は減量ペースを踏まえた<b>目標カロリー</b>が基準、「カロリー収支」は実際の<b>消費カロリー(基礎代謝+活動量)</b>が基準のため、判定が食い違って見えることがあります。目標より少し多めに食べても、消費の範囲内であれば収支は赤字のままです。</p>` : ""}`;
 }
-function calendarTabHtml() {
+let calTapped = false;   // v7.14: ホームでは、日付をタップしたときだけ、その日の詳細を出す
+function calendarTabHtml(homeMode) {
   const selected = (selectedCalDate && selectedCalDate <= localDateStr()) ? selectedCalDate : localDateStr();
   const dd = new Date(selected + "T00:00:00");
   const isToday = selected === localDateStr();
@@ -5985,15 +6004,30 @@ function calendarTabHtml() {
       <div style="height:12px;"></div>
       ${calendarGridHtml()}
     </div>
-    <p class="mono" style="font-weight:700;font-size:14px;margin:0 0 8px;">${selected}(${WEEKDAY[dd.getDay()]})${isToday ? " ・今日" : ""}</p>
+    ${homeMode && !calTapped ? "" : `<div class="view-only"><p class="mono" style="font-weight:700;font-size:14px;margin:0 0 8px;">${selected}(${WEEKDAY[dd.getDay()]})${isToday ? " ・今日" : ""}</p>
     ${calendarDayKpiHtml_(selected)}
     ${calendarTrainingDayHtml_(selected)}
     ${calendarMealsDayHtml_(selected)}
     ${calendarWeightDayHtml_(selected)}
-    ${calendarStretchDayHtml_(selected)}`;
+    ${calendarStretchDayHtml_(selected)}</div>`}`;
 }
 
-function renderHistory() {
+// ============ 履歴タブ(v7.15: 見る・直す専用) ============
+// 入力は「記録」タブ、閲覧は「ホーム」「グラフ」「履歴」に分けた。履歴タブでは、過去の記録を
+// 日付ごとに見て、✏️で直す・🗑️で消す・🔁でもう一度記録する。投稿(SNS)もここ。
+let histSub = "meals";
+const HIST_ITEMS = [["meals", "🍽️ 食事"], ["training", "🏋️ 運動"], ["weight", "⚖️ からだ"], ["share", "📤 投稿"]];
+function historyHtml() {
+  const nav = `<div class="seg">${HIST_ITEMS.map(([t, l]) => `<button class="seg-b ${histSub === t ? "on" : ""}" data-action="set-hist-sub" data-val="${t}">${l}</button>`).join("")}</div>`;
+  let body = "";
+  if (histSub === "meals") body = `<div class="card"><p class="section-title">📖 食事の履歴</p><div id="meal-history-section">${mealHistoryHtml()}</div></div>`;
+  else if (histSub === "training") body = `<div id="history-section">${trainingHistoryCardHtml_()}</div>`;
+  else if (histSub === "weight") body = `<div class="card"><p class="section-title">⚖️ からだの履歴</p>${weightHistoryHtml_()}</div>`;
+  else body = shareCardHtml_();
+  return nav + body;
+}
+
+function trainingHistoryCardHtml_() {
   // 「運動」タブの履歴なので、リスト表示は運動の記録だけを見せる。
   // (以前はここに体重・食事の記録も混ざって表示されており、「運動の履歴なのに
   //  食事が出てくる」と分かりづらい状態だった。体重は「からだ」タブ、食事は
@@ -6036,8 +6070,11 @@ function renderHistory() {
       body += '<p class="muted" style="font-size:10.5px;margin:4px 0 0;line-height:1.5;">体重は「からだ」タブ、食事は「食事」タブの「📖 食事の履歴」で確認できます。「📅 カレンダー」タブなら、日付をタップして全項目の記録をまとめて見られます。</p>';
     }
   }
+  return `<div class="card">${toggle}${body}</div>`;
+}
+function renderHistory() {
   const el = document.getElementById("history-section");
-  if (el) el.innerHTML = `<div class="card">${toggle}${body}</div>`;
+  if (el) el.innerHTML = trainingHistoryCardHtml_();
 }
 
 // Targeted DOM patches for chip selections inside the Training form, so that a
@@ -7159,7 +7196,7 @@ document.getElementById("app").addEventListener("click", (e) => {
   // v5.13: カレンダーは独立タブになったので、月送り・日付選択はタブ全体を再描画する。
   else if (action === "cal-prev") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderTabContent(); }
   else if (action === "cal-next") { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); renderTabContent(); }
-  else if (action === "select-day") { selectedCalDate = t.dataset.date; renderTabContent(); }
+  else if (action === "select-day") { selectedCalDate = t.dataset.date; calTapped = true; renderTabContent(); }
   else if (action === "select-meal-type") {
     selectedMealType = t.dataset.val;
     document.querySelectorAll("#meal-type-buttons .chip").forEach(c => c.classList.toggle("active", c.dataset.val === t.dataset.val));
@@ -7203,10 +7240,13 @@ document.getElementById("app").addEventListener("click", (e) => {
   else if (action === "select-share-variant") { selectedShareVariant = t.dataset.val; renderTabContent(); }
   else if (action === "select-share-period") { sharePeriod = t.dataset.val === "week" ? "week" : "total"; renderTabContent(); }
   else if (action === "select-share-month") { shareMonth = t.dataset.val === "this" ? "this" : "last"; renderTabContent(); }
-  else if (action === "open-month-post") { selectedShareVariant = "month"; shareMonth = "last"; shareOpen = true; switchTab("weight"); }
+  else if (action === "open-month-post") { selectedShareVariant = "month"; shareMonth = "last"; shareOpen = true; histSub = "share"; switchTab("history"); }
   else if (action === "dismiss-month-post") { try { localStorage.setItem("training-log-month-post", monthPostKey_()); } catch (e) {} renderTabContent(); }
+  else if (action === "set-hist-sub") { histSub = t.dataset.val; renderTabContent(); }
+  else if (action === "toggle-weight-history-show-all") { weightHistoryShowAll = !weightHistoryShowAll; renderTabContent(); }
   else if (action === "set-cal-metric") { calMetric = t.dataset.val; renderTabContent(); }
-  else if (action === "open-week-post") { selectedShareVariant = "data"; sharePeriod = "week"; shareAsOf = "yesterday"; shareOpen = true; lsSet_("training-log-week-post", mondayKey_()); switchTab("weight"); }
+  else if (action === "open-post") { selectedShareVariant = "data"; sharePeriod = "total"; shareAsOf = "yesterday"; shareOpen = true; histSub = "share"; switchTab("history"); }
+  else if (action === "open-week-post") { selectedShareVariant = "data"; sharePeriod = "week"; shareAsOf = "yesterday"; shareOpen = true; histSub = "share"; lsSet_("training-log-week-post", mondayKey_()); switchTab("history"); }
   else if (action === "dismiss-week-post") { lsSet_("training-log-week-post", mondayKey_()); renderTabContent(); }
   else if (action === "dismiss-nudge") { lsSet_("training-log-nudge", localDateStr()); renderTabContent(); }
   else if (action === "snooze-backup") { lsSet_("training-log-backup-snooze", shiftDateStr_(localDateStr(), 7)); renderTabContent(); }
