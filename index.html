@@ -300,7 +300,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.17";
+const APP_VERSION = "v7.18";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -1815,6 +1815,7 @@ async function gasPost(payload, timeoutMs) {
       signal: controller ? controller.signal : undefined,
     });
   } catch (err) {
+    if (timer) clearTimeout(timer);
     if (err && err.name === "AbortError") {
       const groqHint = (backendAiKeys && !backendAiKeys.groq)
         ? "AI機能がGeminiだけに頼っている状態です(Groq未設定)。Geminiは混雑・無料枠切れのときに応答が非常に遅くなります。設定タブの案内にしたがってGROQ_API_KEYを登録すると、数秒で返るようになります。"
@@ -1822,13 +1823,14 @@ async function gasPost(payload, timeoutMs) {
       throw new Error(`${Math.round(ms / 1000)}秒待っても応答がありませんでした。Apps Script側の処理が終わらなかった可能性があります(${groqHint})`);
     }
     throw err;
-  } finally {
-    if (timer) clearTimeout(timer);
   }
   let data;
   try {
     data = await res.json();
+    if (timer) clearTimeout(timer);
   } catch (parseErr) {
+    if (timer) clearTimeout(timer);
+    if (parseErr && parseErr.name === "AbortError") throw new Error(`${Math.round(ms / 1000)}秒待っても応答の受信が終わりませんでした。通信が不安定か、Apps Script側が詰まっている可能性があります。`);
     // Apps Scriptがエラー時にHTML(ログイン画面やGoogleの404ページなど)を返すと
     // ここに来る。原因はHTTPステータスによっておおよそ絞り込める(v46.10)。
     //   ・404 … URLそのものが無効(デプロイが削除された・URLの貼り間違い・
@@ -1876,6 +1878,18 @@ async function checkBackendVersion_() {
 
 const SYNC_DEBOUNCE_MS = 5000;   // v7.4: 連続入力をまとめて1回で送る(通信回数を減らす)
 let syncTimer = null;
+let syncingSince = 0;
+// 「同期中」のまま固まったときの安全装置(v7.18): 通信の応答が返らなくても、90秒で強制的に解除してエラー表示にする。
+setInterval(() => {
+  if (syncStatus === "syncing") {
+    if (!syncingSince) syncingSince = Date.now();
+    else if (Date.now() - syncingSince > 90000) {
+      syncingSince = 0; syncInFlight = false; autoPulling = false; syncStatus = "error";
+      lastSyncError = "同期が90秒たっても終わらないため中断しました。通信状況を確認して、☁️をタップして再試行してください。";
+      try { renderSyncStatus(); if (activeTab === "settings") renderTabContent(); } catch (e) {}
+    }
+  } else syncingSince = 0;
+}, 5000);
 let syncInFlight = false;
 let syncPending = false;
 // v5.11: 送信中に「上書きして送信する」等(force)が押された場合、追いかけの送信にもforceを引き継ぐ。
@@ -1973,7 +1987,14 @@ async function syncToSheet(force) {
   // force(=「今すぐ同期を試す」や競合時の上書き)のときは、指紋に頼らず全件送り直す。
   // シートを消してしまった・別のシートに繋ぎ替えた等で指紋と実際が食い違っていても、
   // この操作で必ず復旧できるようにしておくため。
-  const { payload, sigs, skipped } = changedPayload_(!!force);
+  let payload, sigs, skipped;
+  try { ({ payload, sigs, skipped } = changedPayload_(!!force)); }
+  catch (e0) {
+    syncInFlight = false; syncPending = false; syncStatus = "error";
+    lastSyncError = "送信内容の準備でエラーが出ました: " + (e0 && e0.message ? e0.message : e0);
+    renderSyncStatus(); if (activeTab === "settings") renderTabContent();
+    return;
+  }
   const nothingToSend = Object.keys(payload).length === 0;
   // 【安全弁】記録が1件も無い状態では、絶対にシートへ書き込まない(v44.9)。
   // シートへの書き込みは各シートをclearしてから入れ直す全面上書きなので、
