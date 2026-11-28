@@ -300,7 +300,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.18";
+const APP_VERSION = "v7.19";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -866,6 +866,37 @@ let emptySyncBlocked = false;   // 0件のため送信を保留しているか
 let allowEmptySync = false;     // 本人が「それでもシートを空にする」と決めたか
 let dataLoadFailed = false;     // localStorageの読み込みに失敗したか(中身が壊れていた等)
 let storageWriteFailed = false; // localStorageへの保存に失敗したか(容量超過・プライベートモード等)
+let syncDiagText = "";
+// 接続診断(v7.19): どこで時間がかかる・失敗するのかを、ping → load の順に計って表示する。
+async function runSyncDiag_() {
+  if (!gasConfigured()) { syncDiagText = "接続設定がありません。"; renderTabContent(); return; }
+  const out = [];
+  const step = async (label, payload, ms) => {
+    const t0 = Date.now();
+    try {
+      const d = await gasPost(payload, ms);
+      const sec = ((Date.now() - t0) / 1000).toFixed(1);
+      return { ok: true, sec, d, line: `${label}: OK (${sec}秒)` };
+    } catch (e) {
+      const sec = ((Date.now() - t0) / 1000).toFixed(1);
+      return { ok: false, sec, line: `${label}: 失敗 (${sec}秒) ${String(e && e.message || e).slice(0, 120)}` };
+    }
+  };
+  syncDiagText = "診断中...(最大40秒)"; renderTabContent();
+  const r1 = await step("① 接続(ping)", { action: "ping" }, 10000); out.push(r1.line);
+  if (r1.ok) {
+    const r2 = await step("② シート読み込み(load)", { action: "load" }, 25000); out.push(r2.line);
+    if (r2.ok && r2.d && r2.d.payload) {
+      const p = r2.d.payload;
+      out.push("   シートの行数: " + Object.keys(p).map(k => `${k}${((p[k] && p[k].rows) || []).length}`).join(" / "));
+    }
+    out.push(r2.ok ? "→ 読み込みは正常です。送信(save)だけが遅い場合は、Worker側の書き込みが重い可能性があります(Worker v1.1で軽量化済み)。" : "→ Workerは動いていますが、Googleスプレッドシートとの通信が詰まっています。Google側の認証・共有設定、またはシートの大きさを確認してください。");
+  } else {
+    out.push("→ Worker/Apps Scriptに届いていません。URL・通信状況を確認してください。");
+  }
+  syncDiagText = out.join("\n");
+  if (activeTab === "settings") renderTabContent();
+}
 let confirmForceSync = false;   // 「今すぐ全部を同期し直す」の確認待ち
 // 接続設定を保存した直後、シートに既に記録があった場合の選択待ち。
 // {sheetCount, localCount} を入れておき、設定タブに「どちらを残すか」を出す。
@@ -6402,7 +6433,8 @@ function settingsHtml() {
              <p style="font-size:11.5px;margin:0 0 10px;line-height:1.7;">この端末の記録(運動${entries.length}件・食事${mealEntries.length}件・体重${weightEntries.length}件)で、<b>シートの内容を全部置き換えます</b>。他の端末でつけた記録がシートにある場合、それも消えます。</p>
              <div class="row"><button class="chip" data-action="force-sync-yes" style="color:var(--danger);">上書きして送信する</button><button class="chip" data-action="force-sync-no">キャンセル</button></div>
            </div>`
-        : `<button class="chip" data-action="retry-sync">今すぐ全部を同期し直す</button>`}
+        : `<div class="row" style="flex-wrap:wrap;gap:6px;"><button class="chip" data-action="retry-sync">今すぐ全部を同期し直す</button><button class="chip" data-action="sync-diag">🔍 接続診断</button></div>`}
+      ${syncDiagText ? `<pre style="font-size:11px;line-height:1.6;white-space:pre-wrap;background:var(--paper);border-radius:8px;padding:10px;margin:8px 0 0;font-family:inherit;">${esc(syncDiagText)}</pre>` : ""}
       <p class="muted" style="font-size:10.5px;margin:6px 0 0;line-height:1.6;">ふだんは変更のあった記録だけを自動で送っています。シートの中身がおかしいときは、このボタンで全件を送り直せます(シートはこの端末の内容で置き換わります)。</p>
       ${backendAiKeys ? `
       <div style="background:${backendAiKeys.groq ? "var(--paper)" : "#FDF1E7"};border-radius:8px;padding:10px;margin-top:12px;">
@@ -7458,6 +7490,7 @@ document.getElementById("app").addEventListener("click", (e) => {
     renderTabContent();
   }
   else if (action === "force-sync") { syncToSheet(true); }
+  else if (action === "sync-diag") { runSyncDiag_(); }
   // v5.11: 同期を止めている状態から、本人の判断で「この端末の内容でシートを上書き」して再開する。
   else if (action === "resume-sync") {
     dataLoadFailed = false; connectSheetChoice = null; emptySyncBlocked = false;
