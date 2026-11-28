@@ -300,7 +300,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.19";
+const APP_VERSION = "v7.20";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -1878,7 +1878,9 @@ async function gasPost(payload, timeoutMs) {
   // このアプリ用ではない別系統のapps-script.gs(差分同期版など)を貼ってしまうと、
   // save/loadが「不明なaction」で弾かれ、「同期できない」という形でだけ症状が出る。
   // 原因が分からなくなりやすいので、ここで検知して何をすればよいかまで案内する。
-  if (data && data.status === "error" && /不明なaction/.test(String(data.message || ""))) {
+  // stamp(軽い更新確認)は任意の機能。知らないバックエンドでも同期自体は動くので、警告の対象にしない(v7.20)。
+  if (data && data.status === "ok" && (payload.action === "save" || payload.action === "load")) backendMismatch = false;
+  if (data && data.status === "error" && payload.action !== "stamp" && /不明なaction/.test(String(data.message || ""))) {
     backendMismatch = true;
     throw new Error("Apps Script側のコードが、このアプリと対になっていません。配布物のapps-script.gsを貼り直し、「デプロイ」→「デプロイを管理」→ 鉛筆マーク → バージョン「新バージョン」→「デプロイ」で再デプロイしてください。");
   }
