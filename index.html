@@ -300,7 +300,7 @@ function gasConfigured() {
   return !!(gasConfig.url && /^https:\/\//.test(gasConfig.url));
 }
 // アプリのバージョン番号。更新のたびに増やし、設定タブ下部と配布zip名に表示します。
-const APP_VERSION = "v7.16";
+const APP_VERSION = "v7.17";
 
 // ストレッチタブの項目カタログ。デスクワークで座りっぱなしになりやすいことや、
 // 筋トレ後の回復ケアを踏まえて選んだ固定7項目(v5.3)が core:true の「毎日の基本セット」。
@@ -6027,6 +6027,97 @@ function historyHtml() {
   return nav + body;
 }
 
+// ---- 運動の履歴を「種目別」に見る(v7.17) ----
+let trainHistMode = "day";   // "day"=日別 / "ex"=種目別
+let trainHistEx = null;      // 種目別で選んでいる種目名
+let trainHistPart = null;    // 種目別で選んでいる部位(null=最近よく使う順)
+let trainHistExAll = false;  // 種目別の「もっと見る」
+function exHistSessions_(name) {
+  const by = {};
+  entries.forEach(e => { if (e.exercise === name) (by[e.date] = by[e.date] || []).push(e); });
+  return Object.keys(by).sort().reverse().map(d => ({ date: d, list: by[d] }));
+}
+function exHistSetText_(e) {
+  if (e.type === "strength") return Number(e.weight) > 0 ? `${e.weight}kg×${e.reps}` : `自重×${e.reps}`;
+  return `${e.minutes}分${e.distance != null ? " " + e.distance + "km" : ""}`;
+}
+function exHistTop_(sess) {
+  // その日の代表値: 筋トレ=いちばん重い重量(同重量なら回数多い方)、有酸素=合計分
+  const st = sess.list.filter(e => e.type === "strength");
+  if (st.length) { const t = st.reduce((a, e) => (Number(e.weight) > Number(a.weight) || (Number(e.weight) === Number(a.weight) && Number(e.reps) > Number(a.reps))) ? e : a); return { w: Number(t.weight) || 0, r: Number(t.reps) || 0, vol: st.reduce((x, e) => x + (Number(e.weight) || 0) * (Number(e.reps) || 0), 0), sets: st.length }; }
+  return { min: sess.list.reduce((x, e) => x + (Number(e.minutes) || 0), 0), km: sess.list.reduce((x, e) => x + (Number(e.distance) || 0), 0) };
+}
+function trainingByExerciseHtml_() {
+  const cut = localDateStr(new Date(Date.now() - 120 * 86400000));
+  const info = {};   // 種目 → {part, n, last}
+  entries.forEach(e => {
+    if (!e.exercise) return;
+    const o = info[e.exercise] = info[e.exercise] || { part: e.type === "cardio" ? "有酸素" : (e.part || "その他"), n: 0, last: "" };
+    if (e.date >= cut) o.n++;
+    if (e.date > o.last) o.last = e.date;
+  });
+  const all = Object.keys(info);
+  if (!all.length) return '<p class="muted">まだ運動の記録がありません。</p>';
+  const parts = [...new Set(all.map(n => info[n].part))];
+  const byUse = n => (info[n].n * 1e6) + (info[n].last ? Number(info[n].last.replace(/-/g, "")) : 0) / 100;
+  // 部位の並びは、よく使う順
+  parts.sort((a, b) => Math.max(...all.filter(n => info[n].part === a).map(byUse)) < Math.max(...all.filter(n => info[n].part === b).map(byUse)) ? 1 : -1);
+  if (!trainHistEx || !info[trainHistEx]) trainHistEx = null;
+  if (trainHistPart && !parts.includes(trainHistPart)) trainHistPart = null;
+  if (!trainHistEx) trainHistEx = all.slice().sort((a, b) => byUse(b) - byUse(a))[0];
+  if (!trainHistPart) trainHistPart = info[trainHistEx].part;
+  const partChips = parts.map(pt => `<button class="seg-b ${pt === trainHistPart ? "on" : ""}" data-action="set-th-part" data-val="${esc(pt)}">${esc(pt)}</button>`).join("");
+  const exNames = all.filter(n => info[n].part === trainHistPart).sort((a, b) => byUse(b) - byUse(a));
+  if (!exNames.includes(trainHistEx)) trainHistEx = exNames[0];
+  const exChips = exNames.map(n => `<button class="chip ${n === trainHistEx ? "on" : ""}" data-action="set-th-ex" data-val="${esc(n)}" style="${n === trainHistEx ? "background:var(--slate);color:#fff;" : ""}">${esc(n)}</button>`).join("");
+  const sess = exHistSessions_(trainHistEx);          // 新しい順
+  const isCardio = sess.length && sess[0].list.some(e => e.type === "cardio");
+  const tops = sess.map(x => exHistTop_(x));
+  // サマリー
+  let tiles = "", chart = "";
+  if (!isCardio) {
+    const bestIdx = tops.reduce((bi, t, i) => (bi < 0 || t.w > tops[bi].w || (t.w === tops[bi].w && t.r > tops[bi].r)) ? i : bi, -1);
+    const lastT = tops[0];
+    const e1 = e1rmSeries_(trainHistEx); const e1cur = e1.length ? e1[e1.length - 1].value : null;
+    tiles = `<div class="tiles3">
+      <div><div class="muted">前回(${sess[0].date.slice(5).replace("-", "/")})</div><div class="tile-v">${lastT.w || "自重"}${lastT.w ? "<span>kg</span>" : ""}<span> ×${lastT.r}</span></div></div>
+      <div><div class="muted">ベスト重量</div><div class="tile-v">${tops[bestIdx].w || "自重"}${tops[bestIdx].w ? "<span>kg</span>" : ""}<span> ×${tops[bestIdx].r}</span></div></div>
+      <div><div class="muted">推定1RM</div><div class="tile-v">${e1cur ? e1cur.toFixed(1) : "−"}<span>kg</span></div></div></div>`;
+    const pts = sess.map((x, i) => ({ date: x.date, value: tops[i].w })).reverse().filter(p => p.value > 0);
+    chart = `<p class="muted" style="margin:10px 0 0;">その日いちばん重かった重量の推移</p>${bigLineChart_("xh", pts, { unit: "kg", color: VIZ.orange })}`;
+  } else {
+    const lastT = tops[0]; const bestMin = Math.max(...tops.map(t => t.min));
+    tiles = `<div class="tiles3">
+      <div><div class="muted">前回(${sess[0].date.slice(5).replace("-", "/")})</div><div class="tile-v">${lastT.min}<span>分</span></div></div>
+      <div><div class="muted">最長</div><div class="tile-v">${bestMin}<span>分</span></div></div>
+      <div><div class="muted">回数</div><div class="tile-v">${sess.length}<span>回</span></div></div></div>`;
+    const pts = sess.map((x, i) => ({ date: x.date, value: tops[i].min })).reverse();
+    chart = `<p class="muted" style="margin:10px 0 0;">1日の合計時間の推移</p>${bigLineChart_("xh", pts, { unit: "分", color: VIZ.blue })}`;
+  }
+  // 日ごとの一覧(新しい順。前回との差つき)
+  const limit = trainHistExAll ? sess.length : 8;
+  const rows = sess.slice(0, limit).map((x, i) => {
+    const t = tops[i], prev = tops[i + 1];
+    let diff = "";
+    if (prev) {
+      if (!isCardio) { const d = Math.round((t.w - prev.w) * 10) / 10; diff = d > 0 ? `<span style="color:${VIZ.green};font-weight:700;">▲${d}kg</span>` : d < 0 ? `<span style="color:${VIZ.red};font-weight:700;">▼${Math.abs(d)}kg</span>` : `<span class="muted">同じ重量</span>`; }
+      else { const d = t.min - prev.min; diff = d > 0 ? `<span style="color:${VIZ.green};font-weight:700;">▲${d}分</span>` : d < 0 ? `<span style="color:${VIZ.red};font-weight:700;">▼${Math.abs(d)}分</span>` : `<span class="muted">同じ</span>`; }
+    }
+    const dd = new Date(x.date + "T00:00:00");
+    const sets = x.list.map(e => `<span class="mono" style="display:inline-block;background:var(--slate-soft);border-radius:8px;padding:3px 8px;margin:2px 4px 2px 0;font-size:12.5px;">${exHistSetText_(e)}</span>`).join("");
+    const volTxt = !isCardio && t.vol ? `<span class="muted mono" style="font-size:11px;">合計${Math.round(t.vol).toLocaleString()}kg</span>` : "";
+    return `<div style="padding:10px 0;border-top:1px solid #E4E9F1;">
+      <div class="between"><span><span class="mono" style="font-weight:700;">${x.date.slice(5).replace("-", "/")}</span> <span class="muted">(${WEEKDAY[dd.getDay()]})</span></span><span style="font-size:12px;">${diff}</span></div>
+      <div>${sets}</div>${volTxt}</div>`;
+  }).join("");
+  const more = sess.length > 8 ? `<button type="button" class="chip" data-action="toggle-th-all" style="margin-top:6px;">${trainHistExAll ? "▲ 直近8回だけ表示" : `▶ もっと見る(他${sess.length - 8}回)`}</button>` : "";
+  return `<div class="range" style="flex-wrap:wrap;margin-bottom:8px;">${partChips}</div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:12px;">${exChips}</div>
+    ${tiles}${chart}
+    <p class="section-title" style="margin:14px 0 2px;">${esc(trainHistEx)}の履歴(${sess.length}日)</p>
+    ${rows}${more}
+    <p class="muted" style="font-size:10.5px;margin:8px 0 0;">直す・消すときは「日別」から操作してください。</p>`;
+}
 function trainingHistoryCardHtml_() {
   // 「運動」タブの履歴なので、リスト表示は運動の記録だけを見せる。
   // (以前はここに体重・食事の記録も混ざって表示されており、「運動の履歴なのに
@@ -6034,9 +6125,10 @@ function trainingHistoryCardHtml_() {
   //  「食事」タブの「📖 食事の履歴」にそれぞれ専用の一覧がある。)
   // カレンダー表示(全記録を日付から見る)は、v5.13から独立した「📅 カレンダー」
   // タブに移した(運動タブに埋もれていて気づきにくかったため)。
-  const toggle = `<p class="section-title" style="margin:0 0 8px;">運動の履歴</p>`;
+  const toggle = `<div class="range" style="margin:0 0 12px;"><button class="seg-b ${trainHistMode === "day" ? "on" : ""}" data-action="set-th-mode" data-val="day">📅 日別</button><button class="seg-b ${trainHistMode === "ex" ? "on" : ""}" data-action="set-th-mode" data-val="ex">🏋️ 種目別</button></div>`;
   let body;
-  {
+  if (trainHistMode === "ex") { body = trainingByExerciseHtml_(); }
+  else {
     // v5.7: 直近10日ぶんだけを初期表示し、それより前は「もっと見る」で展開する。
     const allDates = [...new Set(entries.map(e => e.date))].sort((a,b) => a < b ? 1 : -1);
     const dates = trainingHistoryShowAll ? allDates : allDates.slice(0, 10);
@@ -7472,6 +7564,10 @@ document.getElementById("app").addEventListener("click", (e) => {
     if (trainingHistoryOpenDates.has(d)) trainingHistoryOpenDates.delete(d); else trainingHistoryOpenDates.add(d);
     renderHistory();
   }
+  else if (action === "set-th-mode") { trainHistMode = t.dataset.val; renderHistory(); }
+  else if (action === "set-th-part") { trainHistPart = t.dataset.val; trainHistEx = null; trainHistExAll = false; renderHistory(); }
+  else if (action === "set-th-ex") { trainHistEx = t.dataset.val; trainHistExAll = false; renderHistory(); }
+  else if (action === "toggle-th-all") { trainHistExAll = !trainHistExAll; renderHistory(); }
   else if (action === "toggle-training-history-show-all") { trainingHistoryShowAll = !trainingHistoryShowAll; renderHistory(); }
   else if (action === "toggle-body-part-status") {
     const part = t.dataset.part;
